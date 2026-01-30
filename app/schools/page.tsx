@@ -17,9 +17,8 @@ export default function Schools() {
   const [gpaFilter, setGpaFilter] = useState('')
   const [minTuition, setMinTuition] = useState('')
   const [maxTuition, setMaxTuition] = useState('')
-  const [frontLoadedFilter, setFrontLoadedFilter] = useState('')
   
-  const [stateFilter, setStateFilter] = useState('')
+  const [stateFilters, setStateFilters] = useState<string[]>([])
   const [programTypeFilter, setProgramTypeFilter] = useState('')
   const [opensMonthFilter, setOpensMonthFilter] = useState('')
   const [deadlineMonthFilter, setDeadlineMonthFilter] = useState('')
@@ -100,6 +99,15 @@ export default function Schools() {
     }
   }
 
+  const toggleStateFilter = (state: string) => {
+    if (!isPremium) return
+    if (stateFilters.includes(state)) {
+      setStateFilters(stateFilters.filter(s => s !== state))
+    } else {
+      setStateFilters([...stateFilters, state])
+    }
+  }
+
   useEffect(() => {
     let filtered = [...schools]
 
@@ -122,13 +130,9 @@ export default function Schools() {
       filtered = filtered.filter(school => school.tuition_total <= parseFloat(maxTuition))
     }
 
-    if (frontLoadedFilter) {
-      filtered = filtered.filter(school => school.front_loaded === frontLoadedFilter)
-    }
-
     if (isPremium) {
-      if (stateFilter) {
-        filtered = filtered.filter(school => school.location_state === stateFilter)
+      if (stateFilters.length > 0) {
+        filtered = filtered.filter(school => stateFilters.includes(school.location_state))
       }
       if (programTypeFilter) {
         filtered = filtered.filter(school => school.program_type === programTypeFilter)
@@ -171,9 +175,10 @@ export default function Schools() {
     }
 
     setFilteredSchools(filtered)
-  }, [searchQuery, gpaFilter, minTuition, maxTuition, frontLoadedFilter, stateFilter, programTypeFilter, opensMonthFilter, deadlineMonthFilter, greFilter, methodFilter, formatFilter, prereqsRequired, prereqsNotRequired, schools, isPremium])
+  }, [searchQuery, gpaFilter, minTuition, maxTuition, stateFilters, programTypeFilter, opensMonthFilter, deadlineMonthFilter, greFilter, methodFilter, formatFilter, prereqsRequired, prereqsNotRequired, schools, isPremium])
 
   const togglePrereqRequired = (prereq: string) => {
+    if (!isPremium) return
     if (prereqsRequired.includes(prereq)) {
       setPrereqsRequired(prereqsRequired.filter(p => p !== prereq))
     } else {
@@ -182,6 +187,7 @@ export default function Schools() {
   }
 
   const togglePrereqNotRequired = (prereq: string) => {
+    if (!isPremium) return
     if (prereqsNotRequired.includes(prereq)) {
       setPrereqsNotRequired(prereqsNotRequired.filter(p => p !== prereq))
     } else {
@@ -239,7 +245,7 @@ export default function Schools() {
               />
             </div>
 
-            <div className="grid md:grid-cols-4 gap-4">
+            <div className="grid md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Max GPA Requirement</label>
                 <input
@@ -277,20 +283,6 @@ export default function Schools() {
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
               </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Front Loaded</label>
-                <select
-                  value={frontLoadedFilter}
-                  onChange={(e) => setFrontLoadedFilter(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500"
-                >
-                  <option value="">All</option>
-                  <option value="Yes">Yes</option>
-                  <option value="No">No</option>
-                  <option value="Integrated">Integrated</option>
-                </select>
-              </div>
             </div>
           </div>
 
@@ -298,23 +290,40 @@ export default function Schools() {
             <h3 className="text-lg font-semibold text-purple-600 mb-3">
               {isPremium ? '✅ Premium Filters (Unlocked!)' : '🔒 Premium Filters'}
             </h3>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">States {!isPremium && '🔒'} {stateFilters.length > 0 && isPremium && <span className="text-purple-600">({stateFilters.length} selected)</span>}</label>
+              <div className={`p-4 border rounded-xl bg-gray-50 max-h-40 overflow-y-auto ${!isPremium ? 'opacity-70' : ''}`}>
+                <div className="flex flex-wrap gap-2">
+                  {states.map(state => (
+                    <button
+                      key={state}
+                      onClick={() => toggleStateFilter(state)}
+                      disabled={!isPremium}
+                      className={`px-3 py-1 rounded-full text-sm transition ${
+                        stateFilters.includes(state)
+                          ? 'bg-purple-600 text-white'
+                          : !isPremium 
+                            ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      {state}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {stateFilters.length > 0 && isPremium && (
+                <button 
+                  onClick={() => setStateFilters([])}
+                  className="text-sm text-purple-600 hover:text-purple-700 mt-2"
+                >
+                  Clear all states
+                </button>
+              )}
+            </div>
             
             <div className="grid md:grid-cols-3 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
-                <select
-                  value={stateFilter}
-                  onChange={(e) => setStateFilter(e.target.value)}
-                  disabled={!isPremium}
-                  className={`w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 ${!isPremium ? 'bg-gray-100 opacity-60' : ''}`}
-                >
-                  <option value="">{isPremium ? 'All States' : 'Locked'}</option>
-                  {isPremium && states.map(state => (
-                    <option key={state} value={state}>{state}</option>
-                  ))}
-                </select>
-              </div>
-
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Program Type</label>
                 <select
@@ -421,52 +430,50 @@ export default function Schools() {
 
             <div className="grid md:grid-cols-2 gap-4 mt-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">What is Required</label>
-                <div className={`p-4 border rounded-xl ${!isPremium ? 'bg-gray-100 opacity-60' : 'bg-gray-50'}`}>
-                  {!isPremium ? (
-                    <p className="text-gray-500 text-sm">Locked - Upgrade to Premium</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {allPrereqs.map(prereq => (
-                        <button
-                          key={prereq}
-                          onClick={() => togglePrereqRequired(prereq)}
-                          className={`px-3 py-1 rounded-full text-sm transition ${
-                            prereqsRequired.includes(prereq)
-                              ? 'bg-purple-600 text-white'
+                <label className="block text-sm font-medium text-gray-700 mb-2">What is Required {!isPremium && '🔒'}</label>
+                <div className={`p-4 border rounded-xl bg-gray-50 ${!isPremium ? 'opacity-70' : ''}`}>
+                  <div className="flex flex-wrap gap-2">
+                    {allPrereqs.map(prereq => (
+                      <button
+                        key={prereq}
+                        onClick={() => togglePrereqRequired(prereq)}
+                        disabled={!isPremium}
+                        className={`px-3 py-1 rounded-full text-sm transition ${
+                          prereqsRequired.includes(prereq)
+                            ? 'bg-purple-600 text-white'
+                            : !isPremium 
+                              ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
                               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                          }`}
-                        >
-                          {prereq}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                        }`}
+                      >
+                        {prereq}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">What is NOT Required</label>
-                <div className={`p-4 border rounded-xl ${!isPremium ? 'bg-gray-100 opacity-60' : 'bg-gray-50'}`}>
-                  {!isPremium ? (
-                    <p className="text-gray-500 text-sm">Locked - Upgrade to Premium</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {allPrereqs.map(prereq => (
-                        <button
-                          key={prereq}
-                          onClick={() => togglePrereqNotRequired(prereq)}
-                          className={`px-3 py-1 rounded-full text-sm transition ${
-                            prereqsNotRequired.includes(prereq)
-                              ? 'bg-green-600 text-white'
+                <label className="block text-sm font-medium text-gray-700 mb-2">What is NOT Required {!isPremium && '🔒'}</label>
+                <div className={`p-4 border rounded-xl bg-gray-50 ${!isPremium ? 'opacity-70' : ''}`}>
+                  <div className="flex flex-wrap gap-2">
+                    {allPrereqs.map(prereq => (
+                      <button
+                        key={prereq}
+                        onClick={() => togglePrereqNotRequired(prereq)}
+                        disabled={!isPremium}
+                        className={`px-3 py-1 rounded-full text-sm transition ${
+                          prereqsNotRequired.includes(prereq)
+                            ? 'bg-green-600 text-white'
+                            : !isPremium 
+                              ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
                               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                          }`}
-                        >
-                          {prereq}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                        }`}
+                      >
+                        {prereq}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -474,7 +481,7 @@ export default function Schools() {
             {!isPremium && (
               <Link href="/pricing" className="block mt-4 p-4 bg-gradient-to-r from-purple-100 to-pink-100 border border-purple-300 rounded-xl hover:from-purple-200 hover:to-pink-200 transition">
                 <p className="text-sm text-purple-800">
-                  🔒 <strong>Unlock all premium filters for $29.99!</strong> Filter by application dates, GRE requirements, application methods, location, and more. <span className="underline">Click here to upgrade →</span>
+                  🔒 <strong>Unlock all premium filters for $29.99!</strong> Filter by states, application dates, GRE requirements, application methods, prerequisites and more. <span className="underline">Click here to upgrade →</span>
                 </p>
               </Link>
             )}
@@ -508,7 +515,7 @@ export default function Schools() {
                 </div>
               </div>
               
-              <div className="grid grid-cols-4 gap-3 text-sm mt-5">
+              <div className="grid grid-cols-5 gap-3 text-sm mt-5">
                 <div className="bg-purple-50 rounded-lg p-3">
                   <span className="text-purple-600 text-xs font-medium">GPA</span>
                   <p className="text-gray-800 font-bold">{school.gpa_requirement}</p>
@@ -529,17 +536,30 @@ export default function Schools() {
                   <span className="text-pink-600 text-xs font-medium">Tuition</span>
                   <p className="text-gray-800 font-bold">${school.tuition_total?.toLocaleString()}</p>
                 </div>
-                <div className="bg-indigo-50 rounded-lg p-3">
+                <div className={`bg-indigo-50 rounded-lg p-3 relative ${!isPremium ? 'overflow-hidden' : ''}`}>
                   <span className="text-indigo-600 text-xs font-medium">Format</span>
-                  <p className="text-gray-800 font-bold">{school.format || 'N/A'}</p>
+                  <p className={`text-gray-800 font-bold ${!isPremium ? 'blur-sm select-none' : ''}`}>{school.format || 'N/A'}</p>
+                  {!isPremium && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs">🔒</span></div>}
                 </div>
-                <div className="bg-red-50 rounded-lg p-3">
+                <div className={`bg-yellow-50 rounded-lg p-3 relative ${!isPremium ? 'overflow-hidden' : ''}`}>
+                  <span className="text-yellow-600 text-xs font-medium">Opens</span>
+                  <p className={`text-gray-800 font-bold ${!isPremium ? 'blur-sm select-none' : ''}`}>{school.application_opens_month || 'N/A'}</p>
+                  {!isPremium && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs">🔒</span></div>}
+                </div>
+                <div className={`bg-red-50 rounded-lg p-3 relative ${!isPremium ? 'overflow-hidden' : ''}`}>
                   <span className="text-red-600 text-xs font-medium">Deadline</span>
-                  <p className="text-gray-800 font-bold">{school.application_deadline || 'N/A'}</p>
+                  <p className={`text-gray-800 font-bold ${!isPremium ? 'blur-sm select-none' : ''}`}>{school.application_deadline || 'N/A'}</p>
+                  {!isPremium && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs">🔒</span></div>}
                 </div>
-                <div className="bg-teal-50 rounded-lg p-3">
+                <div className={`bg-teal-50 rounded-lg p-3 relative ${!isPremium ? 'overflow-hidden' : ''}`}>
                   <span className="text-teal-600 text-xs font-medium">GRE</span>
-                  <p className="text-gray-800 font-bold">{school.gre_requirement || 'N/A'}</p>
+                  <p className={`text-gray-800 font-bold ${!isPremium ? 'blur-sm select-none' : ''}`}>{school.gre_requirement || 'N/A'}</p>
+                  {!isPremium && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs">🔒</span></div>}
+                </div>
+                <div className={`bg-cyan-50 rounded-lg p-3 relative ${!isPremium ? 'overflow-hidden' : ''}`}>
+                  <span className="text-cyan-600 text-xs font-medium">Method</span>
+                  <p className={`text-gray-800 font-bold ${!isPremium ? 'blur-sm select-none' : ''}`}>{school.application_method || 'N/A'}</p>
+                  {!isPremium && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs">🔒</span></div>}
                 </div>
               </div>
 
