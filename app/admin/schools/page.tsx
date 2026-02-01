@@ -8,10 +8,30 @@ export default function AdminSchools() {
   const [schools, setSchools] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [editingSchool, setEditingSchool] = useState<any>(null)
+  const [isAdding, setIsAdding] = useState(false)
   const [saving, setSaving] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-const [stateFilter, setStateFilter] = useState('')
+  const [stateFilter, setStateFilter] = useState('')
   const supabase = createClient()
+
+  const emptySchool = {
+    name: '',
+    location_city: '',
+    location_state: '',
+    gpa_requirement: 3.0,
+    program_type: 'DNP',
+    program_length_months: 36,
+    icu_experience_months: 12,
+    tuition_total: 0,
+    format: '',
+    application_opens_month: '',
+    application_deadline: '',
+    gre_requirement: 'Not Required',
+    application_method: '',
+    prerequisites_required: '',
+    prerequisites_not_required: '',
+    website_url: ''
+  }
 
   useEffect(() => {
     const fetchSchools = async () => {
@@ -29,34 +49,67 @@ const [stateFilter, setStateFilter] = useState('')
   const saveSchool = async () => {
     setSaving(true)
     
-    const { error } = await supabase
-      .from('schools')
-      .update({
-        name: editingSchool.name,
-        location_city: editingSchool.location_city,
-        location_state: editingSchool.location_state,
-        gpa_requirement: editingSchool.gpa_requirement,
-        program_type: editingSchool.program_type,
-        program_length_months: editingSchool.program_length_months,
-        icu_experience_months: editingSchool.icu_experience_months,
-        tuition_total: editingSchool.tuition_total,
-        format: editingSchool.format,
-        application_opens_month: editingSchool.application_opens_month,
-        application_deadline: editingSchool.application_deadline,
-        gre_requirement: editingSchool.gre_requirement,
-        application_method: editingSchool.application_method,
-        prerequisites_required: editingSchool.prerequisites_required,
-        prerequisites_not_required: editingSchool.prerequisites_not_required,
-        website_url: editingSchool.website_url
-      })
-      .eq('id', editingSchool.id)
+    if (isAdding) {
+      const { data, error } = await supabase
+        .from('schools')
+        .insert({
+          name: editingSchool.name,
+          location_city: editingSchool.location_city,
+          location_state: editingSchool.location_state,
+          gpa_requirement: editingSchool.gpa_requirement,
+          program_type: editingSchool.program_type,
+          program_length_months: editingSchool.program_length_months,
+          icu_experience_months: editingSchool.icu_experience_months,
+          tuition_total: editingSchool.tuition_total || 0,
+          format: editingSchool.format,
+          application_opens_month: editingSchool.application_opens_month,
+          application_deadline: editingSchool.application_deadline,
+          gre_requirement: editingSchool.gre_requirement,
+          application_method: editingSchool.application_method,
+          prerequisites_required: editingSchool.prerequisites_required,
+          prerequisites_not_required: editingSchool.prerequisites_not_required,
+          website_url: editingSchool.website_url
+        })
+        .select()
 
-    if (!error) {
-      setSchools(schools.map(s => s.id === editingSchool.id ? editingSchool : s))
-      setEditingSchool(null)
-      alert('School updated successfully!')
+      if (!error && data) {
+        setSchools([...schools, data[0]].sort((a, b) => a.name.localeCompare(b.name)))
+        setEditingSchool(null)
+        setIsAdding(false)
+        alert('School added successfully!')
+      } else {
+        alert('Error adding school: ' + error?.message)
+      }
     } else {
-      alert('Error saving: ' + error.message)
+      const { error } = await supabase
+        .from('schools')
+        .update({
+          name: editingSchool.name,
+          location_city: editingSchool.location_city,
+          location_state: editingSchool.location_state,
+          gpa_requirement: editingSchool.gpa_requirement,
+          program_type: editingSchool.program_type,
+          program_length_months: editingSchool.program_length_months,
+          icu_experience_months: editingSchool.icu_experience_months,
+          tuition_total: editingSchool.tuition_total,
+          format: editingSchool.format,
+          application_opens_month: editingSchool.application_opens_month,
+          application_deadline: editingSchool.application_deadline,
+          gre_requirement: editingSchool.gre_requirement,
+          application_method: editingSchool.application_method,
+          prerequisites_required: editingSchool.prerequisites_required,
+          prerequisites_not_required: editingSchool.prerequisites_not_required,
+          website_url: editingSchool.website_url
+        })
+        .eq('id', editingSchool.id)
+
+      if (!error) {
+        setSchools(schools.map(s => s.id === editingSchool.id ? editingSchool : s))
+        setEditingSchool(null)
+        alert('School updated successfully!')
+      } else {
+        alert('Error saving: ' + error.message)
+      }
     }
     
     setSaving(false)
@@ -123,6 +176,12 @@ const [stateFilter, setStateFilter] = useState('')
               Clear
             </button>
           )}
+          <button
+            onClick={() => { setEditingSchool({...emptySchool}); setIsAdding(true) }}
+            className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition"
+          >
+            + Add School
+          </button>
         </div>
 
         <div className="mb-4 text-gray-600">
@@ -139,16 +198,16 @@ const [stateFilter, setStateFilter] = useState('')
                 </div>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => setEditingSchool({...school})}
+                    onClick={() => { setEditingSchool({...school}); setIsAdding(false) }}
                     className="px-4 py-2 bg-purple-500 text-white rounded-lg text-sm hover:bg-purple-600 transition"
                   >
-                    ✏️ Edit
+                    Edit
                   </button>
                   <button
                     onClick={() => deleteSchool(school.id, school.name)}
                     className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition"
                   >
-                    🗑 Delete
+                    Delete
                   </button>
                 </div>
               </div>
@@ -183,11 +242,11 @@ const [stateFilter, setStateFilter] = useState('')
       {editingSchool && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 my-8">
-            <h3 className="text-xl font-bold text-gray-800 mb-4">Edit School</h3>
+            <h3 className="text-xl font-bold text-gray-800 mb-4">{isAdding ? 'Add New School' : 'Edit School'}</h3>
             
             <div className="grid grid-cols-2 gap-4 max-h-[70vh] overflow-y-auto">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">School Name</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">School Name *</label>
                 <input
                   type="text"
                   value={editingSchool.name || ''}
@@ -197,7 +256,7 @@ const [stateFilter, setStateFilter] = useState('')
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">City *</label>
                 <input
                   type="text"
                   value={editingSchool.location_city || ''}
@@ -207,11 +266,12 @@ const [stateFilter, setStateFilter] = useState('')
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">State *</label>
                 <input
                   type="text"
                   value={editingSchool.location_state || ''}
                   onChange={(e) => setEditingSchool({...editingSchool, location_state: e.target.value})}
+                  placeholder="e.g., California"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
               </div>
@@ -333,11 +393,12 @@ const [stateFilter, setStateFilter] = useState('')
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Website URL</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Website URL *</label>
                 <input
                   type="text"
                   value={editingSchool.website_url || ''}
                   onChange={(e) => setEditingSchool({...editingSchool, website_url: e.target.value})}
+                  placeholder="https://..."
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
               </div>
@@ -347,6 +408,7 @@ const [stateFilter, setStateFilter] = useState('')
                 <textarea
                   value={editingSchool.prerequisites_required || ''}
                   onChange={(e) => setEditingSchool({...editingSchool, prerequisites_required: e.target.value})}
+                  placeholder="e.g., Statistics, Organic Chemistry"
                   rows={2}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
@@ -357,6 +419,7 @@ const [stateFilter, setStateFilter] = useState('')
                 <textarea
                   value={editingSchool.prerequisites_not_required || ''}
                   onChange={(e) => setEditingSchool({...editingSchool, prerequisites_not_required: e.target.value})}
+                  placeholder="e.g., Physics, Biochemistry"
                   rows={2}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
@@ -365,17 +428,17 @@ const [stateFilter, setStateFilter] = useState('')
             
             <div className="flex gap-3 mt-6">
               <button
-                onClick={() => setEditingSchool(null)}
+                onClick={() => { setEditingSchool(null); setIsAdding(false) }}
                 className="flex-1 py-3 border border-gray-300 rounded-xl text-gray-700 font-semibold hover:bg-gray-50 transition"
               >
                 Cancel
               </button>
               <button
                 onClick={saveSchool}
-                disabled={saving}
+                disabled={saving || !editingSchool.name || !editingSchool.location_city || !editingSchool.location_state || !editingSchool.website_url}
                 className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition disabled:opacity-50"
               >
-                {saving ? 'Saving...' : 'Save Changes'}
+                {saving ? 'Saving...' : isAdding ? 'Add School' : 'Save Changes'}
               </button>
             </div>
           </div>
