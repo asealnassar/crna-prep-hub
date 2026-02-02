@@ -143,6 +143,7 @@ export default function AdminSchools() {
             <h1 className="text-2xl font-bold text-purple-600">Admin - Edit Schools</h1>
             <div className="flex gap-4">
               <Link href="/admin/reports" className="text-gray-600 hover:text-purple-600">Error Reports</Link>
+              <Link href="/admin/sponsors" className="text-gray-600 hover:text-purple-600">Sponsors</Link>
               <Link href="/schools" className="text-gray-600 hover:text-purple-600">View Schools</Link>
             </div>
           </div>

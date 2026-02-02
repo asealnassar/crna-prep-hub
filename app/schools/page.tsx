@@ -169,6 +169,7 @@ export default function Schools() {
               <Link href="/schools" className="text-white font-semibold">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
+              <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
               {userEmail === 'asealnassar@gmail.com' && (<Link href="/admin/schools" className="text-yellow-400 hover:text-yellow-300 transition">Admin</Link>)}
             </div>
           </div>

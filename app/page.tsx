@@ -12,6 +12,7 @@ export default function Home() {
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
+              <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
               <Link href="/login" className="bg-white text-indigo-900 px-4 py-2 rounded-lg font-semibold hover:bg-indigo-100 transition">Login</Link>
             </div>
           </div>
