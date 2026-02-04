@@ -13,6 +13,7 @@ export default function Schools() {
   const [userTier, setUserTier] = useState('free')
   const [userId, setUserId] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState('')
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [gpaFilter, setGpaFilter] = useState('')
   const [minTuition, setMinTuition] = useState('')
@@ -52,6 +53,7 @@ export default function Schools() {
   }
 
   const submitReport = async () => {
+    if (!isLoggedIn) { alert('Please sign in to report errors'); return }
     if (!reportDescription.trim()) { alert('Please describe the error'); return }
     setReportSubmitting(true)
     const { data: { user } } = await supabase.auth.getUser()
@@ -69,23 +71,27 @@ export default function Schools() {
 
   useEffect(() => {
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
-      setUserId(user.id)
-      setUserEmail(user.email || '')
-      const { data: profile } = await supabase.from('user_profiles').select('subscription_tier').eq('id', user.id).single()
-      if (profile) { setUserTier(profile.subscription_tier || 'free') }
       const { data: schoolsData } = await supabase.from('schools').select('*').order('name')
       setSchools(schoolsData || [])
       setFilteredSchools(schoolsData || [])
-      const { data: savedData } = await supabase.from('saved_schools').select('school_id').eq('user_id', user.id)
-      if (savedData) { setSavedSchools(savedData.map(s => s.school_id)) }
+
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        setIsLoggedIn(true)
+        setUserId(user.id)
+        setUserEmail(user.email || '')
+        const { data: profile } = await supabase.from('user_profiles').select('subscription_tier').eq('id', user.id).single()
+        if (profile) { setUserTier(profile.subscription_tier || 'free') }
+        const { data: savedData } = await supabase.from('saved_schools').select('school_id').eq('user_id', user.id)
+        if (savedData) { setSavedSchools(savedData.map(s => s.school_id)) }
+      }
       setLoading(false)
     }
     init()
   }, [])
 
   const toggleSaveSchool = async (schoolId: string) => {
+    if (!isLoggedIn) { router.push('/login'); return }
     if (!userId) return
     if (savedSchools.includes(schoolId)) {
       await supabase.from('saved_schools').delete().eq('user_id', userId).eq('school_id', schoolId)
@@ -165,12 +171,13 @@ export default function Schools() {
           <div className="flex justify-between items-center">
             <Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link>
             <div className="flex gap-6">
-              <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>
+              {isLoggedIn && <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>}
               <Link href="/schools" className="text-white font-semibold">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
               <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
-              {userEmail === 'asealnassar@gmail.com' && (<Link href="/admin/schools" className="text-yellow-400 hover:text-yellow-300 transition">Admin</Link>)}
+              {isLoggedIn && userEmail === 'asealnassar@gmail.com' && (<Link href="/admin/schools" className="text-yellow-400 hover:text-yellow-300 transition">Admin</Link>)}
+              {!isLoggedIn && (<Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">Login</Link>)}
             </div>
           </div>
         </div>
@@ -281,7 +288,7 @@ export default function Schools() {
         </div>
         <div className="flex justify-between items-center mb-6">
           <p className="text-indigo-200">Showing <strong className="text-white">{filteredSchools.length}</strong> of {schools.length} schools</p>
-          <p className="text-pink-300 font-semibold">{savedSchools.length} schools saved</p>
+          {isLoggedIn && <p className="text-pink-300 font-semibold">{savedSchools.length} schools saved</p>}
         </div>
         <div className="flex flex-col gap-6">
           {filteredSchools.map((school) => (
