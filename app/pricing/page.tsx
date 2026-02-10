@@ -7,6 +7,10 @@ import { createClient } from '@/lib/supabase-browser'
 export default function Pricing() {
   const [loading, setLoading] = useState('')
   const [user, setUser] = useState<any>(null)
+  const [promoCode, setPromoCode] = useState('')
+  const [promoValid, setPromoValid] = useState<boolean | null>(null)
+  const [promoData, setPromoData] = useState<any>(null)
+  const [checkingPromo, setCheckingPromo] = useState(false)
   const supabase = createClient()
 
   useEffect(() => {
@@ -16,6 +20,26 @@ export default function Pricing() {
     }
     getUser()
   }, [])
+
+  const checkPromoCode = async () => {
+    if (!promoCode.trim()) return
+    setCheckingPromo(true)
+    const { data, error } = await supabase
+      .from('promo_codes')
+      .select('*')
+      .eq('code', promoCode.toUpperCase().trim())
+      .eq('is_active', true)
+      .single()
+    
+    if (data && !error) {
+      setPromoValid(true)
+      setPromoData(data)
+    } else {
+      setPromoValid(false)
+      setPromoData(null)
+    }
+    setCheckingPromo(false)
+  }
 
   const handleCheckout = async (plan: string) => {
     if (!user) {
@@ -33,7 +57,12 @@ export default function Pricing() {
       const response = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ priceId, userEmail: user.email }),
+        body: JSON.stringify({ 
+          priceId, 
+          userEmail: user.email,
+          promoCode: promoValid ? promoCode.toUpperCase().trim() : null,
+          plan
+        }),
       })
 
       const data = await response.json()
@@ -48,6 +77,10 @@ export default function Pricing() {
     setLoading('')
   }
 
+  const discountAmount = promoData?.discount_amount ? promoData.discount_amount / 100 : 0
+  const premiumPrice = promoValid ? (29.99 - discountAmount).toFixed(2) : '29.99'
+  const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
       <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
@@ -59,15 +92,45 @@ export default function Pricing() {
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
               <Link href="/pricing" className="text-white font-semibold">Pricing</Link>
+              <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
             </div>
           </div>
         </div>
       </nav>
 
       <div className="max-w-6xl mx-auto px-4 py-12">
-        <div className="text-center mb-12">
+        <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-white mb-4">Choose Your Plan</h1>
           <p className="text-xl text-indigo-200">One-time payment. Lifetime access. No subscriptions.</p>
+        </div>
+
+        {/* Promo Code Section */}
+        <div className="max-w-md mx-auto mb-8">
+          <div className="bg-white/10 backdrop-blur-md rounded-xl p-4">
+            <label className="block text-white text-sm font-medium mb-2">Have a promo code?</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={promoCode}
+                onChange={(e) => { setPromoCode(e.target.value); setPromoValid(null); setPromoData(null); }}
+                placeholder="Enter code"
+                className="flex-1 px-4 py-2 rounded-lg bg-white/20 text-white placeholder-white/50 border border-white/30 focus:outline-none focus:ring-2 focus:ring-purple-400"
+              />
+              <button
+                onClick={checkPromoCode}
+                disabled={checkingPromo || !promoCode.trim()}
+                className="px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold hover:bg-purple-600 disabled:opacity-50 transition"
+              >
+                {checkingPromo ? '...' : 'Apply'}
+              </button>
+            </div>
+            {promoValid === true && (
+              <p className="text-green-400 text-sm mt-2">✓ Code applied! ${discountAmount} off your purchase</p>
+            )}
+            {promoValid === false && (
+              <p className="text-red-400 text-sm mt-2">✗ Invalid or expired code</p>
+            )}
+          </div>
         </div>
 
         <div className="grid md:grid-cols-3 gap-8">
@@ -97,7 +160,16 @@ export default function Pricing() {
               POPULAR
             </div>
             <h2 className="text-2xl font-bold mb-2 text-gray-800">Premium</h2>
-            <p className="text-4xl font-bold mb-4 text-gray-800">$29.99</p>
+            <div className="mb-4">
+              {promoValid ? (
+                <>
+                  <span className="text-2xl text-gray-400 line-through">${'29.99'}</span>
+                  <span className="text-4xl font-bold text-gray-800 ml-2">${premiumPrice}</span>
+                </>
+              ) : (
+                <span className="text-4xl font-bold text-gray-800">$29.99</span>
+              )}
+            </div>
             <p className="text-gray-600 mb-6">All filters to find your perfect school</p>
             
             <ul className="space-y-3 mb-8">
@@ -124,7 +196,16 @@ export default function Pricing() {
               BEST VALUE
             </div>
             <h2 className="text-2xl font-bold mb-2 text-gray-800">Ultimate</h2>
-            <p className="text-4xl font-bold mb-4 text-gray-800">$49.99</p>
+            <div className="mb-4">
+              {promoValid ? (
+                <>
+                  <span className="text-2xl text-gray-400 line-through">${'49.99'}</span>
+                  <span className="text-4xl font-bold text-gray-800 ml-2">${ultimatePrice}</span>
+                </>
+              ) : (
+                <span className="text-4xl font-bold text-gray-800">$49.99</span>
+              )}
+            </div>
             <p className="text-gray-600 mb-6">Everything you need to get accepted</p>
             
             <ul className="space-y-3 mb-8">
