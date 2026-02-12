@@ -82,7 +82,7 @@ export default function Pricing() {
   const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep launching March 1st! Get early access →</a></div>
       <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">

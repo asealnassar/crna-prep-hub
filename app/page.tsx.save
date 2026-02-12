@@ -1,5 +1,4 @@
 
-
 import Link from 'next/link'
 
 export default function Home() {
@@ -146,4 +145,19 @@ export default function Home() {
     </div>
   )
 }
+```
 
+**Press Ctrl+O, Enter, Ctrl+X to save.**
+
+Now run the sed commands to add banners to other pages:
+```
+sed -i '' 's|<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">|<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep launching March 1st! Get early access →</a></div>|g' ~/Desktop/CRNA-Prep-Hub/app/schools/page.tsx
+```
+```
+sed -i '' 's|<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">|<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep launching March 1st! Get early access →</a></div>|g' ~/Desktop/CRNA-Prep-Hub/app/interview/page.tsx
+```
+```
+sed -i '' 's|<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">|<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep launching March 1st! Get early access →</a></div>|g' ~/Desktop/CRNA-Prep-Hub/app/pricing/page.tsx
+```
+```
+sed -i '' 's|<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">|<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underlin
