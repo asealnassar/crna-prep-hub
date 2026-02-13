@@ -39,7 +39,7 @@ export async function POST(request: Request) {
 
       if (user) {
         const { error } = await supabase
-          .from('profiles')
+          .from('user_profiles')
           .update({ tier: plan })
           .eq('id', user.id)
 
