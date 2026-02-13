@@ -34,12 +34,10 @@ export async function POST(request: Request) {
     const plan = session.metadata?.plan || 'premium'
 
     if (userEmail) {
-      // Get user by email
       const { data: userData } = await supabase.auth.admin.listUsers()
       const user = userData?.users?.find(u => u.email === userEmail)
 
       if (user) {
-        // Update user's tier
         const { error } = await supabase
           .from('profiles')
           .update({ tier: plan })
@@ -56,24 +54,3 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ received: true })
 }
-```
-
-**Press Ctrl+O, Enter, Ctrl+X to save.**
-
-**Step 2: Set up webhook in Stripe:**
-
-1. Go to **Stripe Dashboard** → **Developers** → **Webhooks**
-2. Click **Add endpoint**
-3. Enter URL: `https://crnaprephub.com/api/webhook`
-4. Select event: **checkout.session.completed**
-5. Click **Add endpoint**
-6. Copy the **Signing secret** (starts with `whsec_`)
-
-**Step 3: Update your .env.local:**
-```
-nano ~/Desktop/CRNA-Prep-Hub/.env.local
-```
-
-Find `STRIPE_WEBHOOK_SECRET=skip` and replace with:
-```
-STRIPE_WEBHOOK_SECRET=whsec_your_actual_secret_here
