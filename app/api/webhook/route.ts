@@ -34,20 +34,15 @@ export async function POST(request: Request) {
     const plan = session.metadata?.plan || 'premium'
 
     if (userEmail) {
-      const { data: userData } = await supabase.auth.admin.listUsers()
-      const user = userData?.users?.find(u => u.email === userEmail)
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({ subscription_tier: plan })
+        .eq('email', userEmail)
 
-      if (user) {
-        const { error } = await supabase
-          .from('user_profiles')
-          .update({ tier: plan })
-          .eq('id', user.id)
-
-        if (error) {
-          console.error('Failed to update tier:', error)
-        } else {
-          console.log(`Updated ${userEmail} to ${plan}`)
-        }
+      if (error) {
+        console.error('Failed to update tier:', error)
+      } else {
+        console.log(`Updated ${userEmail} to ${plan}`)
       }
     }
   }
