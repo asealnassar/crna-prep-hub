@@ -367,43 +367,4 @@ export default function Schools() {
               </div>
             </div>
           ))}
-        </div>
-        {filteredSchools.length === 0 && (<div className="text-center py-12"><p className="text-white text-lg">No schools match your filters. Try adjusting your criteria.</p></div>)}
-        {showReportModal && reportingSchool && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-              <h3 className="text-xl font-bold text-gray-800 mb-2">Report Error</h3>
-              <p className="text-gray-600 mb-4">Report an error for <strong>{reportingSchool.name}</strong></p>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Which field has an error?</label>
-                <select value={reportField} onChange={(e) => setReportField(e.target.value)} className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500">
-                  <option value="">Select a field (optional)</option>
-                  <option value="GPA">GPA Requirement</option>
-                  <option value="Program Type">Program Type</option>
-                  <option value="Length">Program Length</option>
-                  <option value="ICU">ICU Experience</option>
-                  <option value="Tuition">Tuition</option>
-                  <option value="Format">Format</option>
-                  <option value="Application Opens">Application Opens</option>
-                  <option value="Deadline">Application Deadline</option>
-                  <option value="GRE">GRE Requirement</option>
-                  <option value="Method">Application Method</option>
-                  <option value="Prerequisites">Prerequisites</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Describe the error *</label>
-                <textarea value={reportDescription} onChange={(e) => setReportDescription(e.target.value)} placeholder="e.g., The GPA requirement should be 3.2, not 3.0..." rows={4} className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500" />
-              </div>
-              <div className="flex gap-3">
-                <button onClick={() => { setShowReportModal(false); setReportField(''); setReportDescription('') }} className="flex-1 py-3 border border-gray-300 rounded-xl text-gray-700 font-semibold hover:bg-gray-50 transition">Cancel</button>
-                <button onClick={submitReport} disabled={reportSubmitting} className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition disabled:opacity-50">{reportSubmitting ? 'Submitting...' : 'Submit Report'}</button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+   
