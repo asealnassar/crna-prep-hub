@@ -1,14 +1,12 @@
-
-
 import Link from 'next/link'
 
 export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      {/* Coming Soon Banner */}
+      {/* Banner */}
       <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center">
         <Link href="/interview-prep" className="text-black font-semibold hover:underline">
-          🚀 NEW: School-Specific Interview Prep launching March 1st! Get early access →
+          🚀 NEW: School-Specific Interview Style is NOW LIVE for Ultimate members →
         </Link>
       </div>
 
@@ -16,12 +14,15 @@ export default function Home() {
       <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
-            <h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1>
+            <div className="flex items-center gap-4">
+              <h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1>
+              <Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link>
+            </div>
             <div className="flex gap-6">
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
+              <Link href="/interview-prep" className="text-white/80 hover:text-white transition">School-Specific Interview Style</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
-              <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
               <Link href="/login" className="bg-white text-indigo-900 px-4 py-2 rounded-lg font-semibold hover:bg-indigo-100 transition">Login</Link>
             </div>
           </div>
@@ -77,17 +78,17 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Interview Prep Coming Soon Section */}
+      {/* Interview Prep NOW LIVE Section */}
       <div className="max-w-5xl mx-auto px-4 mb-24">
-        <div className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 backdrop-blur-md rounded-2xl p-8 border border-yellow-500/30">
+        <div className="bg-gradient-to-r from-green-500/20 to-emerald-500/20 backdrop-blur-md rounded-2xl p-8 border border-green-500/30">
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <div>
-              <div className="text-yellow-400 font-semibold text-sm mb-2">🚀 COMING MARCH 1ST</div>
-              <h3 className="text-2xl font-bold text-white mb-2">School-Specific Interview Prep</h3>
+              <div className="text-green-400 font-semibold text-sm mb-2">🎉 NOW LIVE - ULTIMATE EXCLUSIVE</div>
+              <h3 className="text-2xl font-bold text-white mb-2">School-Specific Interview Style</h3>
               <p className="text-indigo-200">Real questions, interview styles, and insider tips for every CRNA program.</p>
             </div>
-            <Link href="/interview-prep" className="bg-yellow-500 text-black px-6 py-3 rounded-xl font-semibold hover:bg-yellow-400 transition whitespace-nowrap">
-              Get Early Access
+            <Link href="/interview-prep" className="bg-green-500 text-white px-6 py-3 rounded-xl font-semibold hover:bg-green-400 transition whitespace-nowrap">
+              View Now →
             </Link>
           </div>
         </div>
@@ -146,4 +147,3 @@ export default function Home() {
     </div>
   )
 }
-

@@ -183,15 +183,16 @@ export default function Schools() {
   const states = [...new Set(schools.map(s => s.location_state))].sort()
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep launching March 1st! Get early access →</a></div>
+    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Style is NOW LIVE for Ultimate members →</a></div>
       <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
-            <Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link>
+            <div className="flex items-center gap-4"><Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link><Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link></div>
             <div className="flex gap-6">
               {isLoggedIn && <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>}
               <Link href="/schools" className="text-white font-semibold">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
+              <Link href="/interview-prep" className="text-white/80 hover:text-white transition">School-Specific Interview Style</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
               <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
               {isLoggedIn && userEmail === 'asealnassar@gmail.com' && (<Link href="/admin/schools" className="text-yellow-400 hover:text-yellow-300 transition">Admin</Link>)}

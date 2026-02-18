@@ -55,11 +55,12 @@ export default function Sponsors() {
       <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
-            <Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link>
+            <div className="flex items-center gap-4"><Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link><Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link></div>
             <div className="flex gap-6">
               <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
+              <Link href="/interview-prep" className="text-white/80 hover:text-white transition">School-Specific Interview Style</Link>
               <Link href="/sponsors" className="text-white font-semibold">Sponsors</Link>
             </div>
           </div>

@@ -32,7 +32,6 @@ export default function Dashboard() {
 
       setProfile(profileData)
 
-      // Get saved schools with school details
       const { data: savedData } = await supabase
         .from('saved_schools')
         .select('*, schools(*)')
@@ -76,15 +75,22 @@ export default function Dashboard() {
   const tier = profile?.subscription_tier || 'free'
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep launching March 1st! Get early access →</a></div>
+    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+      <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center">
+        <a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Style is NOW LIVE for Ultimate members →</a>
+      </div>
       <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
-            <Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link>
+            <div className="flex items-center gap-4">
+              <Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link>
+              <Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link>
+            </div>
             <div className="flex gap-6 items-center">
               <Link href="/dashboard" className="text-white font-semibold">Dashboard</Link>
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
+              <Link href="/interview-prep" className="text-white/80 hover:text-white transition">School-Specific Interview Style</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
               <button onClick={handleSignOut} className="text-white/60 hover:text-white text-sm">Sign Out</button>
             </div>
@@ -139,7 +145,7 @@ export default function Dashboard() {
         </div>
 
         {/* Quick Actions */}
-        <div className="grid md:grid-cols-2 gap-6 mb-8">
+        <div className="grid md:grid-cols-3 gap-6 mb-8">
           <Link href="/schools" className="bg-white rounded-2xl shadow-xl p-6 hover:shadow-2xl transition group">
             <div className="flex items-center justify-between">
               <div>
@@ -157,6 +163,20 @@ export default function Dashboard() {
                 <div className="text-4xl mb-3">🎯</div>
                 <h3 className="text-xl font-bold text-gray-800 mb-2">Practice Interview</h3>
                 <p className="text-gray-500">AI-powered mock interviews with voice support</p>
+              </div>
+              <div className="text-3xl text-gray-300 group-hover:text-purple-500 transition">→</div>
+            </div>
+          </Link>
+
+          <Link href="/interview-prep" className={`bg-white rounded-2xl shadow-xl p-6 hover:shadow-2xl transition group relative ${tier !== 'ultimate' ? 'border-2 border-purple-500' : ''}`}>
+            {tier !== 'ultimate' && (
+              <div className="absolute top-2 right-2 bg-purple-500 text-white text-xs px-2 py-1 rounded-full">Ultimate Only</div>
+            )}
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-4xl mb-3">📋</div>
+                <h3 className="text-xl font-bold text-gray-800 mb-2">School-Specific Interview Style</h3>
+                <p className="text-gray-500">Real interview info & tips for each program</p>
               </div>
               <div className="text-3xl text-gray-300 group-hover:text-purple-500 transition">→</div>
             </div>
