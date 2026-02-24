@@ -12,7 +12,6 @@ export default function InterviewPrep() {
   const [userEmail, setUserEmail] = useState('')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedSchool, setSelectedSchool] = useState<any>(null)
   const [showRequestModal, setShowRequestModal] = useState(false)
   const [requestSchool, setRequestSchool] = useState('')
   const [requestNotes, setRequestNotes] = useState('')
@@ -23,14 +22,13 @@ export default function InterviewPrep() {
   const supabase = createClient()
 
   const isUltimate = userTier === 'ultimate'
+  const previewSchools = ['AdventHealth University', 'Arkansas State University', 'Clarkson College']
 
   useEffect(() => {
     const init = async () => {
-      // Get all schools
       const { data: schoolsData } = await supabase.from('schools').select('*').order('name')
       setSchools(schoolsData || [])
 
-      // Get interview info
       const { data: infoData } = await supabase.from('school_interview_info').select('*')
       setInterviewInfo(infoData || [])
 
@@ -71,7 +69,6 @@ export default function InterviewPrep() {
     if (!editingSchool) return
     setSubmitting(true)
     
-    // Check if info already exists for this school
     const existing = interviewInfo.find(i => i.school_name?.toLowerCase() === editingSchool.school_name?.toLowerCase())
     
     if (existing) {
@@ -102,6 +99,10 @@ export default function InterviewPrep() {
     school.name?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
+  // For non-ultimate users, only show preview schools
+  const displaySchools = (isUltimate || isAdmin) ? filteredSchools : filteredSchools.filter(s => previewSchools.includes(s.name))
+  const lockedSchools = (isUltimate || isAdmin) ? [] : filteredSchools.filter(s => !previewSchools.includes(s.name))
+
   if (loading) {
     return (<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 flex items-center justify-center"><div className="text-white text-xl">Loading...</div></div>)
   }
@@ -130,37 +131,6 @@ export default function InterviewPrep() {
           <h1 className="text-4xl font-bold text-white mb-6">School-Specific Interview Style</h1>
           <p className="text-xl text-indigo-200 mb-8">Please log in to access interview prep materials.</p>
           <Link href="/login" className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition">Log In</Link>
-        </div>
-      </div>
-    )
-  }
-
-  if (!isUltimate && !isAdmin) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-        <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
-          <div className="max-w-7xl mx-auto px-4 py-4">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-4">
-                <Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link>
-                <Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link>
-              </div>
-              <div className="flex gap-6">
-                <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>
-                <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
-                <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
-                <Link href="/interview-prep" className="text-white font-semibold">School-Specific Interview Style</Link>
-                <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
-              </div>
-            </div>
-          </div>
-        </nav>
-        <div className="max-w-4xl mx-auto px-4 py-16 text-center">
-          <div className="text-6xl mb-6">🔒</div>
-          <h1 className="text-4xl font-bold text-white mb-6">Ultimate Feature</h1>
-          <p className="text-xl text-indigo-200 mb-4">School-Specific Interview Style is exclusively available for Ultimate members.</p>
-          <p className="text-indigo-300 mb-8">Get real interview questions, tips from current students, and insider info for every CRNA program.</p>
-          <Link href="/pricing" className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition">Upgrade to Ultimate - $49.99</Link>
         </div>
       </div>
     )
@@ -204,6 +174,21 @@ export default function InterviewPrep() {
           </div>
         </div>
 
+        {/* Preview Banner for non-Ultimate users */}
+        {!isUltimate && !isAdmin && (
+          <div className="bg-purple-500/20 border border-purple-500/50 rounded-xl p-6 mb-8">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+              <div>
+                <h3 className="text-purple-300 font-semibold text-lg">🔓 Preview Mode</h3>
+                <p className="text-purple-200/80">You're viewing 3 sample schools. Upgrade to Ultimate to unlock all {schools.length} schools!</p>
+              </div>
+              <Link href="/pricing" className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition whitespace-nowrap">
+                Upgrade to Ultimate - $49.99
+              </Link>
+            </div>
+          </div>
+        )}
+
         {/* Search and Request */}
         <div className="bg-white rounded-2xl shadow-xl p-6 mb-8">
           <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
@@ -225,19 +210,26 @@ export default function InterviewPrep() {
                   ➕ Add Info
                 </button>
               )}
-              <button
-                onClick={() => setShowRequestModal(true)}
-                className="px-6 py-3 bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-semibold rounded-xl hover:opacity-90 transition whitespace-nowrap"
-              >
-                🚀 Request Expedited Info
-              </button>
+              {(isUltimate || isAdmin) && (
+                <button
+                  onClick={() => setShowRequestModal(true)}
+                  className="px-6 py-3 bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-semibold rounded-xl hover:opacity-90 transition whitespace-nowrap"
+                >
+                  🚀 Request Expedited Info
+                </button>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Schools List */}
+        {/* Preview Schools Section Label */}
+        {!isUltimate && !isAdmin && displaySchools.length > 0 && (
+          <h2 className="text-xl font-semibold text-white mb-4">📖 Sample Schools (3 of {schools.length})</h2>
+        )}
+
+        {/* Schools List - Unlocked */}
         <div className="space-y-4">
-          {filteredSchools.map((school) => {
+          {displaySchools.map((school) => {
             const info = getSchoolInfo(school.name)
             const hasInfo = info && info.interview_style && info.interview_style !== 'No information found'
             return (
@@ -247,7 +239,7 @@ export default function InterviewPrep() {
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <h3 className="font-bold text-xl text-gray-800">{school.name}</h3>
                       <span className="text-gray-500 text-sm">📍 {school.location_city}, {school.location_state}</span>
                       {hasInfo ? (
@@ -299,12 +291,52 @@ export default function InterviewPrep() {
                     )}
                   </div>
                 ) : (
-                  <p className="text-gray-500 italic">No information available yet. Click "Request Expedited Info" if you need this school prioritized!</p>
+                  <p className="text-gray-500 italic">No information available yet.</p>
                 )}
               </div>
             )
           })}
         </div>
+
+        {/* Locked Schools Section for non-Ultimate */}
+        {!isUltimate && !isAdmin && lockedSchools.length > 0 && (
+          <div className="mt-8">
+            <h2 className="text-xl font-semibold text-white mb-4">🔒 Locked Schools ({lockedSchools.length} more)</h2>
+            <div className="space-y-4">
+              {lockedSchools.slice(0, 10).map((school) => (
+                <div
+                  key={school.id}
+                  className="bg-white/50 rounded-xl shadow-lg p-6 relative overflow-hidden"
+                >
+                  <div className="absolute inset-0 bg-white/70 backdrop-blur-sm flex items-center justify-center z-10">
+                    <div className="text-center">
+                      <div className="text-4xl mb-2">🔒</div>
+                      <p className="text-gray-700 font-semibold">Upgrade to Ultimate to unlock</p>
+                    </div>
+                  </div>
+                  <div className="blur-sm">
+                    <h3 className="font-bold text-xl text-gray-800">{school.name}</h3>
+                    <p className="text-gray-500">{school.location_city}, {school.location_state}</p>
+                  </div>
+                </div>
+              ))}
+              {lockedSchools.length > 10 && (
+                <div className="text-center py-4">
+                  <p className="text-indigo-200">...and {lockedSchools.length - 10} more schools</p>
+                </div>
+              )}
+            </div>
+            
+            {/* Upgrade CTA */}
+            <div className="mt-8 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl p-8 text-center">
+              <h3 className="text-2xl font-bold text-white mb-2">Unlock All {schools.length} Schools</h3>
+              <p className="text-white/80 mb-6">Get insider interview info for every CRNA program</p>
+              <Link href="/pricing" className="inline-block bg-white text-purple-600 px-8 py-4 rounded-xl font-semibold hover:bg-gray-100 transition">
+                Upgrade to Ultimate - $49.99
+              </Link>
+            </div>
+          </div>
+        )}
 
         {filteredSchools.length === 0 && (
           <div className="text-center py-12">
@@ -426,3 +458,4 @@ export default function InterviewPrep() {
     </div>
   )
 }
+
