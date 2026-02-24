@@ -22,6 +22,7 @@ export default function Interview() {
   const [interviewEnded, setInterviewEnded] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [askedQuestions, setAskedQuestions] = useState<string[]>([])
+  const [recentQuestions, setRecentQuestions] = useState<string[]>([])
   const [sessionId, setSessionId] = useState('')
   const router = useRouter()
   const supabase = createClient()
@@ -55,12 +56,49 @@ export default function Interview() {
     init()
   }, [])
 
+  // Load questions asked in the last 36 hours
+  const loadRecentQuestions = async (type: string) => {
+    if (!userId) return []
+    const thirtyDixHoursAgo = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString()
+    const { data } = await supabase
+      .from('user_asked_questions')
+      .select('question')
+      .eq('user_id', userId)
+      .eq('interview_type', type)
+      .gte('asked_at', thirtyDixHoursAgo)
+    return data?.map(d => d.question) || []
+  }
+
+  // Save question to database
+  const saveQuestion = async (question: string, type: string) => {
+    if (!userId) return
+    await supabase.from('user_asked_questions').insert({
+      user_id: userId,
+      interview_type: type,
+      question: question
+    })
+  }
+
+  // Extract question from AI response
+  const extractQuestion = (text: string): string => {
+    const lines = text.split('\n')
+    for (const line of lines) {
+      if (line.includes('?')) {
+        return line.trim()
+      }
+    }
+    return text.substring(0, 150)
+  }
+
   const getSystemMessage = () => {
     const randomSeed = Math.random().toString(36).substring(7) + Date.now()
     const questionPool = Math.floor(Math.random() * 100)
 
-    const avoidList = askedQuestions.length > 0
-      ? `\n\nCRITICAL - DO NOT ASK ANY OF THESE QUESTIONS AGAIN (you already asked them):\n${askedQuestions.map((q, i) => `${i + 1}. "${q}"`).join('\n')}\n\nYou MUST ask a COMPLETELY DIFFERENT question that is NOT similar to any of the above. Pick a different category and different topic.`
+    // Combine session questions and recent questions from database
+    const allAvoidQuestions = [...new Set([...askedQuestions, ...recentQuestions])]
+
+    const avoidList = allAvoidQuestions.length > 0
+      ? `\n\n######## BANNED QUESTIONS - DO NOT ASK THESE ########\nThese questions were asked in the last 36 hours. You are FORBIDDEN from asking them or anything similar:\n${allAvoidQuestions.map((q, i) => `${i + 1}. "${q}"`).join('\n')}\n########################################################\n\nYou MUST ask a COMPLETELY DIFFERENT and ORIGINAL question. Be creative!`
       : ''
 
     let basePrompt = `You are an experienced CRNA program interviewer conducting a mock interview. Be professional but friendly. Ask one question at a time. After the candidate answers, provide brief constructive feedback (2-3 sentences) and then ask the next question. Keep responses concise and helpful.
@@ -71,6 +109,7 @@ CRITICAL INSTRUCTIONS FOR VARIETY:
 - You MUST pick a DIFFERENT category and topic for each question.
 - NEVER ask the same question twice, even reworded.
 - NEVER start with "Why do you want to be a CRNA" unless it hasn't been asked yet.
+- Be CREATIVE and ask UNIQUE questions the candidate hasn't heard before.
 ${avoidList}
 
 When you reach question ${maxQuestions}, after their answer, provide final overall feedback summarizing their strengths and areas to improve, then say "This concludes our interview. Good luck with your CRNA applications!"`
@@ -226,6 +265,11 @@ Use question pool number ${questionPool} to decide which category to start with.
   const startInterview = async () => {
     if (!canInterview || !interviewType) return
     if (interviewType === 'custom' && !customTopic.trim()) { alert('Please enter a custom topic'); return }
+    
+    // Load recent questions from last 36 hours
+    const recent = await loadRecentQuestions(interviewType)
+    setRecentQuestions(recent)
+    
     setStarted(true)
     setLoading(true)
     setQuestionCount(1)
@@ -236,10 +280,14 @@ Use question pool number ${questionPool} to decide which category to start with.
       setInterviewCount(interviewCount + 1)
     }
     try {
-      const response = await fetch('/api/interview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'Please start the mock interview with your first question. Pick a random category to start with - do NOT start with "Why do you want to be a CRNA".' }], systemMessage: getSystemMessage() }) })
+      const response = await fetch('/api/interview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'Please start the mock interview with your first question. Pick a random category to start with - do NOT start with "Why do you want to be a CRNA". Ask a UNIQUE question not in the banned list.' }], systemMessage: getSystemMessage() }) })
       const data = await response.json()
       setMessages([{ role: 'assistant', content: data.message }])
-      setAskedQuestions([data.message.split('?')[0] + '?'])
+      
+      // Save question to database and session
+      const q = extractQuestion(data.message)
+      setAskedQuestions([q])
+      await saveQuestion(q, interviewType)
     } catch (error) {
       setMessages([{ role: 'assistant', content: 'Welcome! Let\'s begin your mock interview. Describe the most stressful situation you have faced in your nursing career and how you handled it.' }])
     }
@@ -264,7 +312,12 @@ Use question pool number ${questionPool} to decide which category to start with.
       const response = await fetch('/api/interview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: newMessages, systemMessage: getSystemMessage() }) })
       const data = await response.json()
       setMessages([...newMessages, { role: 'assistant', content: data.message }])
-      setAskedQuestions(prev => [...prev, data.message.split('?')[0] + '?'])
+      
+      // Save question to database and session
+      const q = extractQuestion(data.message)
+      setAskedQuestions(prev => [...prev, q])
+      await saveQuestion(q, interviewType)
+      
       if (data.message.includes('concludes our interview')) { setInterviewEnded(true) }
     } catch (error) {
       setMessages([...newMessages, { role: 'assistant', content: 'I apologize, but I encountered an error. Please try again.' }])
@@ -280,6 +333,7 @@ Use question pool number ${questionPool} to decide which category to start with.
     setQuestionCount(0)
     setInterviewEnded(false)
     setAskedQuestions([])
+    setRecentQuestions([])
     setSessionId('')
   }
 
@@ -297,8 +351,8 @@ Use question pool number ${questionPool} to decide which category to start with.
               {isLoggedIn && <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>}
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
               <Link href="/interview" className="text-white font-semibold">Mock Interview</Link>
+              <Link href="/interview-prep" className="text-white/80 hover:text-white transition">School-Specific Interview Style</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
-              <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
               {isLoggedIn && userEmail === 'asealnassar@gmail.com' && (<Link href="/admin/schools" className="text-yellow-400 hover:text-yellow-300 transition">Admin</Link>)}
               {!isLoggedIn && (<Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">Login</Link>)}
             </div>
