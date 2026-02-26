@@ -24,6 +24,10 @@ export default function Interview() {
   const [askedQuestions, setAskedQuestions] = useState<string[]>([])
   const [recentQuestions, setRecentQuestions] = useState<string[]>([])
   const [sessionId, setSessionId] = useState('')
+  const [showFeedback, setShowFeedback] = useState(false)
+  const [feedbackMessage, setFeedbackMessage] = useState('')
+  const [feedbackSent, setFeedbackSent] = useState(false)
+  const [sendingFeedback, setSendingFeedback] = useState(false)
   const router = useRouter()
   const supabase = createClient()
 
@@ -56,7 +60,6 @@ export default function Interview() {
     init()
   }, [])
 
-  // Load questions asked in the last 36 hours
   const loadRecentQuestions = async (type: string) => {
     if (!userId) return []
     const thirtyDixHoursAgo = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString()
@@ -69,7 +72,6 @@ export default function Interview() {
     return data?.map(d => d.question) || []
   }
 
-  // Save question to database
   const saveQuestion = async (question: string, type: string) => {
     if (!userId) return
     await supabase.from('user_asked_questions').insert({
@@ -79,7 +81,6 @@ export default function Interview() {
     })
   }
 
-  // Extract question from AI response
   const extractQuestion = (text: string): string => {
     const lines = text.split('\n')
     for (const line of lines) {
@@ -90,11 +91,22 @@ export default function Interview() {
     return text.substring(0, 150)
   }
 
+  const submitFeedback = async () => {
+    if (!feedbackMessage.trim()) return
+    setSendingFeedback(true)
+    await supabase.from('interview_feedback').insert({
+      user_email: userEmail || 'anonymous',
+      message: feedbackMessage
+    })
+    setSendingFeedback(false)
+    setFeedbackSent(true)
+    setFeedbackMessage('')
+  }
+
   const getSystemMessage = () => {
     const randomSeed = Math.random().toString(36).substring(7) + Date.now()
     const questionPool = Math.floor(Math.random() * 100)
 
-    // Combine session questions and recent questions from database
     const allAvoidQuestions = [...new Set([...askedQuestions, ...recentQuestions])]
 
     const avoidList = allAvoidQuestions.length > 0
@@ -266,7 +278,6 @@ Use question pool number ${questionPool} to decide which category to start with.
     if (!canInterview || !interviewType) return
     if (interviewType === 'custom' && !customTopic.trim()) { alert('Please enter a custom topic'); return }
     
-    // Load recent questions from last 36 hours
     const recent = await loadRecentQuestions(interviewType)
     setRecentQuestions(recent)
     
@@ -284,7 +295,6 @@ Use question pool number ${questionPool} to decide which category to start with.
       const data = await response.json()
       setMessages([{ role: 'assistant', content: data.message }])
       
-      // Save question to database and session
       const q = extractQuestion(data.message)
       setAskedQuestions([q])
       await saveQuestion(q, interviewType)
@@ -313,7 +323,6 @@ Use question pool number ${questionPool} to decide which category to start with.
       const data = await response.json()
       setMessages([...newMessages, { role: 'assistant', content: data.message }])
       
-      // Save question to database and session
       const q = extractQuestion(data.message)
       setAskedQuestions(prev => [...prev, q])
       await saveQuestion(q, interviewType)
@@ -359,7 +368,7 @@ Use question pool number ${questionPool} to decide which category to start with.
           </div>
         </div>
       </nav>
-      <div className="max-w-4xl mx-auto px-4 py-8">
+      <div className="max-w-6xl mx-auto px-4 py-8">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-white mb-2">AI Mock Interview</h1>
           <p className="text-indigo-200">Practice your CRNA interview skills with our AI interviewer</p>
@@ -380,48 +389,88 @@ Use question pool number ${questionPool} to decide which category to start with.
           )}
         </div>
         {!started ? (
-          <div className="bg-white rounded-2xl shadow-xl p-8">
-            <div className="text-center mb-8">
-              <div className="w-20 h-20 bg-gradient-to-br from-purple-600 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-6">
-                <span className="text-4xl">🎤</span>
+          <div className="flex gap-6">
+            <div className="bg-white rounded-2xl shadow-xl p-8 flex-1">
+              <div className="text-center mb-8">
+                <div className="w-20 h-20 bg-gradient-to-br from-purple-600 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <span className="text-4xl">🎤</span>
+                </div>
+                <h2 className="text-2xl font-bold text-gray-800 mb-2">Choose Interview Type</h2>
+                <p className="text-gray-600">Select the type of interview you want to practice (10 questions max)</p>
               </div>
-              <h2 className="text-2xl font-bold text-gray-800 mb-2">Choose Interview Type</h2>
-              <p className="text-gray-600">Select the type of interview you want to practice (10 questions max)</p>
+              <div className="grid md:grid-cols-2 gap-4 mb-6">
+                {interviewTypes.map((type) => (
+                  <button key={type.id} onClick={() => setInterviewType(type.id)} className={`p-4 rounded-xl border-2 text-left transition ${interviewType === type.id ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300'}`}>
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="text-2xl">{type.icon}</span>
+                      <h3 className="font-semibold text-gray-800">{type.name}</h3>
+                    </div>
+                    <p className="text-sm text-gray-600">{type.description}</p>
+                  </button>
+                ))}
+              </div>
+              {interviewType === 'custom' && (
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Enter your custom topic:</label>
+                  <input type="text" value={customTopic} onChange={(e) => setCustomTopic(e.target.value)} placeholder="e.g., Leadership experience, Handling difficult patients..." className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                </div>
+              )}
+              {!isLoggedIn ? (
+                <div className="text-center">
+                  <Link href="/login" className="inline-block w-full py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-lg text-center">Sign Up Free to Start Interviewing</Link>
+                  <p className="text-gray-500 text-sm mt-3">Get 1 free interview. Upgrade to Ultimate for unlimited.</p>
+                </div>
+              ) : canInterview ? (
+                <button onClick={startInterview} disabled={!interviewType || (interviewType === 'custom' && !customTopic.trim())} className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-lg disabled:opacity-50 disabled:cursor-not-allowed">Start Interview</button>
+              ) : (
+                <div className="text-center">
+                  <button disabled className="px-8 py-4 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed text-lg mb-4">🔒 Interview Used</button>
+                  <p className="text-gray-600 mb-4">You have used your free interview.</p>
+                  <Link href="/pricing" className="inline-block px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition">Upgrade to Ultimate for Unlimited Interviews</Link>
+                </div>
+              )}
             </div>
-            <div className="grid md:grid-cols-2 gap-4 mb-6">
-              {interviewTypes.map((type) => (
-                <button key={type.id} onClick={() => setInterviewType(type.id)} className={`p-4 rounded-xl border-2 text-left transition ${interviewType === type.id ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300'}`}>
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="text-2xl">{type.icon}</span>
-                    <h3 className="font-semibold text-gray-800">{type.name}</h3>
-                  </div>
-                  <p className="text-sm text-gray-600">{type.description}</p>
-                </button>
-              ))}
+
+            <div className="w-72 bg-white rounded-2xl shadow-xl p-6 h-fit">
+              <div className="text-center mb-4">
+                <span className="text-3xl">💬</span>
+                <h3 className="text-lg font-bold text-gray-800 mt-2">Help Us Improve</h3>
+                <p className="text-sm text-gray-600 mt-1">Experiencing issues with the AI interview? Let me know!</p>
+              </div>
+              
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                <p className="text-xs text-blue-800">📧 I personally read every message and fix all reported issues to make this tool better for you.</p>
+              </div>
+
+              {feedbackSent ? (
+                <div className="text-center py-4">
+                  <span className="text-4xl">✅</span>
+                  <p className="text-green-600 font-semibold mt-2">Thank you!</p>
+                  <p className="text-sm text-gray-600">Your feedback has been received.</p>
+                  <button onClick={() => setFeedbackSent(false)} className="mt-3 text-purple-600 text-sm underline">Send another</button>
+                </div>
+              ) : (
+                <>
+                  <textarea
+                    value={feedbackMessage}
+                    onChange={(e) => setFeedbackMessage(e.target.value)}
+                    placeholder="Describe any issues, bugs, or suggestions..."
+                    rows={4}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm resize-none"
+                  />
+                  <button
+                    onClick={submitFeedback}
+                    disabled={!feedbackMessage.trim() || sendingFeedback}
+                    className="w-full mt-3 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    {sendingFeedback ? 'Sending...' : 'Send Feedback'}
+                  </button>
+                </>
+              )}
             </div>
-            {interviewType === 'custom' && (
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Enter your custom topic:</label>
-                <input type="text" value={customTopic} onChange={(e) => setCustomTopic(e.target.value)} placeholder="e.g., Leadership experience, Handling difficult patients..." className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500" />
-              </div>
-            )}
-            {!isLoggedIn ? (
-              <div className="text-center">
-                <Link href="/login" className="inline-block w-full py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-lg text-center">Sign Up Free to Start Interviewing</Link>
-                <p className="text-gray-500 text-sm mt-3">Get 1 free interview. Upgrade to Ultimate for unlimited.</p>
-              </div>
-            ) : canInterview ? (
-              <button onClick={startInterview} disabled={!interviewType || (interviewType === 'custom' && !customTopic.trim())} className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-lg disabled:opacity-50 disabled:cursor-not-allowed">Start Interview</button>
-            ) : (
-              <div className="text-center">
-                <button disabled className="px-8 py-4 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed text-lg mb-4">🔒 Interview Used</button>
-                <p className="text-gray-600 mb-4">You have used your free interview.</p>
-                <Link href="/pricing" className="inline-block px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition">Upgrade to Ultimate for Unlimited Interviews</Link>
-              </div>
-            )}
           </div>
         ) : (
-          <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-xl overflow-hidden max-w-4xl mx-auto">
             <div className="bg-gradient-to-r from-purple-600 to-pink-500 px-6 py-3 flex justify-between items-center">
               <span className="text-white font-medium">{interviewTypes.find(t => t.id === interviewType)?.name} Interview</span>
               <div className="flex items-center gap-4">
