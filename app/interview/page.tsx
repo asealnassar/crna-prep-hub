@@ -82,13 +82,17 @@ export default function Interview() {
   }
 
   const extractQuestion = (text: string): string => {
+    const match = text.match(/Question \d+:(.*?)(?=\n\n|Score:|What you did|$)/s)
+    if (match) {
+      return match[1].trim()
+    }
     const lines = text.split('\n')
     for (const line of lines) {
       if (line.includes('?')) {
         return line.trim()
       }
     }
-    return text.substring(0, 150)
+    return text.substring(0, 200)
   }
 
   const submitFeedback = async () => {
@@ -105,169 +109,83 @@ export default function Interview() {
 
   const getSystemMessage = () => {
     const randomSeed = Math.random().toString(36).substring(7) + Date.now()
-    const questionPool = Math.floor(Math.random() * 100)
 
-    const allAvoidQuestions = [...new Set([...askedQuestions, ...recentQuestions])]
+    const avoidList = questionCount === 1 && recentQuestions.length > 0
+      ? `\n\nRECENT SCENARIOS TO AVOID (asked in last 36 hours):
+${recentQuestions.slice(0, 20).map((q, i) => `${i + 1}. ${q}`).join('\n')}
 
-    const avoidList = allAvoidQuestions.length > 0
-      ? `\n\n######## BANNED QUESTIONS - DO NOT ASK THESE ########\nThese questions were asked in the last 36 hours. You are FORBIDDEN from asking them or anything similar:\n${allAvoidQuestions.map((q, i) => `${i + 1}. "${q}"`).join('\n')}\n########################################################\n\nYou MUST ask a COMPLETELY DIFFERENT and ORIGINAL question. Be creative!`
+Generate DIFFERENT scenarios using the random seed below.\n`
       : ''
 
-    let basePrompt = `You are an experienced CRNA program interviewer conducting a mock interview. Be professional but friendly. Ask one question at a time. After the candidate answers, provide brief constructive feedback (2-3 sentences) and then ask the next question. Keep responses concise and helpful.
+    let basePrompt = `You are conducting a CRNA program interview for ICU nurses applying to CRNA school. This is question ${questionCount + 1} of ${maxQuestions}.
 
-CRITICAL INSTRUCTIONS FOR VARIETY:
-- Session ID: ${sessionId} | Random seed: ${randomSeed} | Question pool: ${questionPool}
-- This is question ${questionCount + 1} of ${maxQuestions}.
-- You MUST pick a DIFFERENT category and topic for each question.
-- NEVER ask the same question twice, even reworded.
-- NEVER start with "Why do you want to be a CRNA" unless it hasn't been asked yet.
-- Be CREATIVE and ask UNIQUE questions the candidate hasn't heard before.
-${avoidList}
+RANDOM SEED: ${randomSeed} - Use this to generate variety. Do NOT default to the same scenarios.
 
-When you reach question ${maxQuestions}, after their answer, provide final overall feedback summarizing their strengths and areas to improve, then say "This concludes our interview. Good luck with your CRNA applications!"`
+FORMATTING:
+- Plain text only (no asterisks, no markdown)
+- Keep questions SHORT and realistic
+
+INTERVIEW STRUCTURE:
+
+QUESTION 1:
+"Welcome to CRNA Prep Hub. I'll be conducting your interview today. After each answer, I'll provide a score (1-10), feedback, and an elite-level example. Let's begin.
+
+Question 1: [ASK SHORT QUESTION]"
+
+QUESTIONS 2-9:
+After each answer:
+
+Score: X/10
+
+What you did well:
+- [2-3 strengths]
+
+What to tighten:
+- [2-3 improvements]
+
+Elite-level version:
+"[Perfect answer]"
+
+[Then ask next question]
+
+QUESTION 10:
+After their answer:
+- Score: X/10
+- What you did well
+- What to tighten
+- Elite-level version
+- Overall interview score: X/10
+- Final summary (2-3 sentences)
+- "This concludes your interview. Good luck with your CRNA applications!"
+
+${avoidList}`
 
     switch (interviewType) {
       case 'emotional':
         return basePrompt + `
 
-Focus on Emotional Intelligence and behavioral questions that real CRNA programs ask. You MUST rotate through ALL of these categories evenly. Do NOT favor any single category.
+Ask realistic behavioral questions that CRNA programs use to assess ICU nurses. Keep short and conversational.
 
-CATEGORY 1 - STRESS & PRESSURE (pick ONE you haven't used):
-- "Describe the most stressful situation you've faced."
-- "How do you handle high-pressure situations?"
-- "How do you decompress after a difficult shift?"
-- "What does stress management look like for you?"
-- "Tell me about a time you felt overwhelmed at work."
-- "How do you perform when stakes are highest?"
-
-CATEGORY 2 - CONFLICT & DISAGREEMENT (pick ONE you haven't used):
-- "Tell me about a conflict with a physician or coworker."
-- "Describe a time you disagreed with a provider."
-- "How do you handle interpersonal conflict in a team setting?"
-- "Tell me about a time you had to stand your ground."
-- "How do you approach a conversation when you disagree with a superior?"
-- "Describe a time when two team members disagreed and you had to mediate."
-
-CATEGORY 3 - MISTAKES & ACCOUNTABILITY (pick ONE you haven't used):
-- "Tell me about a mistake or near miss."
-- "Describe a time you were wrong."
-- "How do you handle making errors in patient care?"
-- "What did you learn from your biggest professional failure?"
-- "Tell me about a time you had to own up to something."
-- "How do you recover after making a clinical error?"
-
-CATEGORY 4 - FEEDBACK & GROWTH (pick ONE you haven't used):
-- "Tell me about a time you received negative feedback."
-- "How do you handle criticism?"
-- "Describe a time feedback changed the way you practice."
-- "How do you stay open to learning?"
-- "What's the hardest feedback you've ever received?"
-- "How do you seek out constructive criticism?"
-
-CATEGORY 5 - PATIENT & FAMILY INTERACTIONS (pick ONE you haven't used):
-- "Describe a difficult patient or family interaction."
-- "How do you communicate in emotional moments?"
-- "Tell me about a time you advocated for a patient."
-- "Describe a time you spoke up when something didn't feel right."
-- "How do you deliver bad news to a patient's family?"
-- "Tell me about a time you went above and beyond for a patient."
-
-CATEGORY 6 - MOTIVATION & FIT (pick ONE you haven't used):
-- "Why do you want to be a CRNA?"
-- "Why should we accept you into our program over others in the waiting room?"
-- "What makes you a strong candidate for this program?"
-- "Where do you see yourself 5 years after graduating?"
-- "What drew you to anesthesia specifically?"
-- "What will you bring to our cohort that others can't?"
-
-CATEGORY 7 - PRACTICAL & LIFESTYLE (pick ONE you haven't used):
-- "How will you support yourself financially during CRNA school?"
-- "How will you balance school, clinical, and personal life?"
-- "What is your support system like?"
-- "What sacrifices are you prepared to make?"
-- "How have you prepared for the rigors of this program?"
-- "What is your backup plan if things get tough?"
-
-CATEGORY 8 - LEADERSHIP & TEAMWORK (pick ONE you haven't used):
-- "Describe a time you took a leadership role."
-- "Tell me about a time you worked with a difficult team."
-- "How do you contribute to a positive team environment?"
-- "What does professionalism mean to you?"
-- "Tell me about a time you mentored someone."
-- "How do you handle a team member who isn't pulling their weight?"
-
-CATEGORY 9 - ETHICS & CRITICAL THINKING (pick ONE you haven't used):
-- "Describe an ethical dilemma you faced in healthcare."
-- "How do you handle a situation where you feel a treatment is not in the patient's best interest?"
-- "What would you do if you saw a colleague cutting corners?"
-- "How do you approach end-of-life care discussions?"
-- "Tell me about a time your values were tested at work."
-- "What would you do if a patient refused a recommended treatment?"
-
-CATEGORY 10 - SELF-AWARENESS & PERSONAL (pick ONE you haven't used):
-- "What is your biggest weakness?"
-- "How has your ICU experience prepared you for CRNA school?"
-- "What is something you're actively working to improve?"
-- "How would your coworkers describe you?"
-- "What has been the defining moment of your nursing career?"
-- "What scares you most about becoming a CRNA?"
-
-Use question pool number ${questionPool} to decide which category to start with. Rotate to a NEW category each question. NEVER repeat a category until all have been used.`
+Example: "Tell me about a time you disagreed with a physician's order. How did you handle it?"`
 
       case 'clinical':
-        return basePrompt + ` Ask deep, focused clinical knowledge questions that CRNA school admissions committees ask. Keep questions simple and direct - NO complex multi-part scenarios. Ask about ONE specific topic at a time.
+        return basePrompt + `
 
-        RESPIRATORY & AIRWAY:
-        - ABGs: interpretation, compensation, mixed disorders, expected values
-        - Rapid Sequence Induction (RSI): indications, steps, drug choices, cricoid pressure
-        - Hypoxia troubleshooting: causes of desaturation, differential diagnosis, interventions
-        - End-tidal CO2 (EtCO2) interpretation: waveform analysis, causes of changes, clinical significance
-        - Difficult airway management: predictors, ASA algorithm, backup plans, supraglottic devices, surgical airway
-        - Mallampati classification, airway assessment
-        - ARDS: pathophysiology, ventilator management, lung protective strategies, PEEP
+Ask SHORT clinical scenarios that CRNA programs use to assess ICU nurses' critical care knowledge.
 
-        CARDIAC & HEMODYNAMICS:
-        - Hypotension after induction: causes, prevention, treatment
-        - Shock types: hypovolemic, cardiogenic, distributive - recognition and management
-        - SVR, Preload, Afterload, Contractility: definitions, relationships, clinical applications
-        - Arrhythmia recognition: common dysrhythmias, ACLS protocols, treatment
-        - Effects of anesthetics on BP and HR: which agents cause hypotension, tachycardia, bradycardia
-        - Cardiac output and its determinants
+Context: These are experienced ICU nurses applying to become CRNAs. Ask about ICU/critical care situations they would have encountered.
 
-        PHARMACOLOGY:
-        - Induction agents: propofol (mechanism, side effects), etomidate (adrenal suppression), ketamine (dissociative, sympathomimetic)
-        - Opioids: fentanyl, morphine, hydromorphone, remifentanil - differences, potency, side effects
-        - Benzodiazepines: midazolam, mechanism, reversal with flumazenil
-        - Vasopressors vs Inotropes: phenylephrine vs ephedrine vs norepinephrine vs epinephrine vs vasopressin vs dobutamine - when to use each
-        - Neuromuscular blockers: depolarizing vs non-depolarizing, succinylcholine contraindications, reversal agents
-        - Local anesthetics: amides vs esters, LAST symptoms and treatment
-        - Inhalation agents: MAC values, which agent for which situation
+Example: "Your septic patient is on max dose norepinephrine and MAP is still 55. What's your next move?"
 
-        CRITICAL CARE SCENARIOS:
-        - Vasopressor escalation: when to add agents, titration strategies
-        - Weaning sedation: readiness criteria, protocols, complications
-        - Septic shock management: early goal-directed therapy, fluid resuscitation, vasopressor choice
-        - Lactate and shock: significance of elevated lactate, trending, clearance
-        - Malignant hyperthermia: triggers, recognition, dantrolene treatment
-
-        Question format should be simple and direct like:
-        "What does an ABG of pH 7.28, PaCO2 55, HCO3 24 tell you?"
-        "Walk me through your RSI protocol."
-        "A patient desaturates to 85% after intubation. What are your next steps?"
-        "What is the difference between vasopressors and inotropes?"
-        "Your patient becomes hypotensive after propofol induction. What do you do?"
-        "How do you differentiate between types of shock?"
-        "What does a sudden drop in EtCO2 indicate?"
-        "When would you choose ketamine over propofol for induction?"
-        "Your septic patient is on max norepinephrine. What do you add next?"
-
-        Vary between all categories. One clear question at a time.`
+Generate unique, varied clinical questions. Use the random seed to ensure variety.`
 
       case 'mixed':
-        return basePrompt + ` Ask a balanced MIX of Emotional Intelligence and Clinical questions, alternating between them. For Emotional Intelligence: Draw from stress and pressure, conflict and disagreement, mistakes and accountability, feedback and growth, patient interactions, motivation and fit, practical and lifestyle questions, leadership, ethics, and self-awareness. For Clinical: Draw from respiratory and airway (ABGs, RSI, hypoxia, EtCO2, difficult airway, ARDS), cardiac and hemodynamics (hypotension after induction, shock types, SVR/preload/afterload/contractility, arrhythmias, anesthetic effects on vitals), pharmacology (induction agents, opioids, benzos, vasopressors vs inotropes, neuromuscular blockers, local anesthetics), and critical care scenarios (vasopressor escalation, weaning sedation, septic shock, lactate). Make each question unique and varied. Do not follow a predictable pattern.`
+        return basePrompt + ` Alternate between behavioral and clinical questions appropriate for ICU nurses applying to CRNA school.`
 
       case 'custom':
-        return basePrompt + ` Focus the interview on this specific topic: ${customTopic} Generate unique, thoughtful questions related to this topic that would help someone prepare for a CRNA program interview.`
+        return basePrompt + ` Focus on: ${customTopic}
+
+Ask short, realistic questions related to this topic for ICU nurses applying to CRNA school.`
 
       default:
         return basePrompt
@@ -291,7 +209,7 @@ Use question pool number ${questionPool} to decide which category to start with.
       setInterviewCount(interviewCount + 1)
     }
     try {
-      const response = await fetch('/api/interview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'Please start the mock interview with your first question. Pick a random category to start with - do NOT start with "Why do you want to be a CRNA". Ask a UNIQUE question not in the banned list.' }], systemMessage: getSystemMessage() }) })
+      const response = await fetch('/api/interview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'Start the interview with the welcome message and first question.' }], systemMessage: getSystemMessage() }) })
       const data = await response.json()
       setMessages([{ role: 'assistant', content: data.message }])
       
@@ -299,7 +217,7 @@ Use question pool number ${questionPool} to decide which category to start with.
       setAskedQuestions([q])
       await saveQuestion(q, interviewType)
     } catch (error) {
-      setMessages([{ role: 'assistant', content: 'Welcome! Let\'s begin your mock interview. Describe the most stressful situation you have faced in your nursing career and how you handled it.' }])
+      setMessages([{ role: 'assistant', content: 'Welcome to CRNA Prep Hub. I will be conducting your interview today. Let\'s begin.\n\nQuestion 1: Describe a stressful situation you faced in your nursing career and how you handled it.' }])
     }
     setLoading(false)
   }
@@ -313,7 +231,7 @@ Use question pool number ${questionPool} to decide which category to start with.
     const newQuestionCount = questionCount + 1
     setQuestionCount(newQuestionCount)
     if (newQuestionCount > maxQuestions) {
-      setMessages([...newMessages, { role: 'assistant', content: 'This concludes our interview. Thank you for practicing with CRNA Prep Hub! Review your responses and keep preparing. Good luck with your CRNA applications! 🎉' }])
+      setMessages([...newMessages, { role: 'assistant', content: 'This concludes our interview. Thank you for practicing with CRNA Prep Hub! Good luck with your CRNA applications! 🎉' }])
       setInterviewEnded(true)
       setLoading(false)
       return
@@ -327,7 +245,7 @@ Use question pool number ${questionPool} to decide which category to start with.
       setAskedQuestions(prev => [...prev, q])
       await saveQuestion(q, interviewType)
       
-      if (data.message.includes('concludes our interview')) { setInterviewEnded(true) }
+      if (data.message.includes('concludes') || data.message.includes('Overall interview score')) { setInterviewEnded(true) }
     } catch (error) {
       setMessages([...newMessages, { role: 'assistant', content: 'I apologize, but I encountered an error. Please try again.' }])
     }
@@ -481,7 +399,7 @@ Use question pool number ${questionPool} to decide which category to start with.
             <div className="h-96 overflow-y-auto p-6 space-y-4">
               {messages.map((msg, index) => (
                 <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-xs md:max-w-md px-4 py-3 rounded-2xl ${msg.role === 'user' ? 'bg-gradient-to-r from-purple-600 to-pink-500 text-white' : 'bg-gray-100 text-gray-800'}`}>{msg.content}</div>
+                  <div className={`max-w-xs md:max-w-md px-4 py-3 rounded-2xl whitespace-pre-line ${msg.role === 'user' ? 'bg-gradient-to-r from-purple-600 to-pink-500 text-white' : 'bg-gray-100 text-gray-800'}`}>{msg.content}</div>
                 </div>
               ))}
               {loading && (<div className="flex justify-start"><div className="bg-gray-100 text-gray-800 px-4 py-3 rounded-2xl">Thinking...</div></div>)}
