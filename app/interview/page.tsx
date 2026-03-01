@@ -82,7 +82,7 @@ export default function Interview() {
   }
 
   const extractQuestion = (text: string): string => {
-    const match = text.match(/Question \d+:(.*?)(?=\n\n|Score:|What you did|$)/s)
+    const match = text.match(/Question \d+:([\s\S]*?)(?=\n\nScore:|What you did|$)/)
     if (match) {
       return match[1].trim()
     }
@@ -175,7 +175,11 @@ Ask SHORT clinical scenarios that CRNA programs use to assess ICU nurses' critic
 
 Context: These are experienced ICU nurses applying to become CRNAs. Ask about ICU/critical care situations they would have encountered.
 
-Example: "Your septic patient is on max dose norepinephrine and MAP is still 55. What's your next move?"
+IMPORTANT: Use ICU dosing conventions:
+- Pressors: mcg/min (NOT mcg/kg/min) - Example: "norepinephrine 12 mcg/min"
+- Drips: mcg/min or mg/hr - Example: "propofol 30 mcg/kg/min" or "fentanyl 100 mcg/hr"
+
+Example: "Your septic patient is on norepinephrine 18 mcg/min and MAP is still 55. What's your next move?"
 
 Generate unique, varied clinical questions. Use the random seed to ensure variety.`
 
@@ -425,3 +429,4 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
     </div>
   )
 }
+
