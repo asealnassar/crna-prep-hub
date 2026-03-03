@@ -21,6 +21,7 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
     { href: '/interview', label: 'Mock Interview', icon: '🎤', requiresAuth: false },
     { href: '/interview-prep', label: 'School Interview Styles', icon: '📚', requiresAuth: false },
     { href: '/pricing', label: 'Pricing', icon: '💎', requiresAuth: false },
+    { href: '/admin/analytics', label: 'Analytics', icon: '📈', requiresAuth: true, adminOnly: true },
     { href: '/admin/schools', label: 'Admin', icon: '⚙️', requiresAuth: true, adminOnly: true },
   ]
 
@@ -37,7 +38,7 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
   }
 
   return (
-<div className={`${isCollapsed ? 'w-20' : 'w-64'} bg-gradient-to-b from-slate-900 to-slate-800 min-h-screen transition-all duration-300 flex flex-col fixed left-0 top-0 z-40`}>    
+    <div className={`${isCollapsed ? 'w-20' : 'w-64'} bg-gradient-to-b from-slate-900 to-slate-800 min-h-screen transition-all duration-300 flex flex-col fixed left-0 top-0 z-40`}>
       <div className="p-4 flex items-center justify-between border-b border-white/10">
         {!isCollapsed && (
           <Link href="/">
@@ -50,21 +51,6 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
         >
           {isCollapsed ? '→' : '←'}
         </button>
-      </div>
-
-      {/* Sponsors link right under logo */}
-      <div className="px-4 py-2 border-b border-white/10">
-        <Link
-          href="/sponsors"
-          className={`flex items-center gap-3 px-4 py-3 rounded-lg transition ${
-            pathname === '/sponsors'
-              ? 'bg-white/20 text-white font-semibold'
-              : 'text-white/80 hover:bg-white/10 hover:text-white'
-          }`}
-        >
-          <span className="text-xl">⭐</span>
-          {!isCollapsed && <span className="text-sm">Sponsors</span>}
-        </Link>
       </div>
 
       <nav className="flex-1 p-4">
