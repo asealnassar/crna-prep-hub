@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
-
+import Sidebar from '@/components/Sidebar'
 export default function Sponsors() {
   const [sponsors, setSponsors] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -13,16 +13,25 @@ export default function Sponsors() {
   const [contactMessage, setContactMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
-  const supabase = createClient()
+const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+const [userEmail, setUserEmail] = useState('')
+const [isLoggedIn, setIsLoggedIn] = useState(false) 
+ const supabase = createClient()
 
-  useEffect(() => {
-    const fetchSponsors = async () => {
-      const { data } = await supabase.from('sponsors').select('*').order('display_order')
-      setSponsors(data || [])
-      setLoading(false)
+useEffect(() => {
+  const fetchSponsors = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      setIsLoggedIn(true)
+      setUserEmail(user.email || '')
     }
-    fetchSponsors()
-  }, [])
+    
+    const { data } = await supabase.from('sponsors').select('*').order('display_order')
+    setSponsors(data || [])
+    setLoading(false)
+  }
+  fetchSponsors()
+}, [])
 
   const handleSubmit = async () => {
     if (!contactName.trim() || !contactEmail.trim() || !contactMessage.trim()) {
@@ -50,22 +59,23 @@ export default function Sponsors() {
     return (<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 flex items-center justify-center"><div className="text-white text-xl">Loading...</div></div>)
   }
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-4"><Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link><Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link></div>
-            <div className="flex gap-6">
-              <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>
-              <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
-              <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
-              <Link href="/interview-prep" className="text-white/80 hover:text-white transition">School-Specific Interview Style</Link>
-              <Link href="/sponsors" className="text-white font-semibold">Sponsors</Link>
-            </div>
-          </div>
-        </div>
-      </nav>
+return (
+  <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+    <Sidebar 
+      isLoggedIn={isLoggedIn} 
+      userEmail={userEmail} 
+      isAdmin={userEmail === 'asealnassar@gmail.com'}
+      onCollapsedChange={setSidebarCollapsed}
+    />
+    
+    <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
+      <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-end">
+        {!isLoggedIn && (
+          <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">
+            Login
+          </Link>
+        )}
+      </div>
       <div className="max-w-7xl mx-auto px-4 py-12">
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-white mb-4">Our Sponsors and Promoters</h1>
@@ -139,6 +149,7 @@ export default function Sponsors() {
           </div>
         </div>
       )}
+    </div>
     </div>
   )
 }

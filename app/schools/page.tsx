@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
-
+import Sidebar from '@/components/Sidebar'
 export default function Schools() {
   const [schools, setSchools] = useState<any[]>([])
   const [filteredSchools, setFilteredSchools] = useState<any[]>([])
@@ -34,7 +34,7 @@ export default function Schools() {
   const [reportField, setReportField] = useState('')
   const [reportDescription, setReportDescription] = useState('')
   const [reportSubmitting, setReportSubmitting] = useState(false)
-
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const router = useRouter()
   const supabase = createClient()
   const isPremium = userTier === 'premium' || userTier === 'ultimate'
@@ -182,27 +182,19 @@ export default function Schools() {
 
   const states = [...new Set(schools.map(s => s.location_state))].sort()
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Style is NOW LIVE for Ultimate members →</a></div>
-      <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-4"><Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link><Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link></div>
-            <div className="flex gap-6">
-              {isLoggedIn && <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>}
-              <Link href="/schools" className="text-white font-semibold">Schools</Link>
-              <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
-              <Link href="/interview-prep" className="text-white/80 hover:text-white transition">School-Specific Interview Style</Link>
-              <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
-              <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
-              {isLoggedIn && userEmail === 'asealnassar@gmail.com' && (<Link href="/admin/schools" className="text-yellow-400 hover:text-yellow-300 transition">Admin</Link>)}
-              {!isLoggedIn && (<Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">Login</Link>)}
-            </div>
-          </div>
-        </div>
-      </nav>
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="mb-8">
+return (
+  <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+    <Sidebar isLoggedIn={isLoggedIn} userEmail={userEmail} isAdmin={userEmail === 'asealnassar@gmail.com'} onCollapsedChange={setSidebarCollapsed} />
+    <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
+      <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-end">
+        {!isLoggedIn && (
+          <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">
+            Login
+          </Link>
+        )}
+      </div>
+      <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Style is NOW LIVE for Ultimate members →</a></div>
+      <div className="max-w-7xl mx-auto px-4 py-8">        <div className="mb-8">
           <h1 className="text-4xl font-bold text-white mb-2">CRNA School Database</h1>
           <p className="text-indigo-200">Browse and filter {schools.length} CRNA programs</p>
         </div>
@@ -396,15 +388,16 @@ export default function Schools() {
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Describe the error *</label>
                 <textarea value={reportDescription} onChange={(e) => setReportDescription(e.target.value)} placeholder="e.g., The GPA requirement should be 3.2, not 3.0..." rows={4} className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500" />
-              </div>
-              <div className="flex gap-3">
-                <button onClick={() => { setShowReportModal(false); setReportField(''); setReportDescription('') }} className="flex-1 py-3 border border-gray-300 rounded-xl text-gray-700 font-semibold hover:bg-gray-50 transition">Cancel</button>
-                <button onClick={submitReport} disabled={reportSubmitting} className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition disabled:opacity-50">{reportSubmitting ? 'Submitting...' : 'Submit Report'}</button>
-              </div>
+</div>
+<div className="flex gap-3">
+  <button onClick={() => { setShowReportModal(false); setReportField(''); setReportDescription('') }} className="flex-1 py-3 border border-gray-300 rounded-xl text-gray-700 font-semibold hover:bg-gray-50 transition">Cancel</button>
+  <button onClick={submitReport} disabled={reportSubmitting} className="flex-1 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition disabled:opacity-50">{reportSubmitting ? 'Submitting...' : 'Submit Report'}</button>
+</div>
             </div>
           </div>
         )}
       </div>
     </div>
+  </div>
   )
 }

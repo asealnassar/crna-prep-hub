@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
-
+import Sidebar from '@/components/Sidebar'
 export default function Pricing() {
   const [loading, setLoading] = useState('')
   const [user, setUser] = useState<any>(null)
@@ -11,6 +11,7 @@ export default function Pricing() {
   const [promoValid, setPromoValid] = useState<boolean | null>(null)
   const [promoData, setPromoData] = useState<any>(null)
   const [checkingPromo, setCheckingPromo] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)  
   const supabase = createClient()
 
   useEffect(() => {
@@ -81,23 +82,27 @@ export default function Pricing() {
   const premiumPrice = promoValid ? (29.99 - discountAmount).toFixed(2) : '29.99'
   const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800"><div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center"><a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep is NOW LIVE for Ultimate members →</a></div>
-      <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-4"><Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link><Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link></div>
-            <div className="flex gap-6">
-              <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>
-              <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
-              <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
-              <Link href="/interview-prep" className="text-white/80 hover:text-white transition">School-Specific Interview Style</Link>
-              <Link href="/pricing" className="text-white font-semibold">Pricing</Link>
-              <Link href="/sponsors" className="text-white/80 hover:text-white transition">Sponsors</Link>
-            </div>
-          </div>
-        </div>
-      </nav>
+return (
+  <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+    <Sidebar 
+      isLoggedIn={!!user} 
+      userEmail={user?.email || ''} 
+      isAdmin={user?.email === 'asealnassar@gmail.com'}
+      onCollapsedChange={setSidebarCollapsed}
+    />
+    
+    <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
+      <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-end">
+        {!user && (
+          <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">
+            Login
+          </Link>
+        )}
+      </div>
+      
+      <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center">
+        <a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep is NOW LIVE for Ultimate members →</a>
+      </div>
 
       <div className="max-w-6xl mx-auto px-4 py-12">
         <div className="text-center mb-8">
@@ -236,6 +241,8 @@ export default function Pricing() {
           <p className="mt-2">Questions? Contact support@crnaprephub.com</p>
         </div>
       </div>
+    </div>
+
     </div>
   )
 }

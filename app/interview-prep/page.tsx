@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
-
+import Sidebar from '@/components/Sidebar'
 export default function InterviewPrep() {
   const [schools, setSchools] = useState<any[]>([])
   const [interviewInfo, setInterviewInfo] = useState<any[]>([])
@@ -18,7 +18,8 @@ export default function InterviewPrep() {
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
-  const [editingSchool, setEditingSchool] = useState<any>(null)
+const [sidebarCollapsed, setSidebarCollapsed] = useState(false) 
+ const [editingSchool, setEditingSchool] = useState<any>(null)
   const supabase = createClient()
 
   const isUltimate = userTier === 'ultimate'
@@ -107,55 +108,28 @@ export default function InterviewPrep() {
     return (<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 flex items-center justify-center"><div className="text-white text-xl">Loading...</div></div>)
   }
 
-  if (!isLoggedIn) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-        <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
-          <div className="max-w-7xl mx-auto px-4 py-4">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-4">
-                <Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link>
-                <Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link>
-              </div>
-              <div className="flex gap-6">
-                <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
-                <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
-                <Link href="/interview-prep" className="text-white font-semibold">School-Specific Interview Style</Link>
-                <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
-                <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">Login</Link>
-              </div>
-            </div>
-          </div>
-        </nav>
+if (!isLoggedIn) {
+  return (
+    <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+      <Sidebar isLoggedIn={false} userEmail="" isAdmin={false} onCollapsedChange={setSidebarCollapsed} />
+      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
+        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-end">
+          <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">Login</Link>
+        </div>
         <div className="max-w-4xl mx-auto px-4 py-16 text-center">
           <h1 className="text-4xl font-bold text-white mb-6">School-Specific Interview Style</h1>
           <p className="text-xl text-indigo-200 mb-8">Please log in to access interview prep materials.</p>
           <Link href="/login" className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition">Log In</Link>
         </div>
       </div>
-    )
-  }
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-4">
-              <Link href="/"><h1 className="text-2xl font-bold text-white">CRNA Prep Hub</h1></Link>
-              <Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-sm font-medium">Sponsors</Link>
-            </div>
-            <div className="flex gap-6">
-              <Link href="/dashboard" className="text-white/80 hover:text-white transition">Dashboard</Link>
-              <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
-              <Link href="/interview" className="text-white/80 hover:text-white transition">Mock Interview</Link>
-              <Link href="/interview-prep" className="text-white font-semibold">School-Specific Interview Style</Link>
-              <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
-              {isAdmin && <Link href="/admin/schools" className="text-yellow-400 hover:text-yellow-300 transition">Admin</Link>}
-            </div>
-          </div>
-        </div>
-      </nav>
+    </div>
+  )
+}
+return (
+  <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+    <Sidebar isLoggedIn={isLoggedIn} userEmail={userEmail} isAdmin={isAdmin} onCollapsedChange={setSidebarCollapsed} />
+    <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
+      <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-end" />
 
       <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="mb-8">
@@ -454,8 +428,8 @@ export default function InterviewPrep() {
             </div>
           </div>
         </div>
-      )}
+)}
+      </div>
     </div>
   )
 }
-
