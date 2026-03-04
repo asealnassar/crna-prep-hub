@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-const pdf = require('pdf-parse')
+import { PdfReader } from 'pdfreader'
 
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<NextResponse> {
   try {
     const formData = await request.formData()
     const file = formData.get('file') as File
@@ -11,11 +11,24 @@ export async function POST(request: Request) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const data = await pdf(buffer)
     
-    return NextResponse.json({ text: data.text })
+    return new Promise<NextResponse>((resolve) => {
+      let text = ''
+      
+      new PdfReader().parseBuffer(buffer, (err: any, item: any) => {
+        if (err) {
+          console.error('PDF parse error:', err)
+          resolve(NextResponse.json({ error: err.message }, { status: 500 }))
+        } else if (!item) {
+          resolve(NextResponse.json({ text }))
+        } else if (item.text) {
+          text += item.text + ' '
+        }
+      })
+    })
   } catch (error: any) {
-    console.error('PDF parse error:', error)
+    console.error('PDF extraction error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
-}
+}cd ~/Desktop/CRNA-Prep-Hub
+npm run build

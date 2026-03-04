@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { PdfReader } from 'pdfreader'
 
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<NextResponse> {
   try {
     const formData = await request.formData()
     const file = formData.get('file') as File
@@ -12,7 +12,7 @@ export async function POST(request: Request) {
 
     const buffer = Buffer.from(await file.arrayBuffer())
     
-    return new Promise((resolve) => {
+    return new Promise<NextResponse>((resolve) => {
       let text = ''
       
       new PdfReader().parseBuffer(buffer, (err: any, item: any) => {
@@ -20,7 +20,6 @@ export async function POST(request: Request) {
           console.error('PDF parse error:', err)
           resolve(NextResponse.json({ error: err.message }, { status: 500 }))
         } else if (!item) {
-          // End of file
           resolve(NextResponse.json({ text }))
         } else if (item.text) {
           text += item.text + ' '
