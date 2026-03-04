@@ -3,7 +3,7 @@ import Stripe from 'stripe'
 import { createClient } from '@supabase/supabase-js'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2023-10-16',
+  apiVersion: '2024-11-20.acacia'
 })
 
 const supabase = createClient(
@@ -23,11 +23,16 @@ export async function POST(request: Request) {
       const { data } = await supabase
         .from('promo_codes')
         .select('*')
-        .eq('code', promoCode)
+        .eq('code', promoCode.toUpperCase().trim())
         .eq('is_active', true)
         .single()
-      
+
       if (data) {
+        // Check if MARCH15 is only for Ultimate
+        if (promoCode.toUpperCase().trim() === 'MARCH15' && plan !== 'ultimate') {
+          return NextResponse.json({ error: 'This promo code is only valid for Ultimate plan' }, { status: 400 })
+        }
+        
         promoData = data
         discountAmount = data.discount_amount // in cents
       }
@@ -79,8 +84,8 @@ export async function POST(request: Request) {
     const session = await stripe.checkout.sessions.create(sessionConfig)
 
     return NextResponse.json({ url: session.url })
-  } catch (error) {
+  } catch (error: any) {
     console.error('Checkout error:', error)
-    return NextResponse.json({ error: 'Failed to create checkout' }, { status: 500 })
+    return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

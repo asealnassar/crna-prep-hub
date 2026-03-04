@@ -17,82 +17,6 @@ export default function Analytics() {
   const router = useRouter()
   const supabase = createClient()
 
-  const loadData = async () => {
-    // Fetch via API route instead of direct admin call
-    const response = await fetch('/api/admin/users')
-    const authUsers = await response.json()
-    
-    // Get all user profiles
-    const { data: profiles } = await supabase
-      .from('user_profiles')
-      .select('*')
-
-    // Get all interview questions
-    const { data: questions } = await supabase
-      .from('user_asked_questions')
-      .select('*')
-      .order('asked_at', { ascending: false })
-
-    // Combine data - map by user ID
-    const userMap = new Map()
-
-    // Add all users from auth
-    authUsers?.forEach((authUser: any) => {
-      const profile = profiles?.find(p => p.id === authUser.id)
-      const userQuestions = questions?.filter(q => q.user_id === authUser.id) || []
-      const interviewTypes = [...new Set(userQuestions.map(q => q.interview_type))]
-      const lastInterview = userQuestions[0]?.asked_at
-
-      userMap.set(authUser.id, {
-        id: authUser.id,
-        email: authUser.email,
-        subscription_tier: profile?.subscription_tier || 'free',
-        interview_count: profile?.interview_count || 0,
-        created_at: authUser.created_at,
-        totalQuestions: userQuestions.length,
-        interviewTypes,
-        lastInterview
-      })
-    })
-
-    // Also check for any orphaned questions (users not in auth anymore)
-    questions?.forEach(q => {
-      if (!userMap.has(q.user_id)) {
-        const existing = userMap.get(q.user_id) || {
-          id: q.user_id,
-          email: 'Deleted User',
-          subscription_tier: 'free',
-          interview_count: 0,
-          totalQuestions: 0,
-          interviewTypes: [],
-          created_at: q.asked_at
-        }
-        existing.totalQuestions++
-        if (!existing.interviewTypes.includes(q.interview_type)) {
-          existing.interviewTypes.push(q.interview_type)
-        }
-        if (!existing.lastInterview || q.asked_at > existing.lastInterview) {
-          existing.lastInterview = q.asked_at
-        }
-        userMap.set(q.user_id, existing)
-      }
-    })
-
-    const allUsers = Array.from(userMap.values()).sort((a, b) => 
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )
-
-    setUsers(allUsers)
-
-    // Get feedback
-    const { data: feedbackData } = await supabase
-      .from('interview_feedback')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    setFeedback(feedbackData || [])
-  }
-
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser()
@@ -105,18 +29,46 @@ export default function Analytics() {
       setUserEmail(user.email)
       setIsAdmin(true)
 
-      await loadData()
+      // Get all users with interview activity
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      // Get interview questions asked by each user
+      const { data: questions } = await supabase
+        .from('user_asked_questions')
+        .select('*')
+        .order('asked_at', { ascending: false })
+
+      // Combine data
+      const usersWithActivity = profiles?.map(profile => {
+        const userQuestions = questions?.filter(q => q.user_id === profile.id) || []
+        const interviewTypes = [...new Set(userQuestions.map(q => q.interview_type))]
+        const lastInterview = userQuestions[0]?.asked_at
+
+        return {
+          ...profile,
+          totalQuestions: userQuestions.length,
+          interviewTypes,
+          lastInterview
+        }
+      }) || []
+
+      setUsers(usersWithActivity)
+
+      // Get feedback
+      const { data: feedbackData } = await supabase
+        .from('interview_feedback')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      setFeedback(feedbackData || [])
       setLoading(false)
     }
 
     init()
   }, [])
-
-  const deleteFeedback = async (id: string) => {
-    if (!confirm('Delete this feedback?')) return
-    await supabase.from('interview_feedback').delete().eq('id', id)
-    setFeedback(feedback.filter(f => f.id !== id))
-  }
 
   if (loading) {
     return (
@@ -126,7 +78,7 @@ export default function Analytics() {
     )
   }
 
-  const activeUsers = users.filter(u => u.totalQuestions > 0)
+  const activeUsers = users.filter(u => u.interview_count > 0)
   const ultimateUsers = users.filter(u => u.subscription_tier === 'ultimate')
   const premiumUsers = users.filter(u => u.subscription_tier === 'premium')
   const totalQuestions = users.reduce((sum, u) => sum + u.totalQuestions, 0)
@@ -220,7 +172,7 @@ export default function Analytics() {
                   <tbody className="divide-y divide-gray-200">
                     {users.map((user, index) => (
                       <tr key={user.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-6 py-4 text-sm text-gray-800">{user.email}</td>
+                        <td className="px-6 py-4 text-sm text-gray-800">{user.id}</td>
                         <td className="px-6 py-4">
                           <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
                             user.subscription_tier === 'ultimate' ? 'bg-purple-100 text-purple-700' :
@@ -230,8 +182,8 @@ export default function Analytics() {
                             {user.subscription_tier?.toUpperCase() || 'FREE'}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-sm text-gray-800">{user.interview_count}</td>
-                        <td className="px-6 py-4 text-sm text-gray-800 font-semibold">{user.totalQuestions}</td>
+                        <td className="px-6 py-4 text-sm text-gray-800">{user.interview_count || 0}</td>
+                        <td className="px-6 py-4 text-sm text-gray-800">{user.totalQuestions}</td>
                         <td className="px-6 py-4 text-sm text-gray-600">
                           {user.interviewTypes.length > 0 ? user.interviewTypes.join(', ') : '-'}
                         </td>
@@ -258,14 +210,8 @@ export default function Analytics() {
                 </div>
               ) : (
                 feedback.map((item) => (
-                  <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg relative">
-                    <button
-                      onClick={() => deleteFeedback(item.id)}
-                      className="absolute top-4 right-4 px-3 py-1 bg-red-100 text-red-600 rounded-lg text-sm font-semibold hover:bg-red-200 transition"
-                    >
-                      Delete
-                    </button>
-                    <div className="flex justify-between items-start mb-4 pr-20">
+                  <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start mb-4">
                       <div>
                         <p className="font-semibold text-gray-800">{item.user_email}</p>
                         <p className="text-sm text-gray-500">{new Date(item.created_at).toLocaleString()}</p>
@@ -282,4 +228,4 @@ export default function Analytics() {
       </div>
     </div>
   )
-}/Users/asealnassar 
+}
