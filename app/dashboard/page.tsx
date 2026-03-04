@@ -183,7 +183,105 @@ export default function Dashboard() {
 
             </div>
           </div>
+{/* Feature Request - Exciting Growth Announcement */}
+          <div className="mb-12">
+            <div className="relative overflow-hidden bg-gradient-to-br from-red-600 via-orange-600 to-pink-600 rounded-3xl p-8 shadow-2xl">
+              {/* Animated background elements */}
+              <div className="absolute top-0 right-0 w-64 h-64 bg-yellow-400/20 rounded-full blur-3xl -mr-32 -mt-32 animate-pulse"></div>
+              <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-400/20 rounded-full blur-3xl -ml-24 -mb-24 animate-pulse"></div>
+              
+              <div className="relative">
+                {/* Header */}
+                <div className="flex items-start gap-4 mb-6">
+                  <div className="text-6xl animate-bounce">🚀</div>
+                  <div className="flex-1">
+                    <div className="inline-block bg-yellow-400 text-red-900 px-4 py-1 rounded-full text-sm font-black mb-3 animate-pulse">
+                      🔥 EXCITING NEWS
+                    </div>
+                    <h2 className="text-4xl font-black text-white mb-3 leading-tight">
+                      We're Just Getting Started!
+                    </h2>
+                    <p className="text-white/95 text-lg leading-relaxed">
+                      CRNA Prep Hub is rapidly evolving with <strong>new features launching soon</strong>. We're building the ultimate platform to help you succeed, and <strong>we want YOUR input</strong> on what comes next!
+                    </p>
+                  </div>
+                </div>
 
+                {/* Reward Banner */}
+                <div className="bg-gradient-to-r from-yellow-400 to-orange-400 rounded-2xl p-5 mb-6 shadow-xl transform hover:scale-105 transition-transform">
+                  <div className="flex items-center justify-center gap-3">
+                    <span className="text-4xl">💎</span>
+                    <p className="text-gray-900 font-black text-xl text-center">
+                      Best Ideas Get <span className="text-red-600">ULTIMATE UPGRADE FREE</span> 🎁
+                    </p>
+                    <span className="text-4xl">💎</span>
+                  </div>
+                </div>
+
+                {/* Form */}
+                <div className="bg-white/95 backdrop-blur rounded-2xl p-6 shadow-2xl">
+                  <form onSubmit={async (e) => {
+                    e.preventDefault()
+                    const formData = new FormData(e.currentTarget)
+                    const idea = formData.get('idea') as string
+                    
+                    if (!idea.trim() || idea.length < 20) {
+                      alert('Please share more details! The more specific your idea, the better we can build it.')
+                      return
+                    }
+                    
+                    await supabase.from('feature_requests').insert({
+                      user_email: user?.email,
+                      user_id: user?.id,
+                      idea: idea,
+                      status: 'pending'
+                    })
+                    
+                    alert('🎉 Amazing! Your idea has been submitted. We review every submission and will reach out if yours is selected for a free Ultimate upgrade!')
+                    e.currentTarget.reset()
+                  }}>
+                    <label className="block text-gray-800 font-bold text-lg mb-3">
+                      💡 What feature would help you most?
+                    </label>
+                    <textarea
+                      name="idea"
+                      rows={4}
+                      placeholder="Be specific! Examples:&#10;• Track application deadlines for each school&#10;• Compare schools side-by-side&#10;• Practice questions from actual CRNA school interviews&#10;• Study guides for common interview topics&#10;• Mobile app for on-the-go prep"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-orange-300 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none text-gray-800 placeholder-gray-500"
+                      required
+                    />
+                    <div className="flex items-center justify-between mt-4">
+                      <p className="text-gray-600 text-sm">
+                        💬 Be detailed - we read every submission!
+                      </p>
+                      <button
+                        type="submit"
+                        className="px-8 py-4 bg-gradient-to-r from-red-600 to-orange-600 text-white font-black rounded-xl hover:shadow-2xl hover:scale-105 transition-all text-lg"
+                      >
+                        🚀 Submit My Idea
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                {/* Coming Soon Teasers */}
+                <div className="mt-6 grid grid-cols-3 gap-3 text-center">
+                  <div className="bg-white/20 backdrop-blur rounded-xl p-3">
+                    <div className="text-2xl mb-1">📱</div>
+                    <p className="text-white text-xs font-semibold">Mobile App<br/>Coming Soon</p>
+                  </div>
+                  <div className="bg-white/20 backdrop-blur rounded-xl p-3">
+                    <div className="text-2xl mb-1">🎯</div>
+                    <p className="text-white text-xs font-semibold">More Interview<br/>Questions</p>
+                  </div>
+                  <div className="bg-white/20 backdrop-blur rounded-xl p-3">
+                    <div className="text-2xl mb-1">✨</div>
+                    <p className="text-white text-xs font-semibold">Your Ideas<br/>Next!</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
           {/* Saved Schools */}
           <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-3xl p-8 shadow-2xl">
             <div className="flex justify-between items-center mb-8">

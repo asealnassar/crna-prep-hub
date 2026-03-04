@@ -9,11 +9,12 @@ import Sidebar from '@/components/Sidebar'
 export default function Analytics() {
   const [users, setUsers] = useState<any[]>([])
   const [feedback, setFeedback] = useState<any[]>([])
+  const [featureRequests, setFeatureRequests] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [userEmail, setUserEmail] = useState('')
   const [isAdmin, setIsAdmin] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [activeTab, setActiveTab] = useState<'users' | 'feedback'>('users')
+  const [activeTab, setActiveTab] = useState<'users' | 'feedback' | 'features'>('users')
   const router = useRouter()
   const supabase = createClient()
 
@@ -33,14 +34,12 @@ export default function Analytics() {
 
     console.log('Questions:', questions)
 
-    // Combine data with debug logging
     const combinedUsers = authUsers?.map((authUser: any) => {
       const profile = profiles?.find(p => p.id === authUser.id)
       const userQuestions = questions?.filter(q => q.user_id === authUser.id) || []
       const interviewTypes = [...new Set(userQuestions.map(q => q.interview_type))]
       const lastInterview = userQuestions.length > 0 ? userQuestions[0]?.asked_at : null
 
-      // Debug specific user
       if (authUser.email === 'anassar@icpcnj.org') {
         console.log('DEBUG anassar@icpcnj.org:')
         console.log('  authUser.id:', authUser.id)
@@ -67,9 +66,16 @@ export default function Analytics() {
     const { data: feedbackData } = await supabase
       .from('interview_feedback')
       .select('*')
-      .order('created_at', { ascending: false})
+      .order('created_at', { ascending: false })
 
     setFeedback(feedbackData || [])
+
+    const { data: featuresData } = await supabase
+      .from('feature_requests')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    setFeatureRequests(featuresData || [])
   }
 
   useEffect(() => {
@@ -176,6 +182,16 @@ export default function Analytics() {
             >
               Feedback ({feedback.length})
             </button>
+            <button
+              onClick={() => setActiveTab('features')}
+              className={`px-6 py-3 rounded-xl font-semibold transition ${
+                activeTab === 'features'
+                  ? 'bg-white text-purple-600'
+                  : 'bg-white/10 text-white hover:bg-white/20'
+              }`}
+            >
+              Feature Requests ({featureRequests.length})
+            </button>
           </div>
 
           {activeTab === 'users' && (
@@ -245,6 +261,35 @@ export default function Analytics() {
                       </div>
                     </div>
                     <p className="text-gray-700 whitespace-pre-wrap">{item.message}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {activeTab === 'features' && (
+            <div className="space-y-4">
+              {featureRequests.length === 0 ? (
+                <div className="bg-white rounded-2xl p-12 text-center">
+                  <p className="text-gray-500">No feature requests yet</p>
+                </div>
+              ) : (
+                featureRequests.map((item) => (
+                  <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <p className="font-semibold text-gray-800">{item.user_email}</p>
+                        <p className="text-sm text-gray-500">{new Date(item.created_at).toLocaleString()}</p>
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                        item.status === 'approved' ? 'bg-green-100 text-green-700' :
+                        item.status === 'reviewing' ? 'bg-yellow-100 text-yellow-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {item.status?.toUpperCase() || 'PENDING'}
+                      </span>
+                    </div>
+                    <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 p-4 rounded-lg">{item.idea}</p>
                   </div>
                 ))
               )}
