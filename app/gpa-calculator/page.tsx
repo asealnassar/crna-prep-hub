@@ -296,26 +296,26 @@ export default function GPACalculator() {
         onCollapsedChange={setSidebarCollapsed}
       />
       
-      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
-        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-end">
+      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
+        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
           {!isLoggedIn && (
-            <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">
+            <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition text-sm">
               Login
             </Link>
           )}
         </div>
 
-        <div className="max-w-7xl mx-auto px-4 py-8">
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold text-white mb-2">🎓 GPA Calculator</h1>
-            <p className="text-indigo-200">Calculate your Science, Overall, Last 60 Credits, and Nursing GPAs</p>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
+          <div className="mb-6 sm:mb-8">
+            <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">🎓 GPA Calculator</h1>
+            <p className="text-indigo-200 text-sm sm:text-base">Calculate your Science, Overall, Last 60 Credits, and Nursing GPAs</p>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-            <div className="flex gap-4 mb-6">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 mb-6">
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mb-6">
               <button
                 onClick={() => setMode('manual')}
-                className={`flex-1 py-4 rounded-xl font-semibold transition ${
+                className={`flex-1 py-3 sm:py-4 rounded-xl font-semibold transition text-sm sm:text-base ${
                   mode === 'manual'
                     ? 'bg-gradient-to-r from-purple-600 to-pink-500 text-white'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -331,19 +331,19 @@ export default function GPACalculator() {
                   }
                   setMode('ai')
                 }}
-                className={`flex-1 py-4 rounded-xl font-semibold transition relative ${
+                className={`flex-1 py-3 sm:py-4 rounded-xl font-semibold transition relative text-sm sm:text-base ${
                   mode === 'ai'
                     ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                🤖 Transcript Analyzer (Auto-Fill)
+                🤖 Transcript Analyzer
                 {!isUltimate && <span className="absolute top-2 right-2 bg-purple-500 text-white text-xs px-2 py-1 rounded-full">Ultimate</span>}
               </button>
             </div>
 
             {mode === 'ai' && isUltimate && (
-              <div className="border-2 border-dashed border-purple-300 rounded-xl p-8 text-center bg-purple-50">
+              <div className="border-2 border-dashed border-purple-300 rounded-xl p-6 sm:p-8 text-center bg-purple-50">
                 <input
                   type="file"
                   accept=".pdf"
@@ -353,15 +353,15 @@ export default function GPACalculator() {
                   disabled={analyzing}
                 />
                 <label htmlFor="transcript-upload" className={`cursor-pointer ${analyzing ? 'opacity-50' : ''}`}>
-                  <div className="text-6xl mb-4">📄</div>
-                  <h3 className="text-xl font-bold text-gray-800 mb-2">
+                  <div className="text-4xl sm:text-6xl mb-4">📄</div>
+                  <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-2">
                     {analyzing ? '🔄 Analyzing Transcript...' : '📤 Upload Your Transcript'}
                   </h3>
-                  <p className="text-gray-600 mb-4">
-                    {analyzing ? 'AI is extracting courses and grades...' : 'Upload multiple transcripts from each school you attended! Each upload adds courses to your list.'}
+                  <p className="text-sm sm:text-base text-gray-600 mb-4">
+                    {analyzing ? 'AI is extracting courses and grades...' : 'Upload multiple transcripts from each school you attended!'}
                   </p>
                   {!analyzing && (
-                    <div className="inline-block px-6 py-3 bg-purple-600 text-white font-semibold rounded-xl hover:bg-purple-700 transition">
+                    <div className="inline-block px-4 sm:px-6 py-2 sm:py-3 bg-purple-600 text-white font-semibold rounded-xl hover:bg-purple-700 transition text-sm sm:text-base">
                       Choose File
                     </div>
                   )}
@@ -372,40 +372,40 @@ export default function GPACalculator() {
 
           {courses.length > 0 && (
             <>
-              <div className="grid md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-white rounded-xl p-6 shadow-lg border-2 border-green-200">
-                  <div className="text-3xl mb-2">🔬</div>
-                  <h3 className="text-sm font-semibold text-gray-600 mb-1">Science GPA</h3>
-                  <p className="text-3xl font-bold text-green-600">{calculateGPA(courses, 'science')}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+                <div className="bg-white rounded-xl p-4 sm:p-6 shadow-lg border-2 border-green-200">
+                  <div className="text-2xl sm:text-3xl mb-2">🔬</div>
+                  <h3 className="text-xs sm:text-sm font-semibold text-gray-600 mb-1">Science GPA</h3>
+                  <p className="text-2xl sm:text-3xl font-bold text-green-600">{calculateGPA(courses, 'science')}</p>
                   <p className="text-xs text-gray-500 mt-1">{courses.filter(c => c.categories.includes('science') && !c.isTransfer).length} courses</p>
                 </div>
-                <div className="bg-white rounded-xl p-6 shadow-lg border-2 border-blue-200">
-                  <div className="text-3xl mb-2">📚</div>
-                  <h3 className="text-sm font-semibold text-gray-600 mb-1">Overall GPA</h3>
-                  <p className="text-3xl font-bold text-blue-600">{calculateGPA(courses)}</p>
+                <div className="bg-white rounded-xl p-4 sm:p-6 shadow-lg border-2 border-blue-200">
+                  <div className="text-2xl sm:text-3xl mb-2">📚</div>
+                  <h3 className="text-xs sm:text-sm font-semibold text-gray-600 mb-1">Overall GPA</h3>
+                  <p className="text-2xl sm:text-3xl font-bold text-blue-600">{calculateGPA(courses)}</p>
                   <p className="text-xs text-gray-500 mt-1">{courses.filter(c => !c.isTransfer).length} courses</p>
                 </div>
-                <div className="bg-white rounded-xl p-6 shadow-lg border-2 border-purple-200">
-                  <div className="text-3xl mb-2">⏱️</div>
-                  <h3 className="text-sm font-semibold text-gray-600 mb-1">Last 60 Credits</h3>
-                  <p className="text-3xl font-bold text-purple-600">{calculateGPA(courses, 'last60')}</p>
-                  <p className="text-xs text-gray-500 mt-1">Most recent courses</p>
+                <div className="bg-white rounded-xl p-4 sm:p-6 shadow-lg border-2 border-purple-200">
+                  <div className="text-2xl sm:text-3xl mb-2">⏱️</div>
+                  <h3 className="text-xs sm:text-sm font-semibold text-gray-600 mb-1">Last 60 Credits</h3>
+                  <p className="text-2xl sm:text-3xl font-bold text-purple-600">{calculateGPA(courses, 'last60')}</p>
+                  <p className="text-xs text-gray-500 mt-1">Most recent</p>
                 </div>
-                <div className="bg-white rounded-xl p-6 shadow-lg border-2 border-pink-200">
-                  <div className="text-3xl mb-2">🩺</div>
-                  <h3 className="text-sm font-semibold text-gray-600 mb-1">Nursing GPA</h3>
-                  <p className="text-3xl font-bold text-pink-600">{calculateGPA(courses, 'nursing')}</p>
+                <div className="bg-white rounded-xl p-4 sm:p-6 shadow-lg border-2 border-pink-200">
+                  <div className="text-2xl sm:text-3xl mb-2">🩺</div>
+                  <h3 className="text-xs sm:text-sm font-semibold text-gray-600 mb-1">Nursing GPA</h3>
+                  <p className="text-2xl sm:text-3xl font-bold text-pink-600">{calculateGPA(courses, 'nursing')}</p>
                   <p className="text-xs text-gray-500 mt-1">{courses.filter(c => c.categories.includes('nursing') && !c.isTransfer).length} courses</p>
                 </div>
               </div>
               
               {courses.some(c => c.isTransfer) && (
-                <div className="bg-orange-50 border-2 border-orange-300 rounded-xl p-4 mb-6">
-                  <div className="flex items-start gap-3">
-                    <div className="text-3xl">⚠️</div>
+                <div className="bg-orange-50 border-2 border-orange-300 rounded-xl p-3 sm:p-4 mb-6">
+                  <div className="flex items-start gap-2 sm:gap-3">
+                    <div className="text-2xl sm:text-3xl">⚠️</div>
                     <div>
-                      <h3 className="font-bold text-orange-800 mb-1">Transfer Courses Detected</h3>
-                      <p className="text-sm text-orange-700">
+                      <h3 className="font-bold text-orange-800 mb-1 text-sm sm:text-base">Transfer Courses Detected</h3>
+                      <p className="text-xs sm:text-sm text-orange-700">
                         <strong>{courses.filter(c => c.isTransfer).length} transfer course(s)</strong> are excluded from GPA calculations. 
                         For accurate GPA calculations, please upload official transcripts directly from each institution you attended.
                       </p>
@@ -416,218 +416,356 @@ export default function GPACalculator() {
             </>
           )}
 
-          <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-gray-800">📋 Courses ({courses.length})</h2>
-              <button onClick={addCourse} className="px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition">
+          <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 mb-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+              <h2 className="text-lg sm:text-xl font-bold text-gray-800">📋 Courses ({courses.length})</h2>
+              <button onClick={addCourse} className="w-full sm:w-auto px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition text-sm sm:text-base">
                 ➕ Add Course
               </button>
             </div>
 
             {courses.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
-                <div className="text-5xl mb-4">📝</div>
-                <p>No courses added yet. Click "Add Course" or upload a transcript!</p>
+              <div className="text-center py-8 sm:py-12 text-gray-500">
+                <div className="text-4xl sm:text-5xl mb-4">📝</div>
+                <p className="text-sm sm:text-base">No courses added yet. Click "Add Course" or upload a transcript!</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-100 border-b-2 border-gray-200">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Course Name</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Year/Term</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Grade</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Credits</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Categories</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {courses.map((course, index) => (
-                      editingId === course.id ? (
-                        <tr key={course.id} className="bg-blue-50">
-                          <td className="px-4 py-3">
+              <>
+                {/* Desktop Table View */}
+                <div className="hidden lg:block overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-100 border-b-2 border-gray-200">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Course Name</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Year/Term</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Grade</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Credits</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Categories</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {courses.map((course, index) => (
+                        editingId === course.id ? (
+                          <tr key={course.id} className="bg-blue-50">
+                            <td className="px-4 py-3">
+                              <input
+                                type="text"
+                                value={course.name}
+                                onChange={(e) => updateCourse(course.id, 'name', e.target.value)}
+                                className="w-full px-2 py-1 border rounded focus:outline-none focus:ring-2 focus:ring-purple-400"
+                                placeholder="Course name"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex gap-1">
+                                <input
+                                  type="text"
+                                  value={course.term || ''}
+                                  onChange={(e) => updateCourse(course.id, 'term', e.target.value)}
+                                  className="w-16 px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-purple-400"
+                                  placeholder="Fall"
+                                />
+                                <input
+                                  type="text"
+                                  value={course.year || ''}
+                                  onChange={(e) => updateCourse(course.id, 'year', e.target.value)}
+                                  className="w-16 px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-purple-400"
+                                  placeholder="2024"
+                                />
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <select
+                                value={course.grade}
+                                onChange={(e) => updateCourse(course.id, 'grade', e.target.value)}
+                                className="px-2 py-1 border rounded focus:outline-none focus:ring-2 focus:ring-purple-400"
+                              >
+                                {Object.keys(gradePoints).map(grade => (
+                                  <option key={grade} value={grade}>{grade}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                type="number"
+                                value={course.credits}
+                                onChange={(e) => updateCourse(course.id, 'credits', parseInt(e.target.value) || 0)}
+                                min="0"
+                                max="6"
+                                className="w-16 px-2 py-1 border rounded text-center focus:outline-none focus:ring-2 focus:ring-purple-400"
+                              />
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex gap-1 flex-wrap">
+                                <button
+                                  onClick={() => toggleCategory(course.id, 'science')}
+                                  className={`px-2 py-1 text-xs rounded ${course.categories.includes('science') ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-600'}`}
+                                >
+                                  🔬 Sci
+                                </button>
+                                <button
+                                  onClick={() => toggleCategory(course.id, 'nursing')}
+                                  className={`px-2 py-1 text-xs rounded ${course.categories.includes('nursing') ? 'bg-pink-500 text-white' : 'bg-gray-200 text-gray-600'}`}
+                                >
+                                  🩺 Nrs
+                                </button>
+                                <button
+                                  onClick={() => updateCourse(course.id, 'isTransfer', !course.isTransfer)}
+                                  className={`px-2 py-1 text-xs rounded ${course.isTransfer ? 'bg-orange-500 text-white' : 'bg-gray-200 text-gray-600'}`}
+                                  title="Toggle transfer course"
+                                >
+                                  🔄 TR
+                                </button>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <button
+                                onClick={() => setEditingId(null)}
+                                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600"
+                              >
+                                ✅ Done
+                              </button>
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr key={course.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                            <td className="px-4 py-4">
+                              <p className={`text-sm font-semibold ${course.name ? 'text-gray-800' : 'text-gray-300 italic'}`}>
+                                {course.name || 'Course name'}
+                              </p>
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="flex gap-1">
+                                <span className={`px-2 py-1 text-xs font-medium rounded ${course.term ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-50 text-gray-300 italic'}`}>
+                                  {course.term || 'Term'}
+                                </span>
+                                <span className={`px-2 py-1 text-xs font-medium rounded ${course.year ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-50 text-gray-300 italic'}`}>
+                                  {course.year || 'Year'}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4">
+                              <span className="px-3 py-1 bg-blue-100 text-blue-700 text-sm font-bold rounded-lg">{course.grade}</span>
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="flex justify-center">
+                                <span className="px-3 py-1 bg-gray-100 text-gray-800 text-sm font-bold rounded-lg">{course.credits}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="flex gap-1 flex-wrap">
+                                {course.isTransfer && (
+                                  <span className="px-2 py-1 bg-orange-100 text-orange-700 text-xs font-semibold rounded-lg">🔄 Transfer</span>
+                                )}
+                                {course.categories.includes('science') && (
+                                  <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-lg">🔬 Science</span>
+                                )}
+                                {course.categories.includes('nursing') && (
+                                  <span className="px-2 py-1 bg-pink-100 text-pink-700 text-xs font-semibold rounded-lg">🩺 Nursing</span>
+                                )}
+                                {course.categories.includes('general') && !course.categories.includes('science') && !course.categories.includes('nursing') && (
+                                  <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs font-semibold rounded-lg">📚 General</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="flex gap-2 justify-center">
+                                <button
+                                  onClick={() => setEditingId(course.id)}
+                                  className="px-3 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition shadow-sm"
+                                >
+                                  ✏️ Edit
+                                </button>
+                                <button
+                                  onClick={() => removeCourse(course.id)}
+                                  className="px-3 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 transition shadow-sm"
+                                >
+                                  🗑️
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="lg:hidden space-y-4">
+                  {courses.map((course) => (
+                    <div key={course.id} className="bg-white border-2 border-gray-200 rounded-xl p-4 shadow-sm">
+                      {editingId === course.id ? (
+                        <div className="space-y-3">
+                          <input
+                            type="text"
+                            value={course.name}
+                            onChange={(e) => updateCourse(course.id, 'name', e.target.value)}
+                            className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400"
+                            placeholder="Course name"
+                          />
+                          <div className="grid grid-cols-2 gap-2">
                             <input
                               type="text"
-                              value={course.name}
-                              onChange={(e) => updateCourse(course.id, 'name', e.target.value)}
-                              className="w-full px-2 py-1 border rounded focus:outline-none focus:ring-2 focus:ring-purple-400"
-                              placeholder="Course name"
+                              value={course.term || ''}
+                              onChange={(e) => updateCourse(course.id, 'term', e.target.value)}
+                              className="px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                              placeholder="Term (e.g. Fall)"
                             />
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex gap-1">
-                              <input
-                                type="text"
-                                value={course.term || ''}
-                                onChange={(e) => updateCourse(course.id, 'term', e.target.value)}
-                                className="w-16 px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-purple-400"
-                                placeholder="Fall"
-                              />
-                              <input
-                                type="text"
-                                value={course.year || ''}
-                                onChange={(e) => updateCourse(course.id, 'year', e.target.value)}
-                                className="w-16 px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-purple-400"
-                                placeholder="2024"
-                              />
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
+                            <input
+                              type="text"
+                              value={course.year || ''}
+                              onChange={(e) => updateCourse(course.id, 'year', e.target.value)}
+                              className="px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                              placeholder="Year (e.g. 2024)"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
                             <select
                               value={course.grade}
                               onChange={(e) => updateCourse(course.id, 'grade', e.target.value)}
-                              className="px-2 py-1 border rounded focus:outline-none focus:ring-2 focus:ring-purple-400"
+                              className="px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400"
                             >
                               {Object.keys(gradePoints).map(grade => (
                                 <option key={grade} value={grade}>{grade}</option>
                               ))}
                             </select>
-                          </td>
-                          <td className="px-4 py-3">
                             <input
                               type="number"
                               value={course.credits}
                               onChange={(e) => updateCourse(course.id, 'credits', parseInt(e.target.value) || 0)}
                               min="0"
                               max="6"
-                              className="w-16 px-2 py-1 border rounded text-center focus:outline-none focus:ring-2 focus:ring-purple-400"
+                              className="px-3 py-2 border rounded-lg text-center focus:outline-none focus:ring-2 focus:ring-purple-400"
+                              placeholder="Credits"
                             />
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex gap-1 flex-wrap">
-                              <button
-                                onClick={() => toggleCategory(course.id, 'science')}
-                                className={`px-2 py-1 text-xs rounded ${course.categories.includes('science') ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-600'}`}
-                              >
-                                🔬 Sci
-                              </button>
-                              <button
-                                onClick={() => toggleCategory(course.id, 'nursing')}
-                                className={`px-2 py-1 text-xs rounded ${course.categories.includes('nursing') ? 'bg-pink-500 text-white' : 'bg-gray-200 text-gray-600'}`}
-                              >
-                                🩺 Nrs
-                              </button>
-                              <button
-                                onClick={() => updateCourse(course.id, 'isTransfer', !course.isTransfer)}
-                                className={`px-2 py-1 text-xs rounded ${course.isTransfer ? 'bg-orange-500 text-white' : 'bg-gray-200 text-gray-600'}`}
-                                title="Toggle transfer course"
-                              >
-                                🔄 TR
-                              </button>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
+                          </div>
+                          <div className="flex gap-2 flex-wrap">
                             <button
-                              onClick={() => setEditingId(null)}
-                              className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600"
+                              onClick={() => toggleCategory(course.id, 'science')}
+                              className={`flex-1 px-3 py-2 text-sm rounded-lg ${course.categories.includes('science') ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-600'}`}
                             >
-                              ✅ Done
+                              🔬 Science
                             </button>
-                          </td>
-                        </tr>
+                            <button
+                              onClick={() => toggleCategory(course.id, 'nursing')}
+                              className={`flex-1 px-3 py-2 text-sm rounded-lg ${course.categories.includes('nursing') ? 'bg-pink-500 text-white' : 'bg-gray-200 text-gray-600'}`}
+                            >
+                              🩺 Nursing
+                            </button>
+                            <button
+                              onClick={() => updateCourse(course.id, 'isTransfer', !course.isTransfer)}
+                              className={`flex-1 px-3 py-2 text-sm rounded-lg ${course.isTransfer ? 'bg-orange-500 text-white' : 'bg-gray-200 text-gray-600'}`}
+                            >
+                              🔄 Transfer
+                            </button>
+                          </div>
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="w-full px-4 py-2 bg-green-500 text-white font-semibold rounded-lg hover:bg-green-600"
+                          >
+                            ✅ Done Editing
+                          </button>
+                        </div>
                       ) : (
-                        <tr key={course.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                          <td className="px-4 py-4">
-                            <p className={`text-sm font-semibold ${course.name ? 'text-gray-800' : 'text-gray-300 italic'}`}>
-                              {course.name || 'Course name'}
-                            </p>
-                          </td>
-                          <td className="px-4 py-4">
-                            <div className="flex gap-1">
-                              <span className={`px-2 py-1 text-xs font-medium rounded ${course.term ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-50 text-gray-300 italic'}`}>
-                                {course.term || 'Term'}
-                              </span>
-                              <span className={`px-2 py-1 text-xs font-medium rounded ${course.year ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-50 text-gray-300 italic'}`}>
-                                {course.year || 'Year'}
-                              </span>
+                        <>
+                          <div className="flex justify-between items-start mb-3">
+                            <div className="flex-1">
+                              <h3 className={`font-bold text-gray-800 mb-1 ${!course.name && 'text-gray-300 italic'}`}>
+                                {course.name || 'Course name'}
+                              </h3>
+                              <div className="flex gap-2 text-xs">
+                                <span className={`px-2 py-1 rounded ${course.term ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-50 text-gray-300 italic'}`}>
+                                  {course.term || 'Term'}
+                                </span>
+                                <span className={`px-2 py-1 rounded ${course.year ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-50 text-gray-300 italic'}`}>
+                                  {course.year || 'Year'}
+                                </span>
+                              </div>
                             </div>
-                          </td>
-                          <td className="px-4 py-4">
-                            <span className="px-3 py-1 bg-blue-100 text-blue-700 text-sm font-bold rounded-lg">{course.grade}</span>
-                          </td>
-                          <td className="px-4 py-4">
-                            <div className="flex justify-center">
-                              <span className="px-3 py-1 bg-gray-100 text-gray-800 text-sm font-bold rounded-lg">{course.credits}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-4">
-                            <div className="flex gap-1 flex-wrap">
-                              {course.isTransfer && (
-                                <span className="px-2 py-1 bg-orange-100 text-orange-700 text-xs font-semibold rounded-lg">🔄 Transfer</span>
-                              )}
-                              {course.categories.includes('science') && (
-                                <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-lg">🔬 Science</span>
-                              )}
-                              {course.categories.includes('nursing') && (
-                                <span className="px-2 py-1 bg-pink-100 text-pink-700 text-xs font-semibold rounded-lg">🩺 Nursing</span>
-                              )}
-                              {course.categories.includes('general') && !course.categories.includes('science') && !course.categories.includes('nursing') && (
-                                <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs font-semibold rounded-lg">📚 General</span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-4 py-4">
-                            <div className="flex gap-2 justify-center">
+                            <div className="flex gap-2 ml-2">
                               <button
                                 onClick={() => setEditingId(course.id)}
-                                className="px-3 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition shadow-sm"
+                                className="px-3 py-1 bg-blue-500 text-white text-sm rounded-lg"
                               >
-                                ✏️ Edit
+                                ✏️
                               </button>
                               <button
                                 onClick={() => removeCourse(course.id)}
-                                className="px-3 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 transition shadow-sm"
+                                className="px-3 py-1 bg-red-500 text-white text-sm rounded-lg"
                               >
                                 🗑️
                               </button>
                             </div>
-                          </td>
-                        </tr>
-                      )
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                          </div>
+                          <div className="flex gap-3 mb-2">
+                            <span className="px-3 py-1 bg-blue-100 text-blue-700 text-sm font-bold rounded-lg">
+                              Grade: {course.grade}
+                            </span>
+                            <span className="px-3 py-1 bg-gray-100 text-gray-800 text-sm font-bold rounded-lg">
+                              Credits: {course.credits}
+                            </span>
+                          </div>
+                          <div className="flex gap-1 flex-wrap">
+                            {course.isTransfer && (
+                              <span className="px-2 py-1 bg-orange-100 text-orange-700 text-xs font-semibold rounded-lg">🔄 Transfer</span>
+                            )}
+                            {course.categories.includes('science') && (
+                              <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-lg">🔬 Science</span>
+                            )}
+                            {course.categories.includes('nursing') && (
+                              <span className="px-2 py-1 bg-pink-100 text-pink-700 text-xs font-semibold rounded-lg">🩺 Nursing</span>
+                            )}
+                            {course.categories.includes('general') && !course.categories.includes('science') && !course.categories.includes('nursing') && (
+                              <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs font-semibold rounded-lg">📚 General</span>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
 
           {courses.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-              <h3 className="text-lg font-bold text-gray-800 mb-4">💾 Save & Export</h3>
-              <div className="flex gap-4">
+            <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 mb-6">
+              <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-4">💾 Save & Export</h3>
+              <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
                 <input
                   type="text"
                   value={calculationName}
                   onChange={(e) => setCalculationName(e.target.value)}
                   placeholder="Name this calculation (e.g., 'Fall 2024')"
-                  className="flex-1 px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400"
+                  className="flex-1 px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm sm:text-base"
                 />
                 <button
                   onClick={saveCalculation}
                   disabled={!isLoggedIn}
-                  className="px-6 py-3 bg-green-600 text-white font-semibold rounded-xl hover:bg-green-700 transition disabled:opacity-50"
+                  className="w-full sm:w-auto px-4 sm:px-6 py-3 bg-green-600 text-white font-semibold rounded-xl hover:bg-green-700 transition disabled:opacity-50 text-sm sm:text-base"
                 >
                   💾 Save
                 </button>
-                <button onClick={exportToPDF} className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 transition">
+                <button onClick={exportToPDF} className="w-full sm:w-auto px-4 sm:px-6 py-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 transition text-sm sm:text-base">
                   📄 Export PDF
                 </button>
               </div>
               {!isLoggedIn && (
-                <p className="text-sm text-gray-500 mt-2">Log in to save calculations to your profile</p>
+                <p className="text-xs sm:text-sm text-gray-500 mt-2">Log in to save calculations to your profile</p>
               )}
             </div>
           )}
 
           {savedCalculations.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-xl p-6">
-              <h3 className="text-lg font-bold text-gray-800 mb-4">📊 Saved Calculations</h3>
-              <div className="grid md:grid-cols-2 gap-4">
+            <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6">
+              <h3 className="text-base sm:text-lg font-bold text-gray-800 mb-4">📊 Saved Calculations</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {savedCalculations.map((calc) => (
                   <div key={calc.id} className="border rounded-xl p-4 hover:border-purple-400 transition cursor-pointer" onClick={() => loadCalculation(calc)}>
-                    <h4 className="font-bold text-gray-800 mb-2">{calc.calculation_name}</h4>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
+                    <h4 className="font-bold text-gray-800 mb-2 text-sm sm:text-base">{calc.calculation_name}</h4>
+                    <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
                       <p className="text-gray-600">🔬 Science: <span className="font-semibold">{calc.science_gpa}</span></p>
                       <p className="text-gray-600">📚 Overall: <span className="font-semibold">{calc.overall_gpa}</span></p>
                       <p className="text-gray-600">⏱️ Last 60: <span className="font-semibold">{calc.last60_gpa}</span></p>

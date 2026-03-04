@@ -283,87 +283,91 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
         onCollapsedChange={setSidebarCollapsed}
       />
       
-      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
-        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-end">
+      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
+        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
           {!isLoggedIn && (
-            <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition">
+            <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition text-sm">
               Login
             </Link>
           )}
         </div>
 
-        <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-3 text-center">
-          <a href="/interview-prep" className="text-black font-semibold hover:underline">🚀 NEW: School-Specific Interview Style is NOW LIVE for Ultimate members →</a>
+        <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-2 sm:py-3 px-4 text-center">
+          <a href="/interview-prep" className="text-black text-xs sm:text-sm font-semibold hover:underline">🚀 NEW: School-Specific Interview Style is NOW LIVE for Ultimate members →</a>
         </div>
 
-        <div className="max-w-6xl mx-auto px-4 py-8">
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold text-white mb-2">AI Mock Interview</h1>
-            <p className="text-indigo-200">Practice your CRNA interview skills with our AI interviewer</p>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+          <div className="text-center mb-6 sm:mb-8">
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-2">AI Mock Interview</h1>
+            <p className="text-sm sm:text-base text-indigo-200">Practice your CRNA interview skills with our AI interviewer</p>
             {isLoggedIn && !isUltimate && (
-              <div className="mt-4 inline-block bg-yellow-500/20 border border-yellow-500/50 rounded-lg px-4 py-2">
-                <p className="text-yellow-200 text-sm">{interviewCount === 0 ? '🎁 You have 1 free interview available!' : '🔒 You have used your free interview. Upgrade to Ultimate for unlimited interviews!'}</p>
+              <div className="mt-4 inline-block bg-yellow-500/20 border border-yellow-500/50 rounded-lg px-3 sm:px-4 py-2 max-w-lg">
+                <p className="text-yellow-200 text-xs sm:text-sm">{interviewCount === 0 ? '🎁 You have 1 free interview available!' : '🔒 You have used your free interview. Upgrade to Ultimate for unlimited interviews!'}</p>
               </div>
             )}
             {isLoggedIn && isUltimate && (
-              <div className="mt-4 inline-block bg-green-500/20 border border-green-500/50 rounded-lg px-4 py-2">
-                <p className="text-green-200 text-sm">✨ Ultimate Plan - Unlimited Interviews</p>
+              <div className="mt-4 inline-block bg-green-500/20 border border-green-500/50 rounded-lg px-3 sm:px-4 py-2">
+                <p className="text-green-200 text-xs sm:text-sm">✨ Ultimate Plan - Unlimited Interviews</p>
               </div>
             )}
             {!isLoggedIn && (
-              <div className="mt-4 inline-block bg-purple-500/20 border border-purple-500/50 rounded-lg px-4 py-2">
-                <p className="text-purple-200 text-sm">🎁 Sign up free to get 1 free mock interview! Ultimate members get unlimited.</p>
+              <div className="mt-4 inline-block bg-purple-500/20 border border-purple-500/50 rounded-lg px-3 sm:px-4 py-2 max-w-lg">
+                <p className="text-purple-200 text-xs sm:text-sm">🎁 Sign up free to get 1 free mock interview! Ultimate members get unlimited.</p>
               </div>
             )}
           </div>
+          
           {!started ? (
-            <div className="flex gap-6">
-              <div className="bg-white rounded-2xl shadow-xl p-8 flex-1">
-                <div className="text-center mb-8">
-                  <div className="w-20 h-20 bg-gradient-to-br from-purple-600 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-6">
-                    <span className="text-4xl">🎤</span>
+            <div className="flex flex-col lg:flex-row gap-4 sm:gap-6">
+              <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 flex-1">
+                <div className="text-center mb-6 sm:mb-8">
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-purple-600 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6">
+                    <span className="text-3xl sm:text-4xl">🎤</span>
                   </div>
-                  <h2 className="text-2xl font-bold text-gray-800 mb-2">Choose Interview Type</h2>
-                  <p className="text-gray-600">Select the type of interview you want to practice (10 questions max)</p>
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-2">Choose Interview Type</h2>
+                  <p className="text-sm sm:text-base text-gray-600">Select the type of interview you want to practice (10 questions max)</p>
                 </div>
-                <div className="grid md:grid-cols-2 gap-4 mb-6">
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4 sm:mb-6">
                   {interviewTypes.map((type) => (
-                    <button key={type.id} onClick={() => setInterviewType(type.id)} className={`p-4 rounded-xl border-2 text-left transition ${interviewType === type.id ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300'}`}>
-                      <div className="flex items-center gap-3 mb-2">
-                        <span className="text-2xl">{type.icon}</span>
-                        <h3 className="font-semibold text-gray-800">{type.name}</h3>
+                    <button key={type.id} onClick={() => setInterviewType(type.id)} className={`p-3 sm:p-4 rounded-xl border-2 text-left transition ${interviewType === type.id ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300'}`}>
+                      <div className="flex items-center gap-2 sm:gap-3 mb-2">
+                        <span className="text-xl sm:text-2xl">{type.icon}</span>
+                        <h3 className="font-semibold text-gray-800 text-sm sm:text-base">{type.name}</h3>
                       </div>
-                      <p className="text-sm text-gray-600">{type.description}</p>
+                      <p className="text-xs sm:text-sm text-gray-600">{type.description}</p>
                     </button>
                   ))}
                 </div>
+                
                 {interviewType === 'custom' && (
-                  <div className="mb-6">
+                  <div className="mb-4 sm:mb-6">
                     <label className="block text-sm font-medium text-gray-700 mb-2">Enter your custom topic:</label>
-                    <input type="text" value={customTopic} onChange={(e) => setCustomTopic(e.target.value)} placeholder="e.g., Leadership experience, Handling difficult patients..." className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                    <input type="text" value={customTopic} onChange={(e) => setCustomTopic(e.target.value)} placeholder="e.g., Leadership experience, Handling difficult patients..." className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base" />
                   </div>
                 )}
+                
                 {!isLoggedIn ? (
                   <div className="text-center">
-                    <Link href="/login" className="inline-block w-full py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-lg text-center">Sign Up Free to Start Interviewing</Link>
-                    <p className="text-gray-500 text-sm mt-3">Get 1 free interview. Upgrade to Ultimate for unlimited.</p>
+                    <Link href="/login" className="inline-block w-full py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-base sm:text-lg text-center">Sign Up Free to Start Interviewing</Link>
+                    <p className="text-gray-500 text-xs sm:text-sm mt-3">Get 1 free interview. Upgrade to Ultimate for unlimited.</p>
                   </div>
                 ) : canInterview ? (
-                  <button onClick={startInterview} disabled={!interviewType || (interviewType === 'custom' && !customTopic.trim())} className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-lg disabled:opacity-50 disabled:cursor-not-allowed">Start Interview</button>
+                  <button onClick={startInterview} disabled={!interviewType || (interviewType === 'custom' && !customTopic.trim())} className="w-full py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-base sm:text-lg disabled:opacity-50 disabled:cursor-not-allowed">Start Interview</button>
                 ) : (
                   <div className="text-center">
-                    <button disabled className="px-8 py-4 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed text-lg mb-4">🔒 Interview Used</button>
-                    <p className="text-gray-600 mb-4">You have used your free interview.</p>
-                    <Link href="/pricing" className="inline-block px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition">Upgrade to Ultimate for Unlimited Interviews</Link>
+                    <button disabled className="px-6 sm:px-8 py-3 sm:py-4 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed text-base sm:text-lg mb-4">🔒 Interview Used</button>
+                    <p className="text-sm sm:text-base text-gray-600 mb-4">You have used your free interview.</p>
+                    <Link href="/pricing" className="inline-block px-6 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-sm sm:text-base">Upgrade to Ultimate for Unlimited Interviews</Link>
                   </div>
                 )}
               </div>
 
-              <div className="w-72 bg-white rounded-2xl shadow-xl p-6 h-fit">
+              <div className="w-full lg:w-72 bg-white rounded-2xl shadow-xl p-4 sm:p-6 h-fit">
                 <div className="text-center mb-4">
-                  <span className="text-3xl">💬</span>
-                  <h3 className="text-lg font-bold text-gray-800 mt-2">Help Us Improve</h3>
-                  <p className="text-sm text-gray-600 mt-1">Experiencing issues with the AI interview? Let me know!</p>
+                  <span className="text-2xl sm:text-3xl">💬</span>
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800 mt-2">Help Us Improve</h3>
+                  <p className="text-xs sm:text-sm text-gray-600 mt-1">Experiencing issues with the AI interview? Let me know!</p>
                 </div>
                 
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
@@ -372,10 +376,10 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
 
                 {feedbackSent ? (
                   <div className="text-center py-4">
-                    <span className="text-4xl">✅</span>
-                    <p className="text-green-600 font-semibold mt-2">Thank you!</p>
-                    <p className="text-sm text-gray-600">Your feedback has been received.</p>
-                    <button onClick={() => setFeedbackSent(false)} className="mt-3 text-purple-600 text-sm underline">Send another</button>
+                    <span className="text-3xl sm:text-4xl">✅</span>
+                    <p className="text-green-600 font-semibold mt-2 text-sm sm:text-base">Thank you!</p>
+                    <p className="text-xs sm:text-sm text-gray-600">Your feedback has been received.</p>
+                    <button onClick={() => setFeedbackSent(false)} className="mt-3 text-purple-600 text-xs sm:text-sm underline">Send another</button>
                   </div>
                 ) : (
                   <>
@@ -384,12 +388,12 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
                       onChange={(e) => setFeedbackMessage(e.target.value)}
                       placeholder="Describe any issues, bugs, or suggestions..."
                       rows={4}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm resize-none"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-xs sm:text-sm resize-none"
                     />
                     <button
                       onClick={submitFeedback}
                       disabled={!feedbackMessage.trim() || sendingFeedback}
-                      className="w-full mt-3 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      className="w-full mt-3 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed text-xs sm:text-sm"
                     >
                       {sendingFeedback ? 'Sending...' : 'Send Feedback'}
                     </button>
@@ -399,33 +403,35 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
             </div>
           ) : (
             <div className="bg-white rounded-2xl shadow-xl overflow-hidden max-w-4xl mx-auto">
-              <div className="bg-gradient-to-r from-purple-600 to-pink-500 px-6 py-3 flex justify-between items-center">
-                <span className="text-white font-medium">{interviewTypes.find(t => t.id === interviewType)?.name} Interview</span>
-                <div className="flex items-center gap-4">
-                  <span className="text-white/80 text-sm">Question {Math.min(questionCount, maxQuestions)} of {maxQuestions}</span>
-                  <button onClick={resetInterview} className="text-white/80 hover:text-white text-sm underline transition">Start Over</button>
+              <div className="bg-gradient-to-r from-purple-600 to-pink-500 px-4 sm:px-6 py-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 sm:gap-0">
+                <span className="text-white font-medium text-sm sm:text-base">{interviewTypes.find(t => t.id === interviewType)?.name} Interview</span>
+                <div className="flex items-center gap-3 sm:gap-4">
+                  <span className="text-white/80 text-xs sm:text-sm">Question {Math.min(questionCount, maxQuestions)} of {maxQuestions}</span>
+                  <button onClick={resetInterview} className="text-white/80 hover:text-white text-xs sm:text-sm underline transition">Start Over</button>
                 </div>
               </div>
-              <div className="h-96 overflow-y-auto p-6 space-y-4">
+              
+              <div className="h-80 sm:h-96 overflow-y-auto p-4 sm:p-6 space-y-3 sm:space-y-4">
                 {messages.map((msg, index) => (
                   <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-xs md:max-w-md px-4 py-3 rounded-2xl whitespace-pre-line ${msg.role === 'user' ? 'bg-gradient-to-r from-purple-600 to-pink-500 text-white' : 'bg-gray-100 text-gray-800'}`}>{msg.content}</div>
+                    <div className={`max-w-[85%] sm:max-w-xs md:max-w-md px-3 sm:px-4 py-2 sm:py-3 rounded-2xl whitespace-pre-line text-sm sm:text-base ${msg.role === 'user' ? 'bg-gradient-to-r from-purple-600 to-pink-500 text-white' : 'bg-gray-100 text-gray-800'}`}>{msg.content}</div>
                   </div>
                 ))}
-                {loading && (<div className="flex justify-start"><div className="bg-gray-100 text-gray-800 px-4 py-3 rounded-2xl">Thinking...</div></div>)}
+                {loading && (<div className="flex justify-start"><div className="bg-gray-100 text-gray-800 px-3 sm:px-4 py-2 sm:py-3 rounded-2xl text-sm sm:text-base">Thinking...</div></div>)}
               </div>
-              <div className="border-t p-4">
+              
+              <div className="border-t p-3 sm:p-4">
                 {!interviewEnded ? (
-                  <div className="flex gap-3">
-                    <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && sendMessage()} placeholder={isListening ? "Listening..." : "Type or click mic to speak..."} className={`flex-1 px-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 ${isListening ? 'border-red-500 bg-red-50' : 'border-gray-300'}`} />
-                    <button onClick={() => { if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { alert('Speech recognition not supported. Try Chrome.'); return } const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition; const recognition = new SR(); recognition.continuous = false; recognition.interimResults = false; recognition.lang = 'en-US'; recognition.onstart = () => setIsListening(true); recognition.onend = () => setIsListening(false); recognition.onerror = () => setIsListening(false); recognition.onresult = (event: any) => { setInput(prev => prev + ' ' + event.results[0][0].transcript) }; if (isListening) { recognition.stop() } else { recognition.start() } }} className={`px-4 py-3 rounded-xl font-semibold transition ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>🎤</button>
-                    <button onClick={sendMessage} disabled={loading} className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition disabled:opacity-50">Send</button>
+                  <div className="flex gap-2 sm:gap-3">
+                    <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && sendMessage()} placeholder={isListening ? "Listening..." : "Type or click mic..."} className={`flex-1 px-3 sm:px-4 py-2 sm:py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base ${isListening ? 'border-red-500 bg-red-50' : 'border-gray-300'}`} />
+                    <button onClick={() => { if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { alert('Speech recognition not supported. Try Chrome.'); return } const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition; const recognition = new SR(); recognition.continuous = false; recognition.interimResults = false; recognition.lang = 'en-US'; recognition.onstart = () => setIsListening(true); recognition.onend = () => setIsListening(false); recognition.onerror = () => setIsListening(false); recognition.onresult = (event: any) => { setInput(prev => prev + ' ' + event.results[0][0].transcript) }; if (isListening) { recognition.stop() } else { recognition.start() } }} className={`px-3 sm:px-4 py-2 sm:py-3 rounded-xl font-semibold transition text-sm sm:text-base ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>🎤</button>
+                    <button onClick={sendMessage} disabled={loading} className="px-4 sm:px-6 py-2 sm:py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition disabled:opacity-50 text-sm sm:text-base">Send</button>
                   </div>
                 ) : (
                   <div className="text-center">
-                    <p className="text-gray-600 mb-4">Interview complete! 🎉</p>
-                    {isUltimate && (<button onClick={resetInterview} className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition">Start New Interview</button>)}
-                    {!isUltimate && (<Link href="/pricing" className="inline-block px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition">Upgrade for More Interviews</Link>)}
+                    <p className="text-sm sm:text-base text-gray-600 mb-4">Interview complete! 🎉</p>
+                    {isUltimate && (<button onClick={resetInterview} className="px-4 sm:px-6 py-2 sm:py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-sm sm:text-base">Start New Interview</button>)}
+                    {!isUltimate && (<Link href="/pricing" className="inline-block px-4 sm:px-6 py-2 sm:py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-sm sm:text-base">Upgrade for More Interviews</Link>)}
                   </div>
                 )}
               </div>
