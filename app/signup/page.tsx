@@ -13,7 +13,7 @@ export default function SignUp() {
   const router = useRouter()
   const supabase = createClient()
 
-  const handleSignUp = async (e: React.FormEvent) => {
+const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
     setError('')
@@ -37,6 +37,20 @@ export default function SignUp() {
           has_used_free_interview: false,
         })
 
+        // Track signup with TikTok
+        try {
+          await fetch('/api/tiktok-event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              eventName: 'CompleteRegistration',
+              email: email,
+            }),
+          })
+        } catch (err) {
+          console.error('TikTok tracking error:', err)
+        }
+
         alert('Account created! You can now log in.')
         router.push('/login')
       }
@@ -46,7 +60,6 @@ export default function SignUp() {
       setLoading(false)
     }
   }
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center px-4">
       <div className="max-w-md w-full bg-white rounded-xl shadow-xl p-8">

@@ -101,7 +101,23 @@ export default function Pricing() {
       />
       
       <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
-        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
+{/* Animated Promo Banner */}
+<div className="bg-gradient-to-r from-red-600 via-orange-500 to-red-600 py-3 sm:py-4 overflow-hidden relative">
+  <div className="absolute inset-0 bg-[length:200%_100%] bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer"></div>
+  <div className="relative">
+    <div className="flex items-center justify-center gap-2 sm:gap-3 px-4 animate-pulse">
+      <span className="text-2xl sm:text-3xl">🎉</span>
+      <div className="text-center">
+        <p className="text-white font-black text-sm sm:text-base md:text-lg">
+          LIMITED TIME: Use code <span className="bg-yellow-300 text-red-600 px-2 sm:px-3 py-1 rounded-lg mx-1 sm:mx-2 font-mono text-base sm:text-xl">MARCH15</span> for $15 OFF!
+        </p>
+        <p className="text-white/90 text-xs sm:text-sm font-semibold">Expires March 30th - Don't miss out!</p>
+      </div>
+      <span className="text-2xl sm:text-3xl">🎉</span>
+    </div>
+  </div>
+</div>      
+  <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
           {!user && (
             <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition text-sm">
               Login
@@ -262,6 +278,15 @@ export default function Pricing() {
           </div>
         </div>
       </div>
+<style jsx global>{`
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .animate-shimmer {
+    animation: shimmer 3s linear infinite;
+  }
+`}</style>
     </div>
   )
 }
