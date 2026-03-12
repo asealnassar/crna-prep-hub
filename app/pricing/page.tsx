@@ -14,13 +14,21 @@ export default function Pricing() {
   const [promoData, setPromoData] = useState<any>(null)
   const [checkingPromo, setCheckingPromo] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  
+  // Banner states
+  const [banner, setBanner] = useState<any>(null)
+  const [showBannerEditor, setShowBannerEditor] = useState(false)
+  const [editingBanner, setEditingBanner] = useState<any>(null)
+  const [savingBanner, setSavingBanner] = useState(false)
+  
   const supabase = createClient()
+  const isAdmin = user?.email === 'asealnassar@gmail.com'
 
   useEffect(() => {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       setUser(user)
-      
+
       if (user) {
         const { data: profile } = await supabase.from('user_profiles').select('subscription_tier').eq('id', user.id).single()
         if (profile) {
@@ -29,7 +37,68 @@ export default function Pricing() {
       }
     }
     getUser()
+    loadBanner()
   }, [])
+
+  const loadBanner = async () => {
+    const { data } = await supabase
+      .from('promo_banner')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+    
+    if (data) setBanner(data)
+  }
+
+  const toggleBannerActive = async () => {
+    if (!banner) return
+    await supabase
+      .from('promo_banner')
+      .update({ is_active: !banner.is_active })
+      .eq('id', banner.id)
+    loadBanner()
+  }
+
+  const openBannerEditor = () => {
+    setEditingBanner({
+      banner_text: banner?.banner_text || '',
+      promo_code: banner?.promo_code || '',
+      expiry_date: banner?.expiry_date || '',
+      background_color: banner?.background_color || 'from-red-600 via-orange-500 to-red-600',
+    })
+    setShowBannerEditor(true)
+  }
+
+  const saveBanner = async () => {
+    setSavingBanner(true)
+    if (banner) {
+      await supabase
+        .from('promo_banner')
+        .update({
+          ...editingBanner,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', banner.id)
+    } else {
+      await supabase
+        .from('promo_banner')
+        .insert({
+          ...editingBanner,
+          is_active: true
+        })
+    }
+    setSavingBanner(false)
+    setShowBannerEditor(false)
+    loadBanner()
+  }
+
+  const deleteBanner = async () => {
+    if (!confirm('Delete this banner?')) return
+    await supabase.from('promo_banner').delete().eq('id', banner.id)
+    setBanner(null)
+    setShowBannerEditor(false)
+  }
 
   const checkPromoCode = async () => {
     if (!promoCode.trim()) return
@@ -91,40 +160,91 @@ export default function Pricing() {
   const premiumPrice = promoValid ? (29.99 - discountAmount).toFixed(2) : '29.99'
   const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
 
+  const renderBannerText = (text: string, code: string) => {
+    return text.split('{CODE}').map((part, idx, arr) => (
+      idx < arr.length - 1 ? (
+        <span key={idx}>
+          {part}
+          <span className="bg-yellow-300 text-red-600 px-2 sm:px-3 py-1 rounded-lg mx-1 sm:mx-2 font-mono text-base sm:text-xl">
+            {code}
+          </span>
+        </span>
+      ) : part
+    ))
+  }
+
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <Sidebar 
-        isLoggedIn={!!user} 
-        userEmail={user?.email || ''} 
-        isAdmin={user?.email === 'asealnassar@gmail.com'}
+      <Sidebar
+        isLoggedIn={!!user}
+        userEmail={user?.email || ''}
+        isAdmin={isAdmin}
         onCollapsedChange={setSidebarCollapsed}
       />
-      
+
       <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
-{/* Animated Promo Banner */}
-<div className="bg-gradient-to-r from-red-600 via-orange-500 to-red-600 py-3 sm:py-4 overflow-hidden relative">
-  <div className="absolute inset-0 bg-[length:200%_100%] bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer"></div>
-  <div className="relative">
-    <div className="flex items-center justify-center gap-2 sm:gap-3 px-4 animate-pulse">
-      <span className="text-2xl sm:text-3xl">🎉</span>
-      <div className="text-center">
-        <p className="text-white font-black text-sm sm:text-base md:text-lg">
-          LIMITED TIME: Use code <span className="bg-yellow-300 text-red-600 px-2 sm:px-3 py-1 rounded-lg mx-1 sm:mx-2 font-mono text-base sm:text-xl">MARCH15</span> for $15 OFF!
-        </p>
-        <p className="text-white/90 text-xs sm:text-sm font-semibold">Expires March 30th - Don't miss out!</p>
-      </div>
-      <span className="text-2xl sm:text-3xl">🎉</span>
-    </div>
-  </div>
-</div>      
-  <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
+        
+        {/* Promo Banner */}
+        {banner && banner.is_active && (
+          <div className={`bg-gradient-to-r ${banner.background_color} py-3 sm:py-4 overflow-hidden relative`}>
+            <div className="absolute inset-0 bg-[length:200%_100%] bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer"></div>
+            <div className="relative">
+              <div className="flex items-center justify-center gap-2 sm:gap-3 px-4 animate-pulse">
+                <span className="text-2xl sm:text-3xl">🎉</span>
+                <div className="text-center">
+                  <p className="text-white font-black text-sm sm:text-base md:text-lg">
+                    {renderBannerText(banner.banner_text, banner.promo_code)}
+                  </p>
+                  {banner.expiry_date && (
+                    <p className="text-white/90 text-xs sm:text-sm font-semibold">
+                      Expires {new Date(banner.expiry_date).toLocaleDateString()}
+                    </p>
+                  )}
+                </div>
+                <span className="text-2xl sm:text-3xl">🎉</span>
+              </div>
+            </div>
+            
+            {/* Admin Controls Overlay */}
+            {isAdmin && (
+              <div className="absolute top-2 right-2 flex gap-2">
+                <button
+                  onClick={toggleBannerActive}
+                  className="px-2 py-1 bg-white/90 text-xs font-semibold rounded shadow hover:bg-white"
+                >
+                  Hide
+                </button>
+                <button
+                  onClick={openBannerEditor}
+                  className="px-2 py-1 bg-blue-500 text-white text-xs font-semibold rounded shadow hover:bg-blue-600"
+                >
+                  Edit
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Admin: No Banner / Inactive Banner */}
+        {isAdmin && (!banner || !banner.is_active) && (
+          <div className="bg-yellow-500 py-3 px-4 text-center">
+            <button
+              onClick={() => banner ? toggleBannerActive() : openBannerEditor()}
+              className="text-black text-sm font-semibold underline hover:no-underline"
+            >
+              {banner ? '👁️ Show Banner' : '➕ Create Promo Banner'}
+            </button>
+          </div>
+        )}
+
+        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
           {!user && (
             <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition text-sm">
               Login
             </Link>
           )}
         </div>
-        
+
         <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-2 sm:py-3 px-4 text-center">
           <a href="/interview-prep" className="text-black text-xs sm:text-sm font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep is NOW LIVE for Ultimate members →</a>
         </div>
@@ -271,22 +391,105 @@ export default function Pricing() {
             </div>
 
           </div>
-          
+
           <div className="text-center mt-8 sm:mt-12 text-indigo-200 text-sm sm:text-base">
             <p>🔒 Secure payment powered by Stripe</p>
             <p className="mt-2">Questions? Contact support@crnaprephub.com</p>
           </div>
         </div>
       </div>
-<style jsx global>{`
-  @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-  }
-  .animate-shimmer {
-    animation: shimmer 3s linear infinite;
-  }
-`}</style>
+
+      {/* Banner Editor Modal */}
+      {showBannerEditor && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold mb-4">Edit Promo Banner</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Banner Text (use {'{CODE}'} for promo code)</label>
+                <input
+                  type="text"
+                  value={editingBanner?.banner_text || ''}
+                  onChange={(e) => setEditingBanner({...editingBanner, banner_text: e.target.value})}
+                  className="w-full px-3 py-2 border rounded-lg"
+                  placeholder="LIMITED TIME: Use code {CODE} for $15 OFF!"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Promo Code</label>
+                <input
+                  type="text"
+                  value={editingBanner?.promo_code || ''}
+                  onChange={(e) => setEditingBanner({...editingBanner, promo_code: e.target.value})}
+                  className="w-full px-3 py-2 border rounded-lg"
+                  placeholder="MARCH15"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Expiry Date</label>
+                <input
+                  type="date"
+                  value={editingBanner?.expiry_date || ''}
+                  onChange={(e) => setEditingBanner({...editingBanner, expiry_date: e.target.value})}
+                  className="w-full px-3 py-2 border rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Background Color (Tailwind classes)</label>
+                <select
+                  value={editingBanner?.background_color || ''}
+                  onChange={(e) => setEditingBanner({...editingBanner, background_color: e.target.value})}
+                  className="w-full px-3 py-2 border rounded-lg"
+                >
+                  <option value="from-red-600 via-orange-500 to-red-600">Red to Orange</option>
+                  <option value="from-blue-600 via-purple-500 to-blue-600">Blue to Purple</option>
+                  <option value="from-green-600 via-teal-500 to-green-600">Green to Teal</option>
+                  <option value="from-purple-600 via-pink-500 to-purple-600">Purple to Pink</option>
+                  <option value="from-yellow-500 via-orange-500 to-yellow-500">Yellow to Orange</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={saveBanner}
+                disabled={savingBanner}
+                className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50"
+              >
+                {savingBanner ? 'Saving...' : 'Save Banner'}
+              </button>
+              {banner && (
+                <button
+                  onClick={deleteBanner}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              )}
+              <button
+                onClick={() => setShowBannerEditor(false)}
+                className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg font-semibold hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style jsx global>{`
+        @keyframes shimmer {
+          0% { background-position: -200% 0; }
+          100% { background-position: 200% 0; }
+        }
+        .animate-shimmer {
+          animation: shimmer 3s linear infinite;
+        }
+      `}</style>
     </div>
   )
 }

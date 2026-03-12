@@ -32,7 +32,6 @@ const navItems = [
     { href: '/admin/analytics', label: 'Analytics', icon: '📈', requiresAuth: true, adminOnly: true },
     { href: '/admin/schools', label: 'Admin', icon: '⚙️', requiresAuth: true, adminOnly: true },
   ]
-
   const visibleItems = navItems.filter(item => {
     if (item.adminOnly && !isAdmin) return false
     if (item.requiresAuth && !isLoggedIn) return false

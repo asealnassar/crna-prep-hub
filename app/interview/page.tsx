@@ -30,6 +30,12 @@ export default function Interview() {
   const [feedbackSent, setFeedbackSent] = useState(false)
   const [sendingFeedback, setSendingFeedback] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [interviewHistory, setInterviewHistory] = useState<any[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [filterType, setFilterType] = useState('all')
+  const [filterReviewed, setFilterReviewed] = useState('all')
+  const [sortBy, setSortBy] = useState('newest')
+  const [expandedSession, setExpandedSession] = useState<string | null>(null)
   const router = useRouter()
   const supabase = createClient()
 
@@ -56,11 +62,61 @@ export default function Interview() {
           setUserTier(profile.subscription_tier || 'free')
           setInterviewCount(profile.interview_count || 0)
         }
+        await loadInterviewHistory(user.id)
       }
       setPageLoading(false)
     }
     init()
   }, [])
+
+  const loadInterviewHistory = async (uid: string) => {
+    const { data } = await supabase
+      .from('interview_sessions')
+      .select('*')
+      .eq('user_id', uid)
+      .order('created_at', { ascending: false })
+
+    setInterviewHistory(data || [])
+  }
+
+  const saveSession = async () => {
+    if (!userId || messages.length === 0) return
+
+    const sessionData = {
+      user_id: userId,
+      school_type: interviewType,
+      interview_type: customTopic || interviewType,
+      conversation: messages,
+      question_count: questionCount,
+      reviewed: false,
+    }
+
+    if (currentSessionId) {
+      await supabase
+        .from('interview_sessions')
+        .update(sessionData)
+        .eq('id', currentSessionId)
+    } else {
+      const { data } = await supabase
+        .from('interview_sessions')
+        .insert(sessionData)
+        .select()
+        .single()
+
+      if (data) setCurrentSessionId(data.id)
+    }
+
+    if (userId) await loadInterviewHistory(userId)
+  }
+
+  const markAsReviewed = async (sessionId: string) => {
+    await supabase
+      .from('interview_sessions')
+      .update({ reviewed: true })
+      .eq('id', sessionId)
+
+    if (userId) await loadInterviewHistory(userId)
+  }
 
   const loadRecentQuestions = async (type: string) => {
     if (!userId) return []
@@ -210,6 +266,7 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
     setQuestionCount(1)
     setAskedQuestions([])
     setSessionId(Date.now().toString(36) + Math.random().toString(36).substring(2))
+    setCurrentSessionId(null)
     if (!isUltimate && userId) {
       await supabase.from('user_profiles').update({ interview_count: interviewCount + 1 }).eq('id', userId)
       setInterviewCount(interviewCount + 1)
@@ -222,6 +279,8 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
       const q = extractQuestion(data.message)
       setAskedQuestions([q])
       await saveQuestion(q, interviewType)
+      
+      setTimeout(() => saveSession(), 1000)
     } catch (error) {
       setMessages([{ role: 'assistant', content: 'Welcome to CRNA Prep Hub. I will be conducting your interview today. Let\'s begin.\n\nQuestion 1: Describe a stressful situation you faced in your nursing career and how you handled it.' }])
     }
@@ -245,11 +304,14 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
     try {
       const response = await fetch('/api/interview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: newMessages, systemMessage: getSystemMessage() }) })
       const data = await response.json()
-      setMessages([...newMessages, { role: 'assistant', content: data.message }])
+      const updatedMessages = [...newMessages, { role: 'assistant', content: data.message }]
+      setMessages(updatedMessages)
       
       const q = extractQuestion(data.message)
       setAskedQuestions(prev => [...prev, q])
       await saveQuestion(q, interviewType)
+      
+      setTimeout(() => saveSession(), 1000)
       
       if (data.message.includes('concludes') || data.message.includes('Overall interview score')) { setInterviewEnded(true) }
     } catch (error) {
@@ -268,6 +330,7 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
     setAskedQuestions([])
     setRecentQuestions([])
     setSessionId('')
+    setCurrentSessionId(null)
   }
 
   if (pageLoading) {
@@ -318,89 +381,223 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
           </div>
           
           {!started ? (
-            <div className="flex flex-col lg:flex-row gap-4 sm:gap-6">
-              <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 flex-1">
-                <div className="text-center mb-6 sm:mb-8">
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-purple-600 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6">
-                    <span className="text-3xl sm:text-4xl">🎤</span>
+            <>
+              <div className="flex flex-col lg:flex-row gap-4 sm:gap-6 mb-8">
+                <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 flex-1">
+                  <div className="text-center mb-6 sm:mb-8">
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-purple-600 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6">
+                      <span className="text-3xl sm:text-4xl">🎤</span>
+                    </div>
+                    <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-2">Choose Interview Type</h2>
+                    <p className="text-sm sm:text-base text-gray-600">Select the type of interview you want to practice (10 questions max)</p>
                   </div>
-                  <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-2">Choose Interview Type</h2>
-                  <p className="text-sm sm:text-base text-gray-600">Select the type of interview you want to practice (10 questions max)</p>
-                </div>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4 sm:mb-6">
-                  {interviewTypes.map((type) => (
-                    <button key={type.id} onClick={() => setInterviewType(type.id)} className={`p-3 sm:p-4 rounded-xl border-2 text-left transition ${interviewType === type.id ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300'}`}>
-                      <div className="flex items-center gap-2 sm:gap-3 mb-2">
-                        <span className="text-xl sm:text-2xl">{type.icon}</span>
-                        <h3 className="font-semibold text-gray-800 text-sm sm:text-base">{type.name}</h3>
-                      </div>
-                      <p className="text-xs sm:text-sm text-gray-600">{type.description}</p>
-                    </button>
-                  ))}
-                </div>
-                
-                {interviewType === 'custom' && (
-                  <div className="mb-4 sm:mb-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Enter your custom topic:</label>
-                    <input type="text" value={customTopic} onChange={(e) => setCustomTopic(e.target.value)} placeholder="e.g., Leadership experience, Handling difficult patients..." className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base" />
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4 sm:mb-6">
+                    {interviewTypes.map((type) => (
+                      <button key={type.id} onClick={() => setInterviewType(type.id)} className={`p-3 sm:p-4 rounded-xl border-2 text-left transition ${interviewType === type.id ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300'}`}>
+                        <div className="flex items-center gap-2 sm:gap-3 mb-2">
+                          <span className="text-xl sm:text-2xl">{type.icon}</span>
+                          <h3 className="font-semibold text-gray-800 text-sm sm:text-base">{type.name}</h3>
+                        </div>
+                        <p className="text-xs sm:text-sm text-gray-600">{type.description}</p>
+                      </button>
+                    ))}
                   </div>
-                )}
-                
-                {!isLoggedIn ? (
-                  <div className="text-center">
-                    <Link href="/login" className="inline-block w-full py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-base sm:text-lg text-center">Sign Up Free to Start Interviewing</Link>
-                    <p className="text-gray-500 text-xs sm:text-sm mt-3">Get 1 free interview. Upgrade to Ultimate for unlimited.</p>
-                  </div>
-                ) : canInterview ? (
-                  <button onClick={startInterview} disabled={!interviewType || (interviewType === 'custom' && !customTopic.trim())} className="w-full py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-base sm:text-lg disabled:opacity-50 disabled:cursor-not-allowed">Start Interview</button>
-                ) : (
-                  <div className="text-center">
-                    <button disabled className="px-6 sm:px-8 py-3 sm:py-4 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed text-base sm:text-lg mb-4">🔒 Interview Used</button>
-                    <p className="text-sm sm:text-base text-gray-600 mb-4">You have used your free interview.</p>
-                    <Link href="/pricing" className="inline-block px-6 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-sm sm:text-base">Upgrade to Ultimate for Unlimited Interviews</Link>
-                  </div>
-                )}
-              </div>
-
-              <div className="w-full lg:w-72 bg-white rounded-2xl shadow-xl p-4 sm:p-6 h-fit">
-                <div className="text-center mb-4">
-                  <span className="text-2xl sm:text-3xl">💬</span>
-                  <h3 className="text-base sm:text-lg font-bold text-gray-800 mt-2">Help Us Improve</h3>
-                  <p className="text-xs sm:text-sm text-gray-600 mt-1">Experiencing issues with the AI interview? Let me know!</p>
-                </div>
-                
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
-                  <p className="text-xs text-blue-800">📧 I personally read every message and fix all reported issues to make this tool better for you.</p>
+                  
+                  {interviewType === 'custom' && (
+                    <div className="mb-4 sm:mb-6">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Enter your custom topic:</label>
+                      <input type="text" value={customTopic} onChange={(e) => setCustomTopic(e.target.value)} placeholder="e.g., Leadership experience, Handling difficult patients..." className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base" />
+                    </div>
+                  )}
+                  
+                  {!isLoggedIn ? (
+                    <div className="text-center">
+                      <Link href="/login" className="inline-block w-full py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-base sm:text-lg text-center">Sign Up Free to Start Interviewing</Link>
+                      <p className="text-gray-500 text-xs sm:text-sm mt-3">Get 1 free interview. Upgrade to Ultimate for unlimited.</p>
+                    </div>
+                  ) : canInterview ? (
+                    <button onClick={startInterview} disabled={!interviewType || (interviewType === 'custom' && !customTopic.trim())} className="w-full py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-base sm:text-lg disabled:opacity-50 disabled:cursor-not-allowed">Start Interview</button>
+                  ) : (
+                    <div className="text-center">
+                      <button disabled className="px-6 sm:px-8 py-3 sm:py-4 bg-gray-400 text-white font-semibold rounded-xl cursor-not-allowed text-base sm:text-lg mb-4">🔒 Interview Used</button>
+                      <p className="text-sm sm:text-base text-gray-600 mb-4">You have used your free interview.</p>
+                      <Link href="/pricing" className="inline-block px-6 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-sm sm:text-base">Upgrade to Ultimate for Unlimited Interviews</Link>
+                    </div>
+                  )}
                 </div>
 
-                {feedbackSent ? (
-                  <div className="text-center py-4">
-                    <span className="text-3xl sm:text-4xl">✅</span>
-                    <p className="text-green-600 font-semibold mt-2 text-sm sm:text-base">Thank you!</p>
-                    <p className="text-xs sm:text-sm text-gray-600">Your feedback has been received.</p>
-                    <button onClick={() => setFeedbackSent(false)} className="mt-3 text-purple-600 text-xs sm:text-sm underline">Send another</button>
+                <div className="w-full lg:w-72 bg-white rounded-2xl shadow-xl p-4 sm:p-6 h-fit">
+                  <div className="text-center mb-4">
+                    <span className="text-2xl sm:text-3xl">💬</span>
+                    <h3 className="text-base sm:text-lg font-bold text-gray-800 mt-2">Help Us Improve</h3>
+                    <p className="text-xs sm:text-sm text-gray-600 mt-1">Experiencing issues with the AI interview? Let me know!</p>
                   </div>
-                ) : (
-                  <>
-                    <textarea
-                      value={feedbackMessage}
-                      onChange={(e) => setFeedbackMessage(e.target.value)}
-                      placeholder="Describe any issues, bugs, or suggestions..."
-                      rows={4}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-xs sm:text-sm resize-none"
-                    />
-                    <button
-                      onClick={submitFeedback}
-                      disabled={!feedbackMessage.trim() || sendingFeedback}
-                      className="w-full mt-3 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed text-xs sm:text-sm"
-                    >
-                      {sendingFeedback ? 'Sending...' : 'Send Feedback'}
-                    </button>
-                  </>
-                )}
+                  
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                    <p className="text-xs text-blue-800">📧 I personally read every message and fix all reported issues to make this tool better for you.</p>
+                  </div>
+
+                  {feedbackSent ? (
+                    <div className="text-center py-4">
+                      <span className="text-3xl sm:text-4xl">✅</span>
+                      <p className="text-green-600 font-semibold mt-2 text-sm sm:text-base">Thank you!</p>
+                      <p className="text-xs sm:text-sm text-gray-600">Your feedback has been received.</p>
+                      <button onClick={() => setFeedbackSent(false)} className="mt-3 text-purple-600 text-xs sm:text-sm underline">Send another</button>
+                    </div>
+                  ) : (
+                    <>
+                      <textarea
+                        value={feedbackMessage}
+                        onChange={(e) => setFeedbackMessage(e.target.value)}
+                        placeholder="Describe any issues, bugs, or suggestions..."
+                        rows={4}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-xs sm:text-sm resize-none"
+                      />
+                      <button
+                        onClick={submitFeedback}
+                        disabled={!feedbackMessage.trim() || sendingFeedback}
+                        className="w-full mt-3 py-2 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed text-xs sm:text-sm"
+                      >
+                        {sendingFeedback ? 'Sending...' : 'Send Feedback'}
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
+
+              {/* Interview History - Only when NOT interviewing */}
+              {isLoggedIn && interviewHistory.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6">
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">📚 Past Interview Review</h2>
+                  
+                  {/* Filters */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Interview Type</label>
+                      <select 
+                        value={filterType}
+                        onChange={(e) => setFilterType(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                      >
+                        <option value="all">All Types</option>
+                        <option value="emotional">Emotional Intelligence</option>
+                        <option value="clinical">Clinical</option>
+                        <option value="mixed">Mixed</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Review Status</label>
+                      <select 
+                        value={filterReviewed}
+                        onChange={(e) => setFilterReviewed(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                      >
+                        <option value="all">All</option>
+                        <option value="needs_review">Needs Review</option>
+                        <option value="reviewed">Reviewed</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Sort By</label>
+                      <select 
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                      >
+                        <option value="newest">Newest First</option>
+                        <option value="oldest">Oldest First</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    {(() => {
+                      let filtered = interviewHistory
+                      
+                      if (filterType !== 'all') {
+                        filtered = filtered.filter(s => s.school_type === filterType)
+                      }
+                      
+                      if (filterReviewed === 'needs_review') {
+                        filtered = filtered.filter(s => !s.reviewed)
+                      } else if (filterReviewed === 'reviewed') {
+                        filtered = filtered.filter(s => s.reviewed)
+                      }
+                      
+                      if (sortBy === 'oldest') {
+                        filtered = [...filtered].reverse()
+                      }
+                      
+                      if (filtered.length === 0) {
+                        return <p className="text-center text-gray-400 py-8">No interviews match your filters</p>
+                      }
+                      
+                      return filtered.map((session) => (
+                        <div key={session.id} className="border-2 border-gray-200 rounded-xl overflow-hidden">
+                          <button
+                            onClick={() => setExpandedSession(expandedSession === session.id ? null : session.id)}
+                            className="w-full p-4 flex justify-between items-center hover:bg-gray-50 transition"
+                          >
+                            <div className="text-left">
+                              <h3 className="font-bold text-gray-800 text-sm sm:text-base">
+                                {interviewTypes.find(t => t.id === session.school_type)?.name || session.school_type}
+                                {session.interview_type !== session.school_type && ` - ${session.interview_type}`}
+                              </h3>
+                              <p className="text-xs text-gray-500">
+                                {new Date(session.created_at).toLocaleDateString()} • {session.question_count} questions
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  markAsReviewed(session.id)
+                                }}
+                                className={`px-2 sm:px-3 py-1 rounded-full text-xs font-semibold ${
+                                  session.reviewed 
+                                    ? 'bg-green-100 text-green-700' 
+                                    : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+                                }`}
+                              >
+                                {session.reviewed ? '✓ Reviewed' : '⚠ Review'}
+                              </button>
+                              <span className="text-gray-400">
+                                {expandedSession === session.id ? '▲' : '▼'}
+                              </span>
+                            </div>
+                          </button>
+
+                          {expandedSession === session.id && (
+                            <div className="p-4 border-t bg-gray-50 space-y-3 max-h-96 overflow-y-auto">
+                              {session.conversation.map((msg: any, msgIdx: number) => (
+                                <div key={msgIdx}>
+                                  {msg.role === 'assistant' && (
+                                    <div className="bg-blue-50 p-3 rounded-lg mb-2">
+                                      <div className="text-xs text-blue-600 font-semibold mb-1">INTERVIEWER</div>
+                                      <p className="text-xs sm:text-sm text-gray-800 whitespace-pre-line">{msg.content}</p>
+                                    </div>
+                                  )}
+                                  {msg.role === 'user' && (
+                                    <div className="bg-purple-50 p-3 rounded-lg">
+                                      <div className="text-xs text-purple-600 font-semibold mb-1">YOUR ANSWER</div>
+                                      <p className="text-xs sm:text-sm text-gray-800 whitespace-pre-line">{msg.content}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    })()}
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <div className="bg-white rounded-2xl shadow-xl overflow-hidden max-w-4xl mx-auto">
               <div className="bg-gradient-to-r from-purple-600 to-pink-500 px-4 sm:px-6 py-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 sm:gap-0">
