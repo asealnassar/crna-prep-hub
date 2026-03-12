@@ -1,27 +1,53 @@
 'use client'
-
+      
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-
+import { createClient } from '@/lib/supabase-browser'
+          
 interface SidebarProps {
   isLoggedIn: boolean
   userEmail: string
   isAdmin: boolean
   onCollapsedChange?: (collapsed: boolean) => void
 }
-
+              
 export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedChange }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
   const pathname = usePathname()
-
-  // Close mobile menu when route changes
+  const supabase = createClient()
+            
   useEffect(() => {
     setMobileOpen(false)
   }, [pathname])
 
-const navItems = [
+  useEffect(() => {
+    if (isLoggedIn && userEmail) {
+      loadUnreadCount()
+    }
+  }, [isLoggedIn, userEmail])
+
+  const loadUnreadCount = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    const { data: allUpdates } = await supabase
+      .from('site_updates')
+      .select('id')
+    
+    const { data: readUpdates } = await supabase
+      .from('user_read_updates')
+      .select('update_id')
+      .eq('user_id', user.id)
+
+    const readIds = new Set(readUpdates?.map(r => r.update_id) || [])
+    const unread = allUpdates?.filter(u => !readIds.has(u.id)).length || 0
+    setUnreadCount(unread)
+  }
+
+  const navItems = [
     { href: '/dashboard', label: 'Dashboard', icon: '📊', requiresAuth: true },
     { href: '/schools', label: 'Schools', icon: '🏫', requiresAuth: false },
     { href: '/interview', label: 'Mock Interview', icon: '🎤', requiresAuth: false },
@@ -32,21 +58,21 @@ const navItems = [
     { href: '/admin/analytics', label: 'Analytics', icon: '📈', requiresAuth: true, adminOnly: true },
     { href: '/admin/schools', label: 'Admin', icon: '⚙️', requiresAuth: true, adminOnly: true },
   ]
+  
   const visibleItems = navItems.filter(item => {
     if (item.adminOnly && !isAdmin) return false
     if (item.requiresAuth && !isLoggedIn) return false
     return true
   })
-
+               
   const toggleCollapse = () => {
     const newState = !isCollapsed
     setIsCollapsed(newState)
     onCollapsedChange?.(newState)
   }
-
+ 
   return (
     <>
-      {/* Mobile Hamburger - ONLY visible on mobile (hidden on desktop with lg:hidden) */}
       <button
         onClick={() => setMobileOpen(!mobileOpen)}
         className="lg:hidden fixed top-4 left-4 z-50 p-3 bg-slate-800 text-white rounded-lg shadow-lg"
@@ -60,7 +86,6 @@ const navItems = [
         </svg>
       </button>
 
-      {/* Mobile Overlay - ONLY visible on mobile when menu is open */}
       {mobileOpen && (
         <div
           className="lg:hidden fixed inset-0 bg-black/50 z-30"
@@ -68,11 +93,10 @@ const navItems = [
         />
       )}
 
-      {/* Sidebar - Desktop: always visible | Mobile: slides in when mobileOpen is true */}
       <div
         className={`
-          ${isCollapsed ? 'w-20' : 'w-64'} 
-          bg-gradient-to-b from-slate-900 to-slate-800 
+          ${isCollapsed ? 'w-20' : 'w-64'}
+          bg-gradient-to-b from-slate-900 to-slate-800
           min-h-screen transition-all duration-300 flex flex-col fixed left-0 top-0 z-40
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         `}
@@ -91,8 +115,8 @@ const navItems = [
           </button>
         </div>
 
-        <nav className="flex-1 p-4">
-          <ul className="space-y-2">
+        <nav className="flex-1 flex flex-col p-4">
+          <ul className="space-y-2 flex-1">
             {visibleItems.map((item) => (
               <li key={item.href}>
                 <Link
@@ -109,6 +133,38 @@ const navItems = [
               </li>
             ))}
           </ul>
+
+          {/* Updates Link - Separated at bottom */}
+          {isLoggedIn && (
+            <>
+              <div className="border-t border-white/10 my-4"></div>
+              <Link
+                href="/updates"
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg transition relative ${
+                  pathname === '/updates'
+                    ? 'bg-white/20 text-white font-semibold'
+                    : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <span className="text-xl">📣</span>
+                {!isCollapsed && (
+                  <>
+                    <span className="text-sm">Updates</span>
+                    {unreadCount > 0 && (
+                      <span className="ml-auto bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </>
+                )}
+                {isCollapsed && unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">
+                    {unreadCount}
+                  </span>
+                )}
+              </Link>
+            </>
+          )}
         </nav>
       </div>
     </>
