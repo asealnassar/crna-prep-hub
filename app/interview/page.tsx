@@ -175,9 +175,18 @@ ${recentQuestions.slice(0, 20).map((q, i) => `${i + 1}. ${q}`).join('\n')}
 Generate DIFFERENT scenarios using the random seed below.\n`
       : ''
 
-    let basePrompt = `You are conducting a CRNA program interview for ICU nurses applying to CRNA school. This is question ${questionCount + 1} of ${maxQuestions}.
+let basePrompt = `You are conducting a CRNA program interview for ICU nurses applying to CRNA school. This is question ${questionCount + 1} of ${maxQuestions}.
 
 RANDOM SEED: ${randomSeed} - Use this to generate variety. Do NOT default to the same scenarios.
+
+CRITICAL SCORING RULES:
+- Be HONEST and ACCURATE in your scoring
+- Random letters, one-word answers, or nonsense = 0-1/10
+- Vague or incomplete answers = 2-4/10
+- Adequate answers = 5-6/10
+- Good answers = 7-8/10
+- Excellent answers = 9-10/10
+- If answer is gibberish or makes no sense, say so directly in feedback
 
 FORMATTING:
 - Plain text only (no asterisks, no markdown)
@@ -196,10 +205,12 @@ After each answer:
 Score: X/10
 
 What you did well:
-- [2-3 strengths]
+- [2-3 strengths - if answer was good quality]
+- [If answer was poor/nonsense, say: "Your answer did not address the question" or "Your response was unclear"]
 
 What to tighten:
-- [2-3 improvements]
+- [2-3 specific improvements needed]
+- [For nonsense answers: "Please provide a coherent, relevant response"]
 
 Elite-level version:
 "[Perfect answer]"
@@ -217,7 +228,6 @@ After their answer:
 - "This concludes your interview. Good luck with your CRNA applications!"
 
 ${avoidList}`
-
     switch (interviewType) {
       case 'emotional':
         return basePrompt + `
@@ -287,7 +297,7 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
     setLoading(false)
   }
 
-  const sendMessage = async () => {
+const sendMessage = async () => {
     if (!input.trim() || loading || interviewEnded) return
     const newMessages = [...messages, { role: 'user', content: input }]
     setMessages(newMessages)
@@ -295,12 +305,8 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
     setLoading(true)
     const newQuestionCount = questionCount + 1
     setQuestionCount(newQuestionCount)
-    if (newQuestionCount > maxQuestions) {
-      setMessages([...newMessages, { role: 'assistant', content: 'This concludes our interview. Thank you for practicing with CRNA Prep Hub! Good luck with your CRNA applications! 🎉' }])
-      setInterviewEnded(true)
-      setLoading(false)
-      return
-    }
+    
+    // Always get AI feedback, even for question 10
     try {
       const response = await fetch('/api/interview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: newMessages, systemMessage: getSystemMessage() }) })
       const data = await response.json()
@@ -313,13 +319,16 @@ Ask short, realistic questions related to this topic for ICU nurses applying to 
       
       setTimeout(() => saveSession(), 1000)
       
-      if (data.message.includes('concludes') || data.message.includes('Overall interview score')) { setInterviewEnded(true) }
+      // End interview after question 10 feedback is given
+if (newQuestionCount > maxQuestions || data.message.includes('concludes') || data.message.includes('Overall interview score')) {      
+
+        setInterviewEnded(true)
+      }
     } catch (error) {
       setMessages([...newMessages, { role: 'assistant', content: 'I apologize, but I encountered an error. Please try again.' }])
     }
     setLoading(false)
   }
-
   const resetInterview = () => {
     setStarted(false)
     setMessages([])
