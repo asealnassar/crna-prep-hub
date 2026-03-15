@@ -630,7 +630,41 @@ if (newQuestionCount > maxQuestions || data.message.includes('concludes') || dat
                 {!interviewEnded ? (
                   <div className="flex gap-2 sm:gap-3">
                     <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && sendMessage()} placeholder={isListening ? "Listening..." : "Type or click mic..."} className={`flex-1 px-3 sm:px-4 py-2 sm:py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base ${isListening ? 'border-red-500 bg-red-50' : 'border-gray-300'}`} />
-                    <button onClick={() => { if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { alert('Speech recognition not supported. Try Chrome.'); return } const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition; const recognition = new SR(); recognition.continuous = false; recognition.interimResults = false; recognition.lang = 'en-US'; recognition.onstart = () => setIsListening(true); recognition.onend = () => setIsListening(false); recognition.onerror = () => setIsListening(false); recognition.onresult = (event: any) => { setInput(prev => prev + ' ' + event.results[0][0].transcript) }; if (isListening) { recognition.stop() } else { recognition.start() } }} className={`px-3 sm:px-4 py-2 sm:py-3 rounded-xl font-semibold transition text-sm sm:text-base ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>🎤</button>
+<button onClick={() => { 
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { 
+    alert('Speech recognition not supported. Try Chrome.'); 
+    return 
+  } 
+  
+  if (isListening) {
+    // Stop listening
+    (window as any).currentRecognition?.stop()
+    setIsListening(false)
+    return
+  }
+  
+  // Start listening
+  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+  const recognition = new SR()
+  recognition.continuous = true  // Keep listening continuously
+  recognition.interimResults = true  // Show partial results
+  recognition.lang = 'en-US'
+  
+  recognition.onstart = () => setIsListening(true)
+  recognition.onend = () => setIsListening(false)
+  recognition.onerror = () => setIsListening(false)
+  
+  recognition.onresult = (event: any) => { 
+    let transcript = ''
+    for (let i = 0; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript + ' '
+    }
+    setInput(transcript.trim())
+  }
+  
+  recognition.start()
+  ;(window as any).currentRecognition = recognition
+}} className={`px-3 sm:px-4 py-2 sm:py-3 rounded-xl font-semibold transition text-sm sm:text-base ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>🎤</button>
                     <button onClick={sendMessage} disabled={loading} className="px-4 sm:px-6 py-2 sm:py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition disabled:opacity-50 text-sm sm:text-base">Send</button>
                   </div>
                 ) : (
