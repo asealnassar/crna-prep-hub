@@ -16,6 +16,7 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [messagesUnreadCount, setMessagesUnreadCount] = useState(0)
   const pathname = usePathname()
   const supabase = createClient()
             
@@ -26,6 +27,7 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
   useEffect(() => {
     if (isLoggedIn && userEmail) {
       loadUnreadCount()
+      loadMessagesUnreadCount()
     }
   }, [isLoggedIn, userEmail])
 
@@ -45,6 +47,35 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
     const readIds = new Set(readUpdates?.map(r => r.update_id) || [])
     const unread = allUpdates?.filter(u => !readIds.has(u.id)).length || 0
     setUnreadCount(unread)
+  }
+
+  const loadMessagesUnreadCount = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    // Get user's subscription tier
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('subscription_tier')
+      .eq('id', user.id)
+      .single()
+
+    const userTier = profile?.subscription_tier || 'free'
+
+    // Get messages for this user's tier or 'all'
+    const { data: allMessages } = await supabase
+      .from('admin_messages')
+      .select('id')
+      .in('send_to', ['all', userTier])
+    
+    const { data: readMessages } = await supabase
+      .from('message_reads')
+      .select('message_id')
+      .eq('user_id', user.id)
+
+    const readIds = new Set(readMessages?.map(r => r.message_id) || [])
+    const unread = allMessages?.filter(m => !readIds.has(m.id)).length || 0
+    setMessagesUnreadCount(unread)
   }
 
   const navItems = [
@@ -134,10 +165,26 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
             ))}
           </ul>
 
-          {/* Updates Link - Separated at bottom */}
+          {/* Messages and Updates - Separated at bottom */}
           {isLoggedIn && (
             <>
               <div className="border-t border-white/10 my-4"></div>
+              
+{/* Messages button with unread count */}
+<button
+  onClick={() => {
+    const event = new Event('openMessages')
+    window.dispatchEvent(event)
+  }}
+  className="flex items-center gap-3 px-4 py-3 rounded-lg transition text-white/80 hover:bg-white/10 hover:text-white w-full text-left"
+>
+  <span className="text-xl">💬</span>
+  <span className="font-medium">Messages</span>
+  <span id="messages-unread-badge" className="ml-auto bg-white text-purple-600 text-xs font-bold px-2 py-1 rounded-full hidden">
+    0
+  </span>
+</button>
+              {/* Updates */}
               <Link
                 href="/updates"
                 className={`flex items-center gap-3 px-4 py-3 rounded-lg transition relative ${
