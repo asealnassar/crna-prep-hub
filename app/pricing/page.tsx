@@ -285,22 +285,26 @@ export default function Pricing() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
 
-            {/* FREE PLAN */}
+{/* FREE PLAN */}
             <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 border-2 border-gray-200">
               <h2 className="text-xl sm:text-2xl font-bold mb-2 text-gray-800">Free</h2>
               <p className="text-3xl sm:text-4xl font-bold mb-3 sm:mb-4 text-gray-800">$0</p>
-              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Get started with basic features</p>
-
+              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Get Started With The Basics</p>
+                  
               <ul className="space-y-2 sm:space-y-3 mb-6 sm:mb-8 text-sm sm:text-base">
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> View all 149+ CRNA schools</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Search schools</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> GPA filter</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Tuition filter</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> <strong>1 free AI mock interview</strong></li>
-                <li className="flex items-center text-gray-400"><span className="mr-2">✗</span> Advanced filters</li>
-                <li className="flex items-center text-gray-400"><span className="mr-2">✗</span> Unlimited interviews</li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Browse 130+ CRNA programs</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic filters (GPA, tuition, program type, format, application opening)</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Save favorite schools</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic GPA calculator</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic personal statement analyzer</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>1 free mock interview</strong></span></li>
+                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Advanced filters (state, deadline, GRE, prerequisites)</span></li>
+                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Unlimited mock interviews</span></li>
+                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Premium GPA analytics</span></li>
+                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>AI essay rewrites</span></li>
+                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>School-specific interview prep</span></li>
               </ul>
-
+              
               {user && userTier === 'free' ? (
                 <button className="w-full py-2 sm:py-3 rounded-xl border-2 border-gray-300 text-gray-600 font-semibold cursor-default text-sm sm:text-base">
                   Current Plan
@@ -312,7 +316,7 @@ export default function Pricing() {
               )}
             </div>
 
-            {/* PREMIUM PLAN */}
+{/* PREMIUM PLAN */}
             <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 border-2 border-blue-500 relative">
               <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-blue-500 text-white px-3 sm:px-4 py-1 rounded-full text-xs sm:text-sm font-semibold">
                 POPULAR
@@ -328,16 +332,18 @@ export default function Pricing() {
                   <span className="text-3xl sm:text-4xl font-bold text-gray-800">$29.99</span>
                 )}
               </div>
-              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">All filters to find your perfect school</p>
+              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Find Schools with a few clicks!</p>
 
               <ul className="space-y-2 sm:space-y-3 mb-6 sm:mb-8 text-sm sm:text-base">
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Everything in Free</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Filter by state</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Filter by application dates</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Filter by prerequisites</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Filter by GRE, interview method</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Save favorite schools</li>
-                <li className="flex items-center text-gray-400"><span className="mr-2">✗</span> Unlimited interviews</li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Everything in Free</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Advanced school filters</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Filter by state, GRE, prerequisites</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Filter by application deadlines</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Application method filters</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Direct school website links</span></li>
+                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Advanced GPA analytics</span></li>
+                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>AI personal statement rewrites</span></li>
+                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>School-specific interview styles</span></li>
               </ul>
 
               {user && userTier === 'premium' ? (
@@ -350,8 +356,8 @@ export default function Pricing() {
                 </button>
               )}
             </div>
-
-            {/* ULTIMATE PLAN */}
+          
+{/* ULTIMATE PLAN */}
             <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 border-2 border-purple-500 relative">
               <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-gradient-to-r from-purple-600 to-pink-500 text-white px-3 sm:px-4 py-1 rounded-full text-xs sm:text-sm font-semibold">
                 BEST VALUE
@@ -367,16 +373,18 @@ export default function Pricing() {
                   <span className="text-3xl sm:text-4xl font-bold text-gray-800">$49.99</span>
                 )}
               </div>
-              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Everything you need to succeed</p>
+              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Everything You Need To Get In</p>
 
               <ul className="space-y-2 sm:space-y-3 mb-6 sm:mb-8 text-sm sm:text-base">
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Everything in Premium</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> <strong>Unlimited AI mock interviews</strong></li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Voice-powered interviews</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Detailed performance feedback</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> <strong>School-specific interview styles</strong></li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Priority support</li>
-                <li className="flex items-center"><span className="text-green-500 mr-2">✓</span> Future updates included</li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Everything in Premium</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Advanced GPA calculator with trends</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Semester-by-semester GPA analysis</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Advanced personal statement analyzer</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>AI-powered essay rewrites</strong></span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Sentence-level feedback & improvements</span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>School-specific interview styles</strong></span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Unlimited mock interviews</strong></span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Priority support</span></li>
               </ul>
 
               {user && userTier === 'ultimate' ? (
@@ -389,7 +397,6 @@ export default function Pricing() {
                 </button>
               )}
             </div>
-
           </div>
 
           <div className="text-center mt-8 sm:mt-12 text-indigo-200 text-sm sm:text-base">

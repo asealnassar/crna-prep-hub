@@ -1,0 +1,125 @@
+import { NextRequest, NextResponse } from 'next/server'
+import OpenAI from 'openai'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+})
+
+export async function POST(request: NextRequest) {
+  try {
+    const { statement, userTier } = await request.json()
+
+    if (!statement || statement.trim().length < 100) {
+      return NextResponse.json(
+        { error: 'Statement must be at least 100 characters long' },
+        { status: 400 }
+      )
+    }
+
+    const isUltimate = userTier === 'ultimate'
+
+const systemPrompt = `You are a critical CRNA admissions consultant analyzing personal statements. Be HONEST and DIRECT - don't sugarcoat weaknesses. Provide specific, actionable feedback.
+
+Analyze this personal statement across these categories (score 1-10 for each category):
+ll
+Analyze this personal statement across these categories (score 1-10 for each):
+1. Hook Strength - Does the opening grab attention?
+2. Motivation for CRNA - Is the "why CRNA" clear and compelling?
+3. Clinical Depth - Are clinical experiences detailed and meaningful?
+4. Personal Uniqueness - Does this stand out from other applicants?
+5. Structure & Flow - Is it well-organized and easy to read?
+6. Red Flags - Any concerning elements (negativity, excuses, unprofessionalism)?
+
+For each category:
+- Give a score (1-10)
+- Provide 2-3 sentences of critical feedback
+- Suggest ONE specific improvement
+
+Then provide:
+- Admissions Committee Impression (2-3 sentences)
+- Biggest Weaknesses (top 3)
+- Top 3 Changes to Improve Acceptance Chances
+
+${isUltimate ? 'Also identify 5-7 specific sentences that are weak/generic/strong with improved versions.' : ''}
+
+Return ONLY valid JSON in this exact format:
+{
+  "overallScore": number,
+  "categories": [
+    {
+      "name": "Hook Strength",
+      "score": number,
+      "feedback": "string",
+      "suggestion": "string"
+    }
+  ],
+  "admissionsImpression": "string",
+  "biggestWeaknesses": ["string", "string", "string"],
+  "topChanges": ["string", "string", "string"]
+  ${isUltimate ? ', "sentenceAnalysis": [{"original": "string", "label": "Weak|Generic|Strong", "improved": "string"}]' : ''}
+}`
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: statement }
+      ],
+      temperature: 0.7,
+      max_tokens: 2500,
+      response_format: { type: 'json_object' }
+    })
+
+    const result = JSON.parse(completion.choices[0].message.content || '{}')
+
+    return NextResponse.json({ analysis: result })
+  } catch (error: any) {
+    console.error('OpenAI Error:', error)
+    return NextResponse.json(
+      { error: 'Analysis failed. Please try again.' },
+      { status: 500 }
+    )
+  }
+}
+
+// Rewrite endpoint
+export async function PUT(request: NextRequest) {
+  try {
+    const { statement, userTier } = await request.json()
+
+    if (userTier !== 'ultimate') {
+      return NextResponse.json(
+        { error: 'Rewrite feature is Ultimate only' },
+        { status: 403 }
+      )
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a CRNA admissions expert. Rewrite this personal statement to be more competitive while keeping the applicant's voice and experiences.
+
+Improvements to make:
+- Stronger hook that grabs attention
+- Clearer motivation for CRNA
+- More specific clinical examples
+- Better structure and flow
+- Remove generic phrases
+- Maintain authentic voice
+
+Return ONLY the improved statement (no explanation).`
+        },
+        { role: 'user', content: statement }
+      ],
+      temperature: 0.8,
+      max_tokens: 2000
+    })
+
+    return NextResponse.json({ rewritten: completion.choices[0].message.content })
+  } catch (error) {
+    return NextResponse.json({ error: 'Rewrite failed' }, { status: 500 })
+  }
+}
+
