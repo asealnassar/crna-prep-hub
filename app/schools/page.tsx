@@ -136,17 +136,21 @@ export default function Schools() {
     if (gpaFilter) { filtered = filtered.filter(school => school.gpa_requirement >= parseFloat(gpaFilter)) }
     if (minTuition) { filtered = filtered.filter(school => school.tuition_total >= parseFloat(minTuition)) }
     if (maxTuition) { filtered = filtered.filter(school => school.tuition_total <= parseFloat(maxTuition)) }
+    
+    // Free filters - now include Program Type, Format, Application Opens
+    if (programTypeFilter) { filtered = filtered.filter(school => school.program_type === programTypeFilter) }
+    if (formatFilter) {
+      if (formatFilter === 'In-Person') { filtered = filtered.filter(school => school.format && school.format.toLowerCase() === 'in-person') }
+      else if (formatFilter === 'Hybrid') { filtered = filtered.filter(school => school.format && school.format.toLowerCase() !== 'in-person') }
+    }
+    if (opensMonthFilters.length > 0) { filtered = filtered.filter(school => school.application_opens_month && opensMonthFilters.some(month => school.application_opens_month.includes(month))) }
+    
+    // Premium-only filters
     if (isPremium) {
       if (stateFilters.length > 0) { filtered = filtered.filter(school => stateFilters.includes(school.location_state)) }
-      if (programTypeFilter) { filtered = filtered.filter(school => school.program_type === programTypeFilter) }
-      if (opensMonthFilters.length > 0) { filtered = filtered.filter(school => school.application_opens_month && opensMonthFilters.some(month => school.application_opens_month.includes(month))) }
       if (deadlineMonthFilters.length > 0) { filtered = filtered.filter(school => school.application_deadline && deadlineMonthFilters.some(month => school.application_deadline.includes(month))) }
       if (greFilter) { filtered = filtered.filter(school => school.gre_requirement === greFilter) }
       if (methodFilter) { filtered = filtered.filter(school => school.application_method === methodFilter) }
-      if (formatFilter) {
-        if (formatFilter === 'In-Person') { filtered = filtered.filter(school => school.format && school.format.toLowerCase() === 'in-person') }
-        else if (formatFilter === 'Hybrid') { filtered = filtered.filter(school => school.format && school.format.toLowerCase() !== 'in-person') }
-      }
       if (prereqsRequired.length > 0) {
         filtered = filtered.filter(school => {
           if (!school.prerequisites_required) return false
@@ -202,16 +206,18 @@ export default function Schools() {
             <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-2">CRNA School Database</h1>
             <p className="text-sm sm:text-base text-indigo-200">Browse and filter {schools.length} CRNA programs</p>
           </div>
-          
+
           <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 mb-6 sm:mb-8">
             <h2 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">Filters</h2>
+            
+            {/* FREE FILTERS */}
             <div className="mb-6">
               <h3 className="text-base sm:text-lg font-semibold text-green-600 mb-3">Free Filters</h3>
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Search Schools</label>
                 <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="e.g., Duke, Chicago, CA..." className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base" />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Min GPA Requirement</label>
                   <input type="number" step="0.1" min="2.0" max="4.0" value={gpaFilter} onChange={(e) => setGpaFilter(e.target.value)} placeholder="e.g., 3.0" className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base" />
@@ -225,8 +231,48 @@ export default function Schools() {
                   <input type="number" step="1000" value={maxTuition} onChange={(e) => setMaxTuition(e.target.value)} placeholder="e.g., 150000" className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base" />
                 </div>
               </div>
+              
+              {/* NEW: Program Type, Format, Application Opens - NOW FREE */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Program Type</label>
+                  <select value={programTypeFilter} onChange={(e) => setProgramTypeFilter(e.target.value)} className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base">
+                    <option value="">All Types</option>
+                    <option value="DNP">DNP</option>
+                    <option value="DNAP">DNAP</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Format</label>
+                  <select value={formatFilter} onChange={(e) => setFormatFilter(e.target.value)} className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base">
+                    <option value="">All Formats</option>
+                    <option value="In-Person">In-Person</option>
+                    <option value="Hybrid">Hybrid (blended/online)</option>
+                  </select>
+                </div>
+                <div className="relative">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Application Opens {opensMonthFilters.length > 0 && <span className="text-purple-600 text-xs sm:text-sm">({opensMonthFilters.length})</span>}</label>
+                  <button onClick={() => setShowOpensDropdown(!showOpensDropdown)} className="w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl text-left focus:outline-none focus:ring-2 focus:ring-purple-500 text-xs sm:text-sm bg-white">
+                    {opensMonthFilters.length === 0 ? 'Select months...' : opensMonthFilters.join(', ')}
+                  </button>
+                  {showOpensDropdown && (
+                    <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+                      {months.map(month => (
+                        <label key={month} className="flex items-center px-3 sm:px-4 py-2 hover:bg-gray-50 cursor-pointer">
+                          <input type="checkbox" checked={opensMonthFilters.includes(month)} onChange={() => toggleOpensMonth(month)} className="mr-2 sm:mr-3 h-4 w-4 text-purple-600" />
+                          <span className="text-sm">{month}</span>
+                        </label>
+                      ))}
+                      <div className="border-t p-2">
+                        <button onClick={() => { setOpensMonthFilters([]); setShowOpensDropdown(false) }} className="text-sm text-purple-600 hover:text-purple-700">Clear all</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-            
+
+            {/* PREMIUM FILTERS */}
             <div className="border-t pt-6">
               <h3 className="text-base sm:text-lg font-semibold text-purple-600 mb-3">{isPremium ? 'Premium Filters (Unlocked!)' : 'Premium Filters'}</h3>
               <div className="mb-4">
@@ -244,41 +290,8 @@ export default function Schools() {
                   <button onClick={() => setStateFilters([])} className="text-sm text-purple-600 hover:text-purple-700 mt-2">Clear all states</button>
                 )}
               </div>
-              
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Program Type</label>
-                  <select value={programTypeFilter} onChange={(e) => setProgramTypeFilter(e.target.value)} disabled={!isPremium} className={`w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base ${!isPremium ? 'bg-gray-100 opacity-60' : ''}`}>
-                    <option value="">{isPremium ? 'All Types' : 'Locked'}</option>
-                    {isPremium && (<><option value="DNP">DNP</option><option value="DNAP">DNAP</option></>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Format</label>
-                  <select value={formatFilter} onChange={(e) => setFormatFilter(e.target.value)} disabled={!isPremium} className={`w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm sm:text-base ${!isPremium ? 'bg-gray-100 opacity-60' : ''}`}>
-                    <option value="">{isPremium ? 'All Formats' : 'Locked'}</option>
-                    {isPremium && (<><option value="In-Person">In-Person</option><option value="Hybrid">Hybrid (blended/online)</option></>)}
-                  </select>
-                </div>
-                <div className="relative">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Application Opens {opensMonthFilters.length > 0 && <span className="text-purple-600 text-xs sm:text-sm">({opensMonthFilters.length})</span>}</label>
-                  <button onClick={() => isPremium && setShowOpensDropdown(!showOpensDropdown)} disabled={!isPremium} className={`w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl text-left focus:outline-none focus:ring-2 focus:ring-purple-500 text-xs sm:text-sm ${!isPremium ? 'bg-gray-100 opacity-60' : 'bg-white'}`}>
-                    {!isPremium ? 'Locked' : opensMonthFilters.length === 0 ? 'Select months...' : opensMonthFilters.join(', ')}
-                  </button>
-                  {showOpensDropdown && isPremium && (
-                    <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-xl shadow-lg max-h-60 overflow-y-auto">
-                      {months.map(month => (
-                        <label key={month} className="flex items-center px-3 sm:px-4 py-2 hover:bg-gray-50 cursor-pointer">
-                          <input type="checkbox" checked={opensMonthFilters.includes(month)} onChange={() => toggleOpensMonth(month)} className="mr-2 sm:mr-3 h-4 w-4 text-purple-600" />
-                          <span className="text-sm">{month}</span>
-                        </label>
-                      ))}
-                      <div className="border-t p-2">
-                        <button onClick={() => { setOpensMonthFilters([]); setShowOpensDropdown(false) }} className="text-sm text-purple-600 hover:text-purple-700">Clear all</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
                 <div className="relative">
                   <label className="block text-sm font-medium text-gray-700 mb-2">Application Deadline {deadlineMonthFilters.length > 0 && <span className="text-purple-600 text-xs sm:text-sm">({deadlineMonthFilters.length})</span>}</label>
                   <button onClick={() => isPremium && setShowDeadlineDropdown(!showDeadlineDropdown)} disabled={!isPremium} className={`w-full px-3 sm:px-4 py-2 sm:py-3 border border-gray-300 rounded-xl text-left focus:outline-none focus:ring-2 focus:ring-purple-500 text-xs sm:text-sm ${!isPremium ? 'bg-gray-100 opacity-60' : 'bg-white'}`}>
@@ -313,7 +326,7 @@ export default function Schools() {
                   </select>
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">What is Required {!isPremium && '(Locked)'}</label>
@@ -340,20 +353,20 @@ export default function Schools() {
                   </div>
                 </div>
               </div>
-              
+
               {!isPremium && (
                 <Link href="/pricing" className="block mt-4 p-3 sm:p-4 bg-gradient-to-r from-purple-100 to-pink-100 border border-purple-300 rounded-xl hover:from-purple-200 hover:to-pink-200 transition">
-                  <p className="text-xs sm:text-sm text-purple-800"><strong>Unlock all premium filters for $29.99!</strong> Filter by states, application dates, GRE requirements, application methods, prerequisites and more. <span className="underline">Click here to upgrade</span></p>
+                  <p className="text-xs sm:text-sm text-purple-800"><strong>Unlock all premium filters for $29.99!</strong> Filter by states, application deadlines, GRE requirements, application methods, prerequisites and more. <span className="underline">Click here to upgrade</span></p>
                 </Link>
               )}
             </div>
           </div>
-          
+
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6">
             <p className="text-sm sm:text-base text-indigo-200">Showing <strong className="text-white">{filteredSchools.length}</strong> of {schools.length} schools</p>
             {isLoggedIn && <p className="text-sm sm:text-base text-pink-300 font-semibold">{savedSchools.length} schools saved</p>}
           </div>
-          
+
           <div className="flex flex-col gap-4 sm:gap-6">
             {filteredSchools.map((school) => (
               <div key={school.id} className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 hover:shadow-2xl transition relative border-l-4 border-purple-500">
@@ -369,7 +382,7 @@ export default function Schools() {
                     <p className="text-sm sm:text-base text-gray-500">{school.location_city}, {school.location_state}</p>
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3 text-xs sm:text-sm mt-4 sm:mt-5">
                   <div className="bg-purple-50 rounded-lg p-2 sm:p-3">
                     <span className="text-purple-600 text-xs font-medium">GPA</span>
@@ -391,18 +404,18 @@ export default function Schools() {
                     <span className="text-pink-600 text-xs font-medium">Tuition</span>
                     <p className="text-gray-800 font-bold text-sm sm:text-base">${school.tuition_total?.toLocaleString()}</p>
                   </div>
-                  
-                  {/* Premium fields - show on 2nd row on mobile, inline on desktop */}
-                  <div className={`bg-indigo-50 rounded-lg p-2 sm:p-3 relative ${!isPremium ? 'overflow-hidden' : ''}`}>
+
+                  {/* NOW FREE - Format, Opens */}
+                  <div className="bg-indigo-50 rounded-lg p-2 sm:p-3">
                     <span className="text-indigo-600 text-xs font-medium">Format</span>
-                    <p className={`text-gray-800 font-bold text-sm sm:text-base ${!isPremium ? 'blur-sm select-none' : ''}`}>{school.format || 'N/A'}</p>
-                    {!isPremium && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs">🔒</span></div>}
+                    <p className="text-gray-800 font-bold text-sm sm:text-base">{school.format || 'N/A'}</p>
                   </div>
-                  <div className={`bg-yellow-50 rounded-lg p-2 sm:p-3 relative ${!isPremium ? 'overflow-hidden' : ''}`}>
+                  <div className="bg-yellow-50 rounded-lg p-2 sm:p-3">
                     <span className="text-yellow-600 text-xs font-medium">Opens</span>
-                    <p className={`text-gray-800 font-bold text-sm sm:text-base ${!isPremium ? 'blur-sm select-none' : ''}`}>{school.application_opens_month || 'N/A'}</p>
-                    {!isPremium && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs">🔒</span></div>}
+                    <p className="text-gray-800 font-bold text-sm sm:text-base">{school.application_opens_month || 'N/A'}</p>
                   </div>
+                  
+                  {/* STILL PREMIUM - Deadline, GRE, Method */}
                   <div className={`bg-red-50 rounded-lg p-2 sm:p-3 relative ${!isPremium ? 'overflow-hidden' : ''}`}>
                     <span className="text-red-600 text-xs font-medium">Deadline</span>
                     <p className={`text-gray-800 font-bold text-sm sm:text-base ${!isPremium ? 'blur-sm select-none' : ''}`}>{school.application_deadline || 'N/A'}</p>
@@ -419,7 +432,7 @@ export default function Schools() {
                     {!isPremium && <div className="absolute inset-0 flex items-center justify-center"><span className="text-xs">🔒</span></div>}
                   </div>
                 </div>
-                
+
                 {(school.prerequisites_required || school.prerequisites_not_required) && (
                   <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-gray-100">
                     {school.prerequisites_required && (
@@ -430,7 +443,7 @@ export default function Schools() {
                     )}
                   </div>
                 )}
-                
+
                 <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                   {school.website_url && isPremium && (
                     <a href={school.website_url} target="_blank" rel="noopener noreferrer" className="w-full sm:w-auto text-center inline-flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-500 text-white text-xs sm:text-sm font-semibold rounded-lg hover:opacity-90 transition">
@@ -444,7 +457,7 @@ export default function Schools() {
               </div>
             ))}
           </div>
-          
+
           {filteredSchools.length === 0 && (
             <div className="text-center py-12">
               <p className="text-white text-base sm:text-lg">No schools match your filters. Try adjusting your criteria.</p>
@@ -452,7 +465,7 @@ export default function Schools() {
           )}
         </div>
       </div>
-      
+
       {/* Report Modal */}
       {showReportModal && reportingSchool && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
