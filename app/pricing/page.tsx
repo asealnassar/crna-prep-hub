@@ -325,11 +325,11 @@ export default function Pricing() {
               <div className="mb-3 sm:mb-4">
                 {promoValid ? (
                   <>
-                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'29.99'}</span>
+                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'14.99'}</span>
                     <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">${premiumPrice}</span>
                   </>
                 ) : (
-                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$29.99</span>
+                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$14.99</span>
                 )}
               </div>
               <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Find Schools with a few clicks!</p>
@@ -366,11 +366,11 @@ export default function Pricing() {
               <div className="mb-3 sm:mb-4">
                 {promoValid ? (
                   <>
-                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'49.99'}</span>
+                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'34.99'}</span>
                     <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">${ultimatePrice}</span>
                   </>
                 ) : (
-                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$49.99</span>
+                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$34.99</span>
                 )}
               </div>
               <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Everything You Need To Get In</p>
