@@ -156,9 +156,9 @@ export default function Pricing() {
     setLoading('')
   }
 
-  const discountAmount = promoData?.discount_amount ? promoData.discount_amount / 100 : 0
-  const premiumPrice = promoValid ? (29.99 - discountAmount).toFixed(2) : '29.99'
-  const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
+const discountAmount = promoData?.discount_amount ? promoData.discount_amount / 100 : 0
+const premiumPrice = promoValid ? (14.99 - discountAmount).toFixed(2) : '14.99'
+const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
 
   const renderBannerText = (text: string, code: string) => {
     return text.split('{CODE}').map((part, idx, arr) => (
