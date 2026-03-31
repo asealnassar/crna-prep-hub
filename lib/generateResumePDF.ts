@@ -8,44 +8,45 @@ export function generateResumePDF(resumeData: any, templateId: string = 'modern'
   const margin = 20
   let yPosition = 20
 
-// Template-specific settings
+  // Template-specific settings
   const templates: any = {
     modern: {
-      primaryColor: [100, 80, 200] as const,    // Purple
-      accentColor: [139, 92, 246] as const,     // Light purple
+      primaryColor: [100, 80, 200] as const,
+      accentColor: [139, 92, 246] as const,
       headerSize: 18,
       sectionSize: 12,
       bodySize: 10
     },
     professional: {
-      primaryColor: [30, 58, 138] as const,     // Navy blue
-      accentColor: [59, 130, 246] as const,     // Blue
+      primaryColor: [30, 58, 138] as const,
+      accentColor: [59, 130, 246] as const,
       headerSize: 16,
       sectionSize: 11,
       bodySize: 10
     },
     ats: {
-      primaryColor: [0, 0, 0] as const,         // Black
-      accentColor: [75, 85, 99] as const,       // Gray
+      primaryColor: [0, 0, 0] as const,
+      accentColor: [75, 85, 99] as const,
       headerSize: 16,
       sectionSize: 11,
       bodySize: 10
     },
     compact: {
-      primaryColor: [17, 24, 39] as const,      // Dark gray
-      accentColor: [107, 114, 128] as const,    // Medium gray
+      primaryColor: [17, 24, 39] as const,
+      accentColor: [107, 114, 128] as const,
       headerSize: 14,
       sectionSize: 10,
       bodySize: 9
     },
     creative: {
-      primaryColor: [219, 39, 119] as const,    // Pink
-      accentColor: [236, 72, 153] as const,     // Light pink
+      primaryColor: [219, 39, 119] as const,
+      accentColor: [236, 72, 153] as const,
       headerSize: 18,
       sectionSize: 12,
       bodySize: 10
     }
   }
+
   const template = templates[templateId] || templates.modern
 
   // Helper to add section header
@@ -53,10 +54,10 @@ export function generateResumePDF(resumeData: any, templateId: string = 'modern'
     yPosition += 5
     doc.setFontSize(template.sectionSize)
     doc.setFont('helvetica', 'bold')
-    doc.setTextColor(...template.primaryColor)
+    doc.setTextColor(...(template.primaryColor as [number, number, number]))
     doc.text(title.toUpperCase(), margin, yPosition)
     yPosition += 2
-    doc.setDrawColor(...template.accentColor)
+    doc.setDrawColor(...(template.accentColor as [number, number, number]))
     doc.setLineWidth(0.5)
     doc.line(margin, yPosition, pageWidth - margin, yPosition)
     yPosition += 6
@@ -87,7 +88,7 @@ export function generateResumePDF(resumeData: any, templateId: string = 'modern'
   
   if (templateId === 'creative') {
     // Creative template: Colored header bar
-    doc.setFillColor(...template.primaryColor)
+    doc.setFillColor(...(template.primaryColor as [number, number, number]))
     doc.rect(0, 0, pageWidth, 40, 'F')
     doc.setTextColor(255, 255, 255)
     doc.setFontSize(template.headerSize)
@@ -110,7 +111,7 @@ export function generateResumePDF(resumeData: any, templateId: string = 'modern'
     // Standard templates
     doc.setFontSize(template.headerSize)
     doc.setFont('helvetica', 'bold')
-    doc.setTextColor(...template.primaryColor)
+    doc.setTextColor(...(template.primaryColor as [number, number, number]))
     const nameWidth = doc.getTextWidth(personal.full_name || 'Name')
     doc.text(personal.full_name || 'Name', (pageWidth - nameWidth) / 2, yPosition)
     yPosition += template.headerSize * 0.6
@@ -134,7 +135,7 @@ export function generateResumePDF(resumeData: any, templateId: string = 'modern'
     yPosition += 3
     doc.setFontSize(template.sectionSize)
     doc.setFont('helvetica', 'bold')
-    doc.setTextColor(...template.primaryColor)
+    doc.setTextColor(...(template.primaryColor as [number, number, number]))
     const summaryTitleWidth = doc.getTextWidth('PROFESSIONAL SUMMARY')
     doc.text('PROFESSIONAL SUMMARY', (pageWidth - summaryTitleWidth) / 2, yPosition)
     yPosition += 6
