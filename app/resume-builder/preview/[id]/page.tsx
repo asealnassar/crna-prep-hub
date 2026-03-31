@@ -103,11 +103,10 @@ export default function PreviewResume() {
 
       const data = await res.json()
       if (data.bullets) {
-        setEnhancedBullets(prev => ({
+setEnhancedBullets((prev: any) => ({
           ...prev,
           [positionIndex]: data.bullets
         }))
-
         // SAVE TO DATABASE
         const icuSection = sections.find(s => s.section_type === 'icu_experience')
         if (icuSection) {
