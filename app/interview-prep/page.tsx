@@ -158,7 +158,7 @@ export default function InterviewPrep() {
                   <p className="text-purple-200/80 text-xs sm:text-sm">You're viewing 3 sample schools. Upgrade to Ultimate to unlock all {schools.length} schools!</p>
                 </div>
                 <Link href="/pricing" className="w-full md:w-auto text-center px-4 sm:px-6 py-2 sm:py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition whitespace-nowrap text-sm sm:text-base">
-                  Upgrade to Ultimate - $49.99
+                  Upgrade to Ultimate
                 </Link>
               </div>
             </div>

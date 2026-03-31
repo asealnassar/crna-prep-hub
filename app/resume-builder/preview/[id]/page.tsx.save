@@ -1,0 +1,484 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter, useParams } from 'next/navigation'
+import { createClient } from '@/lib/supabase-browser'
+import Sidebar from '@/components/Sidebar'
+import Link from 'next/link'
+import { generateResumePDF } from '@/lib/generateResumePDF'
+
+export default function PreviewResume() {
+  const [resume, setResume] = useState<any>(null)
+  const [sections, setSections] = useState<any[]>([])
+  const [score, setScore] = useState<any>(null)
+  const [enhancedBullets, setEnhancedBullets] = useState<any>({})
+  const [loading, setLoading] = useState(true)
+  const [enhancing, setEnhancing] = useState(false)
+  const [scoring, setScoring] = useState(false)
+  const [userEmail, setUserEmail] = useState('')
+  const [userTier, setUserTier] = useState('free')
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const router = useRouter()
+  const params = useParams()
+  const supabase = createClient()
+  const resumeId = params?.id as string
+
+  const isUltimate = userTier === 'ultimate'
+
+  const calculateScore = async () => {
+    setScoring(true)
+    try {
+      const res = await fetch('/api/resume/score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resumeId })
+      })
+
+      const data = await res.json()
+      if (data.overall_score !== undefined) {
+        setScore(data)
+      }
+    } catch (error) {
+      console.error('Scoring error:', error)
+    } finally {
+      setScoring(false)
+    }
+  }
+
+const enhancePosition = async (positionIndex: number) => {
+    const icuData = sections.find(s => s.section_type === 'icu_experience')?.section_data
+    if (!icuData?.positions?.[positionIndex]) return
+
+    setEnhancing(true)
+    try {
+      const res = await fetch('/api/resume/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          icuPosition: icuData.positions[positionIndex],
+          userTier
+        })
+      })
+
+      const data = await res.json()
+      if (data.bullets) {
+        // Update local state
+        setEnhancedBullets(prev => ({
+          ...prev,
+          [positionIndex]: data.bullets
+        }))
+
+        // SAVE TO DATABASE IMMEDIATELY
+        const icuSection = sections.find(s => s.section_type === 'icu_experience')
+        if (icuSection) {
+          const newPositions = [...icuData.positions]
+          newPositions[positionIndex].bullet_points = data.bullets
+
+          await supabase
+            .from('resume_sections')
+            .update({ 
+              section_data: { ...icuData, positions: newPositions } 
+            })
+            .eq('id', icuSection.id)
+
+          // Reload sections to reflect changes
+          const { data: sectionsData } = await supabase
+            .from('resume_sections')
+            .select('*')
+            .eq('resume_id', resumeId)
+            .order('order_index')
+
+          if (sectionsData) {
+            setSections(sectionsData)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Enhancement error:', error)
+      alert('Failed to enhance bullets. Please try again.')
+    } finally {
+      setEnhancing(false)
+    }
+  }
+
+
+const downloadPDF = () => {
+    try {
+      const pdfData = {
+        personal: personalData,
+        education: educationData,
+        certifications: certificationsData,
+        icu_experience: icuData,
+        shadowing: shadowingData,
+        leadership: leadershipData,
+        research: researchData,
+        enhancedBullets: enhancedBullets
+      }
+
+      const templateToUse = (resume && resume.template_id) ? resume.template_id : 'modern'
+      console.log('Using template:', templateToUse) // Debug
+      
+      const pdf = generateResumePDF(pdfData, templateToUse)
+      pdf.save(`${personalData.full_name || 'Resume'}_CRNA_Resume.pdf`)
+    } catch (error) {
+      console.error('PDF Error:', error)
+      alert('Failed to generate PDF. Please try again.')
+    }
+  }
+  if (!resume) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-white text-xl mb-4">Resume not found</div>
+          <Link href="/resume-builder" className="text-indigo-200 hover:text-white underline">
+            ← Back to Resume Builder
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
+  // Get section data
+  const personalData = sections.find(s => s.section_type === 'personal')?.section_data || {}
+  const educationData = sections.find(s => s.section_type === 'education')?.section_data || {}
+  const certificationsData = sections.find(s => s.section_type === 'certifications')?.section_data || {}
+  const icuData = sections.find(s => s.section_type === 'icu_experience')?.section_data || {}
+  const shadowingData = sections.find(s => s.section_type === 'shadowing')?.section_data || {}
+  const leadershipData = sections.find(s => s.section_type === 'leadership')?.section_data || {}
+  const researchData = sections.find(s => s.section_type === 'research')?.section_data || {}
+
+  const getScoreColor = (score: number) => {
+    if (score >= 80) return 'text-green-600 bg-green-50'
+    if (score >= 60) return 'text-yellow-600 bg-yellow-50'
+    return 'text-red-600 bg-red-50'
+  }
+
+  return (
+    <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+      <Sidebar
+        isLoggedIn={isLoggedIn}
+        userEmail={userEmail}
+        isAdmin={userEmail === 'asealnassar@gmail.com'}
+        onCollapsedChange={setSidebarCollapsed}
+      />
+
+      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          
+          {/* Header */}
+          <div className="mb-8">
+            <Link href="/resume-builder" className="text-indigo-200 hover:text-white mb-4 inline-flex items-center gap-2">
+              ← Back to Resume Builder
+            </Link>
+            <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">{resume.title}</h1>
+            <p className="text-indigo-200">Review and enhance your CRNA resume</p>
+          </div>
+
+          {/* Resume Score */}
+          {score && (
+            <div className="bg-white rounded-2xl shadow-xl p-6 mb-8">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">Resume Score</h2>
+              
+              <div className="flex items-center gap-6 mb-6">
+                <div className={`text-6xl font-bold ${getScoreColor(score.overall_score)} rounded-2xl px-6 py-4`}>
+                  {score.overall_score}/100
+                </div>
+                <div className="flex-1">
+                  <div className="w-full bg-gray-200 rounded-full h-4 mb-2">
+                    <div 
+                      className="bg-gradient-to-r from-purple-600 to-pink-500 h-4 rounded-full transition-all duration-500"
+                      style={{ width: `${score.overall_score}%` }}
+                    />
+                  </div>
+                  <p className="text-sm text-gray-600">
+                    {score.overall_score >= 80 && '🎉 Exceptional - Top-tier programs'}
+                    {score.overall_score >= 60 && score.overall_score < 80 && '✓ Competitive - Most programs'}
+                    {score.overall_score < 60 && '⚠️ Needs improvement'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Score Breakdown */}
+              <div className="grid md:grid-cols-3 gap-4 mb-6">
+                <div className="border rounded-lg p-3">
+                  <div className="text-sm text-gray-600">ICU Experience</div>
+                  <div className="text-2xl font-bold text-purple-600">{score.icu_experience_score}/30</div>
+                </div>
+                <div className="border rounded-lg p-3">
+                  <div className="text-sm text-gray-600">Certifications</div>
+                  <div className="text-2xl font-bold text-purple-600">{score.certifications_score}/20</div>
+                </div>
+                <div className="border rounded-lg p-3">
+                  <div className="text-sm text-gray-600">Shadowing</div>
+                  <div className="text-2xl font-bold text-purple-600">{score.shadowing_score}/15</div>
+                </div>
+                <div className="border rounded-lg p-3">
+                  <div className="text-sm text-gray-600">Leadership</div>
+                  <div className="text-2xl font-bold text-purple-600">{score.leadership_score}/15</div>
+                </div>
+                <div className="border rounded-lg p-3">
+                  <div className="text-sm text-gray-600">Education</div>
+                  <div className="text-2xl font-bold text-purple-600">{score.education_score}/10</div>
+                </div>
+                <div className="border rounded-lg p-3">
+                  <div className="text-sm text-gray-600">Research/QI</div>
+                  <div className="text-2xl font-bold text-purple-600">{score.research_score}/10</div>
+                </div>
+              </div>
+
+              {/* Top Suggestions */}
+              {score.suggestions?.length > 0 && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                  <h3 className="font-semibold text-yellow-900 mb-2">Top 3 Improvements</h3>
+                  <ul className="space-y-2">
+                    {score.suggestions.map((suggestion: any, idx: number) => (
+                      <li key={idx} className="flex items-start gap-2 text-sm text-yellow-800">
+                        <span className="font-bold">{idx + 1}.</span>
+                        <div>
+                          <span className="font-semibold">{suggestion.suggestion}</span>
+                          <span className="ml-2 text-xs bg-yellow-200 px-2 py-1 rounded">{suggestion.impact}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Red Flags */}
+              {score.red_flags?.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <h3 className="font-semibold text-red-900 mb-2">⚠️ Red Flags</h3>
+                  <ul className="space-y-1">
+                    {score.red_flags.map((flag: any, idx: number) => (
+                      <li key={idx} className="text-sm text-red-800">• {flag.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {scoring && (
+            <div className="bg-white rounded-2xl shadow-xl p-6 mb-8">
+              <div className="text-center text-gray-600">Calculating your resume score...</div>
+            </div>
+          )}
+
+          {/* Resume Preview */}
+          <div className="bg-white rounded-2xl shadow-xl p-8 sm:p-12">
+            
+{/* Personal Info */}
+            <div className="text-center mb-8 pb-6 border-b-2">
+              <h2 className="text-3xl font-bold text-gray-800 mb-2">{personalData.full_name}</h2>
+              <div className="flex flex-wrap justify-center gap-4 text-sm text-gray-600">
+                {personalData.city && <span>{personalData.city}, {personalData.state}</span>}
+                {personalData.phone && <span>•</span>}
+                {personalData.phone && <span>{personalData.phone}</span>}
+                {personalData.email && <span>•</span>}
+                {personalData.email && <span>{personalData.email}</span>}
+                {personalData.linkedin && <span>•</span>}
+                {personalData.linkedin && <span className="text-purple-600">{personalData.linkedin}</span>}
+              </div>
+
+              {/* ADD THIS PROFESSIONAL SUMMARY SECTION */}
+              {personalData.professional_summary && (
+                <div className="mt-6 max-w-3xl mx-auto">
+                  <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Professional Summary</h3>
+                  <p className="text-sm text-gray-700 leading-relaxed">
+                    {personalData.professional_summary}
+                  </p>
+                </div>
+              )}
+            </div>
+{/* Education */}
+            {educationData.nursing_degree && (
+              <div className="mb-8">
+                <h3 className="text-xl font-bold text-gray-800 mb-4 uppercase border-b pb-2">Education</h3>
+                
+                {/* Nursing Degree */}
+                <div className="mb-4">
+                  <div className="font-semibold text-gray-800">
+                    {educationData.nursing_degree.degree} - Nursing
+                  </div>
+                  <div className="text-gray-700">{educationData.nursing_degree.university}</div>
+                  <div className="text-sm text-gray-600">
+                    Graduated: {new Date(educationData.nursing_degree.graduation_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                  </div>
+                  {(educationData.nursing_degree.overall_gpa || educationData.nursing_degree.science_gpa) && (
+                    <div className="text-sm text-gray-600 mt-1">
+                      {educationData.nursing_degree.overall_gpa && `Overall GPA: ${educationData.nursing_degree.overall_gpa}`}
+                      {educationData.nursing_degree.overall_gpa && educationData.nursing_degree.science_gpa && ' | '}
+                      {educationData.nursing_degree.science_gpa && `Science GPA: ${educationData.nursing_degree.science_gpa}`}
+                    </div>
+                  )}
+                </div>
+
+                {/* Other Degrees */}
+                {educationData.other_degrees?.map((degree: any, idx: number) => (
+                  <div key={idx} className="mb-4 last:mb-0">
+                    <div className="font-semibold text-gray-800">
+                      {degree.degree} - {degree.field}
+                    </div>
+                    <div className="text-gray-700">{degree.university}</div>
+                    <div className="text-sm text-gray-600">
+                      Graduated: {new Date(degree.graduation_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                    </div>
+                    {degree.gpa && (
+                      <div className="text-sm text-gray-600 mt-1">
+                        GPA: {degree.gpa}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+        
+{/* Certifications */}
+            {(certificationsData.certifications?.length > 0 || certificationsData.custom_certifications?.length > 0) && (
+              <div className="mb-8">
+                <h3 className="text-xl font-bold text-gray-800 mb-4 uppercase border-b pb-2">Certifications</h3>
+                <div className="flex flex-wrap gap-2">
+                  {certificationsData.certifications?.map((cert: string) => (
+                    <span key={cert} className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">
+                      {cert}
+                    </span>
+                  ))}
+                  {certificationsData.custom_certifications?.map((cert: string, idx: number) => (
+                    <span key={`custom-${idx}`} className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+                      {cert}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+{/* ICU Experience with AI Enhancement */}
+            {icuData.positions?.length > 0 && (
+              <div className="mb-8">
+                <h3 className="text-xl font-bold text-gray-800 mb-4 uppercase border-b pb-2">Critical Care Experience</h3>
+                {icuData.positions.map((position: any, idx: number) => (
+                  <div key={idx} className="mb-6 last:mb-0">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <div className="font-semibold text-gray-800">{position.position}</div>
+                        <div className="text-gray-700">{position.hospital}, {position.location}</div>
+                        <div className="text-sm text-gray-600">{position.unit_type}</div>
+                      </div>
+                      <div className="text-sm text-gray-600 text-right">
+                        {new Date(position.start_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })} - {position.is_current ? 'Present' : new Date(position.end_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                      </div>
+                    </div>
+                    
+                    {/* Show AI-enhanced bullets if they exist */}
+                    {position.bullet_points && position.bullet_points.length > 0 ? (
+                      <ul className="mt-3 space-y-2">
+                        {position.bullet_points.map((bullet: string, bIdx: number) => (
+                          <li key={bIdx} className="text-gray-700 text-sm">• {bullet}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <>
+                        {/* Show manual info if no bullets yet */}
+                        {position.devices?.length > 0 && (
+                          <div className="mb-2">
+                            <span className="text-sm font-medium text-gray-700">Skills: </span>
+                            <span className="text-sm text-gray-600">{position.devices.join(', ')}</span>
+                          </div>
+                        )}
+                        
+                        {position.patient_population?.length > 0 && (
+                          <div className="mb-3">
+                            <span className="text-sm font-medium text-gray-700">Patient Population: </span>
+                            <span className="text-sm text-gray-600">{position.patient_population.join(', ')}</span>
+                          </div>
+                        )}
+                        
+                        {/* AI Enhancement Button */}
+                        <button
+                          onClick={() => enhancePosition(idx)}
+                          disabled={enhancing}
+                          className="mt-3 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-500 text-white text-sm font-semibold rounded-lg hover:opacity-90 transition disabled:opacity-50"
+                        >
+                          {enhancing ? '✨ Enhancing...' : '✨ Generate AI Bullet Points'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+{/* Shadowing */}
+            {shadowingData.experiences?.length > 0 && (
+              <div className="mb-8">
+                <h3 className="text-xl font-bold text-gray-800 mb-4 uppercase border-b pb-2">CRNA Shadowing Experience</h3>
+                {shadowingData.experiences.map((experience: any, idx: number) => (
+                  <div key={idx} className="mb-4 last:mb-0">
+                    <div className="font-semibold text-gray-800">
+                      Shadowed {experience.crna_name}
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      {experience.hours} hours | {experience.setting}
+                    </div>
+                    {experience.description && (
+                      <p className="text-sm text-gray-700 mt-2">{experience.description}</p>
+                    )}
+                  </div>
+                ))}
+                <div className="mt-3 text-sm font-medium text-purple-600">
+                  Total: {shadowingData.experiences.reduce((sum: number, exp: any) => sum + (parseInt(exp.hours) || 0), 0)} hours
+                </div>
+              </div>
+            )}
+            {/* Leadership */}
+            {leadershipData.roles?.length > 0 && (
+              <div className="mb-8">
+                <h3 className="text-xl font-bold text-gray-800 mb-4 uppercase border-b pb-2">Leadership & Professional Development</h3>
+                <ul className="space-y-1">
+                  {leadershipData.roles.map((role: string, idx: number) => (
+                    <li key={idx} className="text-gray-700">• {role}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Research */}
+            {researchData.projects?.filter((p: string) => p.trim()).length > 0 && (
+              <div className="mb-8">
+                <h3 className="text-xl font-bold text-gray-800 mb-4 uppercase border-b pb-2">Research & Quality Improvement</h3>
+                <ul className="space-y-2">
+                  {researchData.projects.filter((p: string) => p.trim()).map((project: string, idx: number) => (
+                    <li key={idx} className="text-gray-700">• {project}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+          </div>
+
+{/* Action Buttons */}
+          <div className="mt-8 flex flex-col sm:flex-row gap-4">
+            <Link
+              href="/resume-builder"
+              className="flex-1 text-center px-6 py-3 border-2 border-white text-white font-semibold rounded-xl hover:bg-white/10 transition"
+            >
+              ← Back to My Resumes
+            </Link>
+            <Link
+              href={`/resume-builder/edit/${resumeId}`}
+              className="flex-1 text-center px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-500 text-white font-semibold rounded-xl hover:opacity-90 transition"
+            >
+              ✏️ Edit Resume
+            </Link>
+            <button
+              onClick={downloadPDF}
+              className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition"
+            >
+              📥 Download PDF
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

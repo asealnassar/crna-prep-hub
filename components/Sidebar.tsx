@@ -78,19 +78,19 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
     setMessagesUnreadCount(unread)
   }
 
-  const navItems = [
-    { href: '/dashboard', label: 'Dashboard', icon: '📊', requiresAuth: true },
-    { href: '/schools', label: 'Schools', icon: '🏫', requiresAuth: false },
-    { href: '/interview', label: 'Mock Interview', icon: '🎤', requiresAuth: false },
-    { href: '/interview-prep', label: 'School Interview Styles', icon: '📚', requiresAuth: false },
-    { href: '/gpa-calculator', label: 'GPA Calculator', icon: '🎓', requiresAuth: false },
-{ href: '/personal-statement', label: 'Personal Statement', icon: '📝', requiresAuth: false },
- { href: '/pricing', label: 'Pricing', icon: '💎', requiresAuth: false },
-    { href: '/sponsors', label: 'Sponsors', icon: '🤝', requiresAuth: false },
-    { href: '/admin/analytics', label: 'Analytics', icon: '📈', requiresAuth: true, adminOnly: true },
-    { href: '/admin/schools', label: 'Admin', icon: '⚙️', requiresAuth: true, adminOnly: true },
-  ]
-  
+const navItems = [
+  { href: '/dashboard', label: 'Dashboard', icon: '📊', requiresAuth: true },
+  { href: '/schools', label: 'Schools', icon: '🏫', requiresAuth: false },
+  { href: '/interview', label: 'Mock Interview', icon: '🎤', requiresAuth: false },
+  { href: '/interview-prep', label: 'School Interview Styles', icon: '📚', requiresAuth: false },
+  { href: '/gpa-calculator', label: 'GPA Calculator', icon: '🎓', requiresAuth: false },
+  { href: '/personal-statement', label: 'Personal Statement', icon: '📝', requiresAuth: false },
+  { href: '/resume-builder', label: 'Resume Builder', icon: '📄', requiresAuth: false },
+  { href: '/pricing', label: 'Pricing', icon: '💎', requiresAuth: false },
+  { href: '/sponsors', label: 'Sponsors', icon: '🤝', requiresAuth: false },
+  { href: '/admin/analytics', label: 'Analytics', icon: '📈', requiresAuth: true, adminOnly: true },
+  { href: '/admin/schools', label: 'Admin', icon: '⚙️', requiresAuth: true, adminOnly: true },
+]  
   const visibleItems = navItems.filter(item => {
     if (item.adminOnly && !isAdmin) return false
     if (item.requiresAuth && !isLoggedIn) return false

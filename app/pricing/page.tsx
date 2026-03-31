@@ -297,7 +297,8 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Save favorite schools</span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic GPA calculator</span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic personal statement analyzer</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>1 free mock interview</strong></span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume Builder (1 resume)</strong></span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>1 free mock interview</strong></span></li>              
                 <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Advanced filters (state, deadline, GRE, prerequisites)</span></li>
                 <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Unlimited mock interviews</span></li>
                 <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Premium GPA analytics</span></li>
@@ -341,7 +342,10 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Filter by application deadlines</span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Application method filters</span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Direct school website links</span></li>
-                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Advanced GPA analytics</span></li>
+               
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume Builder (1 resume)</strong></span></li>
+
+ <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Advanced GPA analytics</span></li>
                 <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>AI personal statement rewrites</span></li>
                 <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>School-specific interview styles</span></li>
               </ul>
@@ -373,7 +377,7 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
                   <span className="text-3xl sm:text-4xl font-bold text-gray-800">$34.99</span>
                 )}
               </div>
-              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Everything You Need To Get In</p>
+              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Unlimited Access on Everything </p>
 
               <ul className="space-y-2 sm:space-y-3 mb-6 sm:mb-8 text-sm sm:text-base">
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Everything in Premium</span></li>
@@ -382,7 +386,15 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Advanced personal statement analyzer</span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>AI-powered essay rewrites</strong></span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Sentence-level feedback & improvements</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>School-specific interview styles</strong></span></li>
+               
+
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume Builder (unlimited resumes)</strong></span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>5 professional resume templates</strong></span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>AI-powered resume bullet points</strong></span></li>
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume scoring algorithm</strong></span></li>
+
+
+ <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>School-specific interview styles</strong></span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Unlimited mock interviews</strong></span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Priority support</span></li>
               </ul>
