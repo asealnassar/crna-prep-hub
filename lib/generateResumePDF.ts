@@ -8,45 +8,44 @@ export function generateResumePDF(resumeData: any, templateId: string = 'modern'
   const margin = 20
   let yPosition = 20
 
-  // Template-specific settings
+// Template-specific settings
   const templates: any = {
     modern: {
-      primaryColor: [100, 80, 200],    // Purple
-      accentColor: [139, 92, 246],     // Light purple
+      primaryColor: [100, 80, 200] as const,    // Purple
+      accentColor: [139, 92, 246] as const,     // Light purple
       headerSize: 18,
       sectionSize: 12,
       bodySize: 10
     },
     professional: {
-      primaryColor: [30, 58, 138],     // Navy blue
-      accentColor: [59, 130, 246],     // Blue
+      primaryColor: [30, 58, 138] as const,     // Navy blue
+      accentColor: [59, 130, 246] as const,     // Blue
       headerSize: 16,
       sectionSize: 11,
       bodySize: 10
     },
     ats: {
-      primaryColor: [0, 0, 0],         // Black
-      accentColor: [75, 85, 99],       // Gray
+      primaryColor: [0, 0, 0] as const,         // Black
+      accentColor: [75, 85, 99] as const,       // Gray
       headerSize: 16,
       sectionSize: 11,
       bodySize: 10
     },
     compact: {
-      primaryColor: [17, 24, 39],      // Dark gray
-      accentColor: [107, 114, 128],    // Medium gray
+      primaryColor: [17, 24, 39] as const,      // Dark gray
+      accentColor: [107, 114, 128] as const,    // Medium gray
       headerSize: 14,
       sectionSize: 10,
       bodySize: 9
     },
     creative: {
-      primaryColor: [219, 39, 119],    // Pink
-      accentColor: [236, 72, 153],     // Light pink
+      primaryColor: [219, 39, 119] as const,    // Pink
+      accentColor: [236, 72, 153] as const,     // Light pink
       headerSize: 18,
       sectionSize: 12,
       bodySize: 10
     }
   }
-
   const template = templates[templateId] || templates.modern
 
   // Helper to add section header
