@@ -384,13 +384,23 @@ let otherEmail = 'Unknown'
           }
         }
 
-        await supabase.rpc('create_thread_with_message', {
+await supabase.rpc('create_thread_with_message', {
           p_subject: compose.subject,
           p_recipient_ids: [recipientId],
           p_message_text: compose.message
         })
-      }
 
+        // Send email notification
+        fetch('/api/messages/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipientId: recipientId,
+            senderName: isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
+            messagePreview: compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : '')
+          })
+        }).catch(err => console.error('Email notification failed:', err))
+      }
       setCompose({
         subject: '',
         message: '',
