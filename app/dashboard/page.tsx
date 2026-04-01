@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import Sidebar from '@/components/Sidebar'
+import MessagesModal from '@/components/MessagesModal' 
 
 export default function Dashboard() {
   const [user, setUser] = useState<any>(null)
@@ -12,6 +13,7 @@ export default function Dashboard() {
   const [savedSchools, setSavedSchools] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+ const [showMessages, setShowMessages] = useState(false)
   const router = useRouter()
   const supabase = createClient()
 
@@ -47,6 +49,13 @@ export default function Dashboard() {
     }
 
     init()
+const handleOpenMessages = () => {
+      setShowMessages(true)
+    }
+    window.addEventListener('openMessages', handleOpenMessages)
+    return () => {
+      window.removeEventListener('openMessages', handleOpenMessages)
+    }
   }, [])
 
   const handleSignOut = async () => {
@@ -350,8 +359,17 @@ export default function Dashboard() {
             )}
           </div>
 
-        </div>
+</div>
       </div>
+
+      {/* ADD THIS HERE */}
+      {showMessages && (
+        <MessagesModal 
+          isOpen={showMessages}
+          onClose={() => setShowMessages(false)}
+        />
+      )}
+
     </div>
   )
 }
