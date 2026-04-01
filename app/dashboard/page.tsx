@@ -364,7 +364,8 @@ const handleOpenMessages = () => {
 
 {showMessages && (
         <MessagesModal
-          onClose={() => setShowMessages(false)}
+          userEmail={user?.email || ''}
+          isAdmin={user?.email === 'asealnassar@gmail.com'}
         />
       )}
     </div>
