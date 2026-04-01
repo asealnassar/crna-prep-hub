@@ -362,14 +362,11 @@ const handleOpenMessages = () => {
 </div>
       </div>
 
-      {/* ADD THIS HERE */}
-      {showMessages && (
-        <MessagesModal 
-          isOpen={showMessages}
+{showMessages && (
+        <MessagesModal
           onClose={() => setShowMessages(false)}
         />
       )}
-
     </div>
   )
 }
