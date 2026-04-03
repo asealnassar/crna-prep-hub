@@ -346,7 +346,7 @@ let otherEmail = 'Unknown'
     loadThread(selectedThread.id)
   }
 
-  const composeMessage = async () => {
+const composeMessage = async () => {
     if (!compose.subject || !compose.message) {
       alert('Subject and message are required')
       return
@@ -357,16 +357,41 @@ let otherEmail = 'Unknown'
 
     setSending(true)
 
-    try {
+    try {                                    // ADD THIS LINE
       if (compose.recipientType === 'tier' && isAdmin) {
         const { data: count } = await supabase.rpc('send_tier_broadcast', {
+
           p_subject: compose.subject,
           p_message_text: compose.message,
           p_tier: compose.selectedTier
         })
 
+        // GET ALL USERS IN THIS TIER TO SEND EMAILS
+        const { data: tierUsers } = await supabase
+          .from('user_profiles')
+          .select('id, email')
+          .eq('subscription_tier', compose.selectedTier)
+
+        // SEND EMAIL TO EACH USER
+        console.log(`📧 Sending emails to ${tierUsers?.length} users in ${compose.selectedTier} tier`)
+        
+        if (tierUsers && tierUsers.length > 0) {
+          for (const user of tierUsers) {
+            fetch('/api/messages/notify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                recipientId: user.id,
+                senderName: 'CRNA Prep Hub Admin',
+                messagePreview: compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : '')
+              })
+            }).catch(err => console.error(`Email failed for ${user.email}:`, err))
+          }
+        }
+
         alert(`Message sent to ${count} users in ${compose.selectedTier} tier`)
       } else {
+
         let recipientId
         if (isAdmin) {
           recipientId = compose.selectedUserId
