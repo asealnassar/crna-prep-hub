@@ -391,6 +391,12 @@ await supabase.rpc('create_thread_with_message', {
         })
 
         // Send email notification
+console.log('📧 About to call email API with:', {
+          recipientId,
+          senderName: isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
+          messagePreview: compose.message.substring(0, 150)
+        })
+        
         fetch('/api/messages/notify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -399,7 +405,14 @@ await supabase.rpc('create_thread_with_message', {
             senderName: isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
             messagePreview: compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : '')
           })
-        }).catch(err => console.error('Email notification failed:', err))
+        }).then(res => {
+          console.log('📬 Email API responded with status:', res.status)
+          return res.json()
+        }).then(data => {
+          console.log('✅ Email API result:', data)
+        }).catch(err => {
+          console.error('❌ Email notification failed:', err)
+        })
       }
       setCompose({
         subject: '',
