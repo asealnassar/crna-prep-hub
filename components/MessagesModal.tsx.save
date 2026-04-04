@@ -20,8 +20,7 @@ export default function MessagesModal({ userEmail, isAdmin }: MessagesModalProps
   const [allUsers, setAllUsers] = useState<any[]>([])
   const [adminId, setAdminId] = useState<string>('')
   const [showCompose, setShowCompose] = useState(false)
-const [searchQuery, setSearchQuery] = useState('')
-  const [userSearchQuery, setUserSearchQuery] = useState('')  // ADD THIS LINE
+  const [searchQuery, setSearchQuery] = useState('')
   const [messageFilter, setMessageFilter] = useState<'all' | 'unread' | 'read'>('all')
   
 const [compose, setCompose] = useState({
@@ -29,7 +28,7 @@ const [compose, setCompose] = useState({
     message: '',
     recipientType: 'user' as 'admin' | 'user' | 'tier',
     selectedUserId: '',
-    selectedUserIds: [] as string[],  // ADD THIS LINE ONLY
+    selectedUserIds: [] as string[],  // ADD THIS LINE
     selectedTier: 'free'
   })
   const supabase = createClient()
@@ -346,7 +345,6 @@ let otherEmail = 'Unknown'
     setSending(false)
     loadThread(selectedThread.id)
   }
-
 const composeMessage = async () => {
     if (!compose.subject || !compose.message) {
       alert('Subject and message are required')
@@ -358,50 +356,44 @@ const composeMessage = async () => {
 
     setSending(true)
 
-    try {                                    // ADD THIS LINE
+    try {
       if (compose.recipientType === 'tier' && isAdmin) {
+        // TIER BROADCAST
         const { data: count } = await supabase.rpc('send_tier_broadcast', {
-
           p_subject: compose.subject,
           p_message_text: compose.message,
           p_tier: compose.selectedTier
         })
 
-        // GET ALL USERS IN THIS TIER TO SEND EMAILS
         const { data: tierUsers } = await supabase
           .from('user_profiles')
           .select('id, email')
           .eq('subscription_tier', compose.selectedTier)
 
-        // SEND EMAIL TO EACH USER
-        console.log(`📧 Sending emails to ${tierUsers?.length} users in ${compose.selectedTier} tier`)
-        
         if (tierUsers && tierUsers.length > 0) {
-          for (const user of tierUsers) {
+          for (const tierUser of tierUsers) {
             fetch('/api/messages/notify', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                recipientId: user.id,
+                recipientId: tierUser.id,
                 senderName: 'CRNA Prep Hub Admin',
                 messagePreview: compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : '')
               })
-            }).catch(err => console.error(`Email failed for ${user.email}:`, err))
+            }).catch(err => console.error(`Email failed for ${tierUser.email}:`, err))
           }
         }
 
         alert(`Message sent to ${count} users in ${compose.selectedTier} tier`)
       } else {
-
-        let recipientId
-if (isAdmin) {
+        // INDIVIDUAL USER MESSAGES
+        if (isAdmin) {
           if (compose.selectedUserIds.length === 0) {
             alert('Please select at least one recipient')
             setSending(false)
             return
           }
-          
-          // Send to each selected user
+
           for (const recipientId of compose.selectedUserIds) {
             await supabase.rpc('create_thread_with_message', {
               p_subject: compose.subject,
@@ -421,72 +413,14 @@ if (isAdmin) {
           }
 
           alert(`Message sent to ${compose.selectedUserIds.length} user(s)`)
-          setCompose({
-            subject: '',
-            message: '',
-            recipientType: 'user',
-            selectedUserId: '',
-            selectedUserIds: [],
-            selectedTier: 'free'
-          })
-          setSending(false)
-          setShowCompose(false)
-          loadThreads()
-          return
         } else {
-          recipientId = adminId
+          const recipientId = adminId
           if (!recipientId) {
             alert('Admin user not found')
             setSending(false)
             return
           }
-        }
-await supabase.rpc('create_thread_with_message', {
-          p_subject: compose.subject,
-          p_recipient_ids: [recipientId],
-          p_message_text: compose.message
-        })
 
-        // Send email notification
-console.log('📧 About to call email API with:', {
-          recipientId,
-          senderName: isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
-          messagePreview: compose.message.substring(0, 150)
-        })
-        
-        fetch('/api/messages/notify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            recipientId: recipientId,
-            senderName: isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
-            messagePreview: compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : '')
-          })
-        }).then(res => {
-          console.log('📬 Email API responded with status:', res.status)
-          return res.json()
-        }).then(data => {
-          console.log('✅ Email API result:', data)
-        }).catch(err => {
-          console.error('❌ Email notification failed:', err)
-        })
-      }
-      setCompose({
-        subject: '',
-        message: '',
-        recipientType: isAdmin ? 'user' : 'admin',
-        selectedUserId: '',
-        selectedTier: 'free'
-      })
-      setSending(false)
-      setShowCompose(false)
-      loadThreads()
-    } catch (error) {
-      console.error('Error sending message:', error)
-      alert('Failed to send message')
-      setSending(false)
-    }
-  }
 
   const deleteThread = async (threadId: string) => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -775,42 +709,29 @@ console.log('📧 About to call email API with:', {
                           </div>
                         </div>
 
-                        {compose.recipientType === 'user' ? (
+{compose.recipientType === 'user' ? (
                           <div>
-<label className="block text-sm font-semibold text-gray-900 mb-3">Recipient</label>
-                            
-                            <input
-                              type="text"
-                              placeholder="Search users..."
-                              value={userSearchQuery}
-                              onChange={(e) => setUserSearchQuery(e.target.value)}
-                              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm mb-2"
-                            />
-                            
+                            <label className="block text-sm font-semibold text-gray-900 mb-3">
+                              Recipients (Ctrl/Cmd + Click to select multiple)
+                            </label>
                             <select
-                            multiple
-                            value={compose.selectedUserIds}
-                            onChange={(e) => {
-                              const selected = Array.from(e.target.selectedOptions, option => option.value)
-                              setCompose({...compose, selectedUserIds: selected})
-                            }}
-className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 max-h-[150px] overflow-y-auto"
-                          >
-                              <option value="">Select a user...</option>
-{allUsers
-  .filter(u => 
-    u.email.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
-    u.subscription_tier?.toLowerCase().includes(userSearchQuery.toLowerCase())
-  )
-  .map((u) => (
+                              multiple
+                              value={compose.selectedUserIds}
+                              onChange={(e) => {
+                                const selected = Array.from(e.target.selectedOptions, option => option.value)
+                                setCompose({...compose, selectedUserIds: selected})
+                              }}
+                              className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 min-h-[250px]"
+                            >
+                              {allUsers.map((u) => (
                                 <option key={u.id} value={u.id}>
                                   {u.email} [{getTierBadge(u.subscription_tier)}]
                                 </option>
                               ))}
                             </select>
-<p className="text-xs text-gray-500 mt-2">
-                            {compose.selectedUserIds.length} user(s) selected
-                          </p>
+                            <p className="text-xs text-gray-500 mt-2">
+                              {compose.selectedUserIds.length} user(s) selected
+                            </p>
                           </div>
                         ) : (
                           <div>
