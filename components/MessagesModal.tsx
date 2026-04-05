@@ -420,15 +420,23 @@ if (isAdmin) {
             }).catch(err => console.error('Email notification failed:', err))
           }
 
-          alert(`Message sent to ${compose.selectedUserIds.length} user(s)`)
+alert(`Message sent to ${compose.selectedUserIds.length} user(s)`)
           setCompose({
             subject: '',
             message: '',
-            recipientType: 'user',
+            recipientType: isAdmin ? 'user' : 'admin',
             selectedUserId: '',
             selectedUserIds: [],
             selectedTier: 'free'
           })
+setCompose({
+        subject: '',
+        message: '',
+        recipientType: isAdmin ? 'user' : 'admin',
+        selectedUserId: '',
+        selectedUserIds: [],  // ADD THIS LINE
+        selectedTier: 'free'
+      })
           setSending(false)
           setShowCompose(false)
           loadThreads()
@@ -471,11 +479,12 @@ console.log('📧 About to call email API with:', {
           console.error('❌ Email notification failed:', err)
         })
       }
-      setCompose({
+setCompose({
         subject: '',
         message: '',
         recipientType: isAdmin ? 'user' : 'admin',
         selectedUserId: '',
+        selectedUserIds: [],  // ADD THIS LINE
         selectedTier: 'free'
       })
       setSending(false)
