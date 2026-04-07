@@ -1,9 +1,9 @@
-import './globals.css'
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
-import Script from 'next/script'
+import './globals.css'
 import ClientProviders from '@/components/ClientProviders'
-        
+import Script from 'next/script'
+import InstallPWA from '@/components/InstallPWA'  // ADD THIS LINE        
 const inter = Inter({ subsets: ['latin'] })
             
 export const metadata: Metadata = {
@@ -46,10 +46,19 @@ export default function RootLayout({
               ttq.page();
             }(window, document, 'ttq');
           `}
-        </Script>
+       </Script>
+
+        {/* PWA Manifest */}
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#7c3aed" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="CRNA Prep" />
+        <link rel="apple-touch-icon" href="/icon-192.png" />
       </head>
-      <body className={inter.className}>
+<body className={inter.className}>
         <ClientProviders>{children}</ClientProviders>
+        <InstallPWA />  {/* ADD THIS LINE */}
       </body>
     </html>
   )
