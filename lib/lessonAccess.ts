@@ -36,6 +36,12 @@ export const DRAFT_LESSONS = [
     title: 'When Catecholamines Stop Answering',
     blurb: 'Vasopressin and angiotensin II — three independent systems, one shared cascade.',
   },
+  {
+    slug: 'vasopressors-5',
+    number: 5,
+    title: 'Predicting Instead of Remembering',
+    blurb: 'All six drugs — the four-step method, a derivation drill, then the table.',
+  },
 ] as const
 
 export function isDraftSlug(slug: string): boolean {

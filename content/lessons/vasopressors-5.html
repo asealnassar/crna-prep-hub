@@ -1,0 +1,900 @@
+<title>Predicting Instead of Remembering</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground: #F5F6F8;
+    --surface: #FFFFFF;
+    --surface-2: #EDEFF3;
+    --ink: #14181F;
+    --ink-2: #454C59;
+    --ink-3: #6D7585;
+    --rule: #DCE0E7;
+    --rule-2: #C6CCD6;
+
+    /* Color encodes physiology, not decoration:
+       constrict = arterial crimson, dilate = teal, signal/calcium = amber. */
+    --constrict: #B62D46;
+    --constrict-soft: #FBEAED;
+    --dilate: #17706E;
+    --dilate-soft: #E3F1F0;
+    --signal: #A96322;
+    --signal-soft: #FBEFE1;
+
+    --shadow: 0 1px 2px rgba(20,24,31,.05), 0 8px 24px rgba(20,24,31,.05);
+
+    --display: "Fraunces", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --measure: 66ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0E1116;
+      --surface: #161B22;
+      --surface-2: #1D242D;
+      --ink: #E9ECF1;
+      --ink-2: #B2BAC7;
+      --ink-3: #838D9C;
+      --rule: #2A323C;
+      --rule-2: #3B4552;
+      --constrict: #F2758C;
+      --constrict-soft: #33161C;
+      --dilate: #57C4BF;
+      --dilate-soft: #102A29;
+      --signal: #E0A05E;
+      --signal-soft: #2C1F11;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0E1116;
+    --surface: #161B22;
+    --surface-2: #1D242D;
+    --ink: #E9ECF1;
+    --ink-2: #B2BAC7;
+    --ink-3: #838D9C;
+    --rule: #2A323C;
+    --rule-2: #3B4552;
+    --constrict: #F2758C;
+    --constrict-soft: #33161C;
+    --dilate: #57C4BF;
+    --dilate-soft: #102A29;
+    --signal: #E0A05E;
+    --signal-soft: #2C1F11;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px 96px; }
+  .spine { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 48px;
+    padding: 40px 0 28px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .crumb {
+    font-family: var(--mono);
+    font-size: 11.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  }
+  .crumb .sep { color: var(--rule-2); }
+  .crumb .here { color: var(--constrict); }
+  h1 {
+    font-family: var(--display);
+    font-optical-sizing: auto;
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.06;
+    letter-spacing: -.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 19px; color: var(--ink-2); margin: 0; max-width: 58ch;
+  }
+  .pips { display: flex; gap: 5px; align-items: center; }
+  .pip { width: 30px; height: 4px; border-radius: 2px; background: var(--rule-2); }
+  .pip.on { background: var(--constrict); }
+  .pip-label { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-left: 8px; letter-spacing: .06em; }
+
+  /* ---------- structure ---------- */
+  section { margin: 0 0 56px; }
+  .sec-head { display: flex; gap: 14px; align-items: baseline; margin-bottom: 18px; }
+  .sec-num {
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    color: var(--constrict); letter-spacing: .1em; padding-top: 6px;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 600;
+    font-size: clamp(24px, 3.4vw, 31px); line-height: 1.18; letter-spacing: -.015em;
+    margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--body); font-weight: 700; font-size: 17.5px;
+    letter-spacing: .005em; margin: 32px 0 8px;
+  }
+  p { margin: 0 0 16px; }
+  .spine p, .spine ul, .spine ol { max-width: var(--measure); }
+  strong { font-weight: 700; }
+  em.term { font-style: normal; font-weight: 700; color: var(--constrict); }
+  ul, ol { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 7px; }
+
+  code, .m { font-family: var(--mono); font-size: .88em; }
+  .m { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+
+  /* ---------- panels ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 26px;
+    margin: 26px 0;
+    box-shadow: var(--shadow);
+  }
+  .panel-label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px;
+  }
+
+  .callout {
+    border-left: 3px solid var(--signal);
+    background: var(--signal-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .callout .callout-t {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--signal); font-weight: 600; margin-bottom: 6px;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .myth {
+    border-left: 3px solid var(--constrict);
+    background: var(--constrict-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .myth .callout-t { color: var(--constrict); }
+  .myth p:last-child { margin-bottom: 0; }
+
+  /* ---------- figures ---------- */
+  figure { margin: 28px 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; }
+  figcaption {
+    font-size: 14.5px; color: var(--ink-2); margin-top: 12px;
+    max-width: 62ch; line-height: 1.55;
+  }
+  .scroller { overflow-x: auto; }
+
+  /* ---------- predict ---------- */
+  details.predict {
+    border: 1px solid var(--rule); border-radius: 10px;
+    background: var(--surface); margin: 24px 0; overflow: hidden;
+  }
+  details.predict > summary {
+    cursor: pointer; padding: 16px 20px; list-style: none;
+    font-weight: 600; display: flex; gap: 12px; align-items: flex-start;
+  }
+  details.predict > summary::-webkit-details-marker { display: none; }
+  details.predict > summary::before {
+    content: "PREDICT"; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .12em; color: var(--dilate); border: 1px solid var(--dilate);
+    padding: 3px 7px; border-radius: 4px; flex-shrink: 0; margin-top: 2px;
+  }
+  details.predict[open] > summary::before { content: "REVEALED"; color: var(--ink-3); border-color: var(--rule-2); }
+  details.predict > summary:hover { background: var(--surface-2); }
+  details.predict > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: -2px; }
+  .predict-body { padding: 0 20px 18px 20px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  .predict-body p:last-child { margin-bottom: 0; }
+
+  details.deeper {
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    margin: 26px 0; padding: 0;
+  }
+  details.deeper > summary {
+    cursor: pointer; padding: 14px 0; list-style: none;
+    font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--dilate); display: flex; gap: 10px; align-items: center;
+  }
+  details.deeper > summary::-webkit-details-marker { display: none; }
+  details.deeper > summary::after { content: "+"; margin-left: auto; font-size: 16px; }
+  details.deeper[open] > summary::after { content: "\2212"; }
+  details.deeper > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .deeper-body { padding-bottom: 18px; }
+  .deeper-body p:last-child { margin-bottom: 0; }
+
+  /* ---------- interactive: MAP explorer ---------- */
+  .sim { display: grid; grid-template-columns: 1fr 200px; gap: 26px; align-items: start; }
+  @media (max-width: 720px) { .sim { grid-template-columns: 1fr; } }
+  .ctl { margin-bottom: 20px; }
+  .ctl-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2); margin-bottom: 7px;
+  }
+  .ctl-top b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--constrict); height: 22px; }
+  input[type=range]:focus-visible { outline: 2px solid var(--constrict); outline-offset: 4px; }
+  .readout {
+    background: var(--surface-2); border-radius: 8px; padding: 18px; text-align: center;
+  }
+  .readout .big {
+    font-family: var(--mono); font-weight: 600; font-size: 42px; line-height: 1;
+    font-variant-numeric: tabular-nums; color: var(--constrict);
+  }
+  .readout .unit { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .1em; margin-top: 6px; }
+  .verdict { font-size: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rule); color: var(--ink-2); min-height: 3.2em; }
+
+  /* ---------- interactive: pathway switcher ---------- */
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tab {
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em;
+    padding: 8px 15px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--rule-2); background: transparent; color: var(--ink-2);
+  }
+  .tab:hover { border-color: var(--ink-3); color: var(--ink); }
+  .tab:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+  .pathway[hidden] { display: none; }
+  .pathway h4 { font-family: var(--body); font-size: 16px; font-weight: 700; margin: 0 0 8px; }
+  .pathway p { font-size: 15.5px; color: var(--ink-2); }
+
+  /* ---------- table ---------- */
+  .tbl-wrap { overflow-x: auto; margin: 24px 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 15px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+    border-bottom: 1px solid var(--rule-2);
+  }
+  td.k { font-family: var(--mono); font-size: 13px; color: var(--ink); white-space: nowrap; }
+
+  /* ---------- quiz ---------- */
+  .quiz-q { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); padding: 24px; margin-bottom: 18px; }
+  .qnum { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; color: var(--ink-3); margin-bottom: 10px; }
+  .qtext { font-weight: 600; margin-bottom: 16px; }
+  .opts { display: flex; flex-direction: column; gap: 8px; }
+  .opt {
+    display: flex; gap: 11px; align-items: flex-start; width: 100%; text-align: left;
+    padding: 12px 14px; border: 1px solid var(--rule-2); border-radius: 7px;
+    background: transparent; color: var(--ink); font: inherit; font-size: 15.5px;
+    cursor: pointer; line-height: 1.5;
+  }
+  .opt:hover:not([disabled]) { border-color: var(--ink-3); background: var(--surface-2); }
+  .opt:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .opt .ltr { font-family: var(--mono); font-size: 12px; color: var(--ink-3); flex-shrink: 0; padding-top: 2px; }
+  .opt[data-state="correct"] { border-color: var(--dilate); background: var(--dilate-soft); }
+  .opt[data-state="correct"] .ltr { color: var(--dilate); }
+  .opt[data-state="wrong"] { border-color: var(--constrict); background: var(--constrict-soft); }
+  .opt[data-state="wrong"] .ltr { color: var(--constrict); }
+  .opt[disabled] { cursor: default; }
+  .explain { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 15px; }
+  .explain[hidden] { display: none; }
+  .explain .tested {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 10px;
+  }
+  .explain ul { margin: 10px 0 0; }
+  .explain li { font-size: 14.5px; color: var(--ink-2); }
+  .score {
+    font-family: var(--mono); font-size: 13px; color: var(--ink-2);
+    padding: 14px 0 0; border-top: 1px solid var(--rule); margin-top: 8px;
+  }
+
+  .next {
+    border: 1px solid var(--rule-2); border-radius: 10px; padding: 24px;
+    background: var(--surface-2); margin-top: 40px;
+  }
+  .next .panel-label { color: var(--constrict); }
+  .next p:last-child { margin-bottom: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+
+<style>
+  .drugpick { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:22px; }
+  .dbtn { font-family:var(--mono); font-size:12.5px; padding:8px 14px; border-radius:6px;
+          border:1px solid var(--rule-2); background:transparent; color:var(--ink-2); cursor:pointer; }
+  .dbtn:hover { border-color:var(--ink-3); color:var(--ink); }
+  .dbtn:focus-visible { outline:2px solid var(--constrict); outline-offset:2px; }
+  .dbtn[aria-pressed="true"] { background:var(--ink); color:var(--ground); border-color:var(--ink); }
+  .rxlist { font-family:var(--mono); font-size:13px; color:var(--constrict);
+            background:var(--surface-2); padding:12px 16px; border-radius:8px; margin-bottom:20px; }
+  .predrow { display:grid; grid-template-columns:96px 1fr; gap:14px; align-items:center; margin-bottom:12px; }
+  @media (max-width:600px){ .predrow { grid-template-columns:1fr; gap:6px; } }
+  .predrow > span { font-family:var(--mono); font-size:12px; color:var(--ink-2); }
+  .choices { display:flex; gap:6px; flex-wrap:wrap; }
+  .ch { font-family:var(--mono); font-size:13px; min-width:44px; padding:7px 12px; border-radius:6px;
+        border:1px solid var(--rule-2); background:transparent; color:var(--ink); cursor:pointer; }
+  .ch:hover:not([disabled]) { border-color:var(--ink-3); background:var(--surface-2); }
+  .ch:focus-visible { outline:2px solid var(--constrict); outline-offset:2px; }
+  .ch[aria-pressed="true"] { border-color:var(--ink); background:var(--surface-2); font-weight:600; }
+  .ch[data-r="hit"] { border-color:var(--dilate); background:var(--dilate-soft); color:var(--dilate); font-weight:600; }
+  .ch[data-r="miss"] { border-color:var(--constrict); background:var(--constrict-soft); color:var(--constrict); }
+  .chain { border-left:3px solid var(--constrict); background:var(--constrict-soft);
+           padding:14px 18px; border-radius:0 8px 8px 0; margin-top:16px; font-size:15px; }
+  .chain[hidden] { display:none; }
+  .chain .ct { font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+               color:var(--constrict); font-weight:600; margin-bottom:8px; }
+  .chain code { display:block; font-size:12.5px; line-height:1.9; color:var(--ink); margin-bottom:10px; }
+  .steps { counter-reset:st; margin:24px 0; }
+  .step { display:grid; grid-template-columns:36px 1fr; gap:16px; padding:16px 0;
+          border-top:1px solid var(--rule); }
+  .step:last-child { border-bottom:1px solid var(--rule); }
+  .step .sn { font-family:var(--mono); font-size:12px; color:var(--constrict); font-weight:600; padding-top:2px; }
+  .step h4 { font-family:var(--body); font-size:16.5px; font-weight:700; margin:0 0 5px; }
+  .step p { font-size:15px; color:var(--ink-2); margin:0; }
+</style>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="crumb">
+      <span>Vasopressors</span><span class="sep">/</span>
+      <span class="here">Lesson 5 of 6</span><span class="sep">/</span>
+      <span>Integration</span>
+    </div>
+    <h1>Predicting Instead of Remembering</h1>
+    <p class="standfirst">Six drugs, one method. This lesson is not a chart to memorise &#8212; it is the four-step reasoning you run when someone names a drug you have not thought about in months.</p>
+    <div class="pips" aria-label="Lesson 5 of 6">
+      <span class="pip on"></span><span class="pip on"></span><span class="pip on"></span>
+      <span class="pip on"></span><span class="pip on"></span><span class="pip"></span>
+      <span class="pip-label">INTEGRATION</span>
+    </div>
+  </header>
+
+  <div class="spine">
+    <p>Memorised charts fail in interviews for a specific reason: the follow-up question is never on the chart.</p>
+    <p>You can memorise that phenylephrine causes bradycardia. Then someone asks why it doesn't in a heart-transplant patient, and the chart has nothing to say. Derivation survives that question because it regenerates the answer from the receptor rather than retrieving it from memory.</p>
+    <p>So this lesson gives you the method first, drills it, and only then shows the table &#8212; as somewhere to check your work, not somewhere to learn from.</p>
+  </div>
+
+  <!-- 01 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>The four steps</h2></div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="sn">01</div>
+        <div>
+          <h4>Name the receptors</h4>
+          <p>Which of &#945;&#8321;, &#945;&#8322;, &#946;&#8321;, &#946;&#8322;, D&#8321;, V&#8321;&#8342; and AT&#8321; does this drug engage, and roughly in what proportion? Everything downstream depends on getting this right, and it is the only part that is genuinely memorisation.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="sn">02</div>
+        <div>
+          <h4>Run each cascade separately</h4>
+          <p>Gq constricts vessels. Gs in the heart raises rate and force. Gs in vascular smooth muscle relaxes. Gi damps. Do not combine yet &#8212; mixing at this stage is how candidates end up with a muddle they cannot defend.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="sn">03</div>
+        <div>
+          <h4>Combine, and look for opposition</h4>
+          <p>Now sum them. The interesting question is whether any two arms pull against each other &#8212; &#946;&#8322; dilating while &#945;&#8321; constricts, or rising afterload eroding the stroke volume that &#946;&#8321; just improved.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="sn">04</div>
+        <div>
+          <h4>Apply the reflex, then ask about the patient</h4>
+          <p>Did MAP move enough to load the baroreceptors? If so the reflex pushes back on rate and tone. Then the question that separates good answers from elite ones: <em>can this particular patient mount that reflex, and does this particular ventricle have afterload reserve?</em></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <div class="callout-t">Why step 4 has two halves</div>
+      <p>Steps 1&#8211;3 give you the drug's behaviour in an average patient. Step 4 is where you make it about the patient in front of you &#8212; and that is almost always where the follow-up question lives. "It usually causes bradycardia" invites a challenge. "It usually causes bradycardia, unless the reflex arc is impaired &#8212; a denervated heart, autonomic neuropathy, deep sedation" pre-empts it.</p>
+    </div>
+  </section>
+
+  <!-- 02 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>Worked once, slowly</h2></div>
+    <div class="spine">
+      <p>Take phenylephrine and run all four steps out loud.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">Full derivation &#183; phenylephrine</div>
+      <div class="spine" style="max-width:none">
+        <p><strong>Step 1.</strong> Selective &#945;&#8321;. Nothing else of consequence.</p>
+        <p><strong>Step 2.</strong> &#945;&#8321; &#8594; Gq &#8594; PLC&#946; &#8594; IP&#8323; and DAG &#8594; calcium up, MLCP inhibited &#8594; MLCK phosphorylates myosin light chain &#8594; smooth muscle contracts. Arterially that is &#8593;SVR; venously it is &#8593;preload.</p>
+        <p><strong>Step 3.</strong> Only one arm, so nothing opposes it directly &#8212; but &#8593;SVR is &#8593;afterload, and afterload erodes stroke volume. There is no &#946;&#8321; here to defend against that.</p>
+        <p><strong>Step 4.</strong> SVR up means MAP up, which loads baroreceptors, which raises vagal tone and slows the SA node. So HR falls and SV falls, and <span class="m">CO = HR &#215; SV</span> falls on both terms &#8212; <em>in a patient who can mount the reflex and whose ventricle lacks afterload reserve.</em> In a healthy ventricle with brisk reflexes, the bradycardia still appears but CO holds up far better.</p>
+      </div>
+    </div>
+
+    <div class="spine">
+      <p>Notice that the final sentence is where the marks are. Anyone can say "phenylephrine causes reflex bradycardia." Very few add the conditions under which it does and doesn't.</p>
+    </div>
+  </section>
+
+  <!-- 03 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>Your turn</h2></div>
+    <div class="spine">
+      <p>Pick a drug, commit to a prediction for each variable, then reveal. Commit before revealing &#8212; recognising a correct answer is a much weaker signal than producing one.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">Drill &#183; derive the hemodynamics</div>
+      <div class="drugpick" id="drugpick" role="group" aria-label="Choose a drug to derive"></div>
+      <div class="rxlist" id="rxlist"></div>
+      <div id="predrows"></div>
+      <button id="reveal" class="opt" style="justify-content:center;margin-top:14px;font-weight:600;border-color:var(--ink);">Reveal the reasoning</button>
+      <div class="chain" id="chain" hidden></div>
+    </div>
+  </section>
+
+  <!-- 04 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>Check your work</h2></div>
+    <div class="spine">
+      <p>Now &#8212; and only now &#8212; the table. Use it to verify derivations, not to replace them. If a row surprises you, go back and find which step you dropped.</p>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Drug</th><th>Receptors</th><th>G-protein</th><th>SVR</th><th>HR</th>
+            <th>Inotropy</th><th>CO</th><th>Advantage</th><th>Limitation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">Norepinephrine</td><td class="k">&#945;&#8321;&#8811;&#946;&#8321;</td><td class="k">Gq + Gs</td>
+            <td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k">&#8596;/&#8595;</td>
+            <td class="k">&#8593;</td><td class="k">&#8596;/&#8593;</td>
+            <td>Raises preload and afterload together; &#946;&#8321; defends flow</td>
+            <td>&#8593; PVR; &#8593; myocardial O&#8322; demand</td>
+          </tr>
+          <tr>
+            <td class="k">Epinephrine</td><td class="k">&#945;&#8321; &#946;&#8321; &#946;&#8322;</td><td class="k">Gq + Gs</td>
+            <td class="k">varies</td><td class="k" style="color:var(--constrict)">&#8593;&#8593;</td>
+            <td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k" style="color:var(--constrict)">&#8593;&#8593;</td>
+            <td>Strongest inotropy; bronchodilation</td>
+            <td>&#946;&#8322; opposes its own &#945;&#8321;; arrhythmias; aerobic lactate</td>
+          </tr>
+          <tr>
+            <td class="k">Phenylephrine</td><td class="k">&#945;&#8321;</td><td class="k">Gq</td>
+            <td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k" style="color:var(--dilate)">&#8595;</td>
+            <td class="k">&#8212;</td><td class="k" style="color:var(--dilate)">&#8596;/&#8595;</td>
+            <td>Clean SVR rise; useful in sympathectomy</td>
+            <td>No inotropic support; flow can fall as pressure rises</td>
+          </tr>
+          <tr>
+            <td class="k">Dopamine</td><td class="k">D&#8321; &#946;&#8321; &#945;&#8321;</td><td class="k">Gs + Gq</td>
+            <td class="k">varies</td><td class="k" style="color:var(--constrict)">&#8593;&#8593;</td>
+            <td class="k">&#8593;</td><td class="k">&#8593;</td>
+            <td>Splanchnic and renal vasodilation at low concentrations</td>
+            <td>Partly indirect, so unpredictable; arrhythmogenic</td>
+          </tr>
+          <tr>
+            <td class="k">Vasopressin</td><td class="k">V&#8321;&#8342;</td><td class="k">Gq</td>
+            <td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k">&#8596;/&#8595;</td>
+            <td class="k">&#8212;</td><td class="k">&#8596;/&#8595;</td>
+            <td>Non-adrenergic; works despite catecholamine saturation</td>
+            <td>No inotropy; regional ischaemia limits the dose</td>
+          </tr>
+          <tr>
+            <td class="k">Angiotensin II</td><td class="k">AT&#8321;</td><td class="k">Gq</td>
+            <td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k">&#8596;/&#8595;</td>
+            <td class="k">&#8212;</td><td class="k">&#8596;/&#8595;</td>
+            <td>A third independent pathway for refractory vasoplegia</td>
+            <td>No inotropy; least familiar at the bedside</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <div class="callout-t">Read the columns, not the rows</div>
+      <p>Scan the <strong>Inotropy</strong> column. Three drugs have a dash &#8212; phenylephrine, vasopressin, angiotensin II &#8212; and all three carry the same limitation, because it is the same limitation. Any pure vasoconstrictor raises afterload and offers the ventricle nothing back. Once you see that, three separate facts collapse into one idea, and you stop needing to remember them individually.</p>
+    </div>
+  </section>
+
+  <!-- 05 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>Four traps</h2></div>
+    <div class="spine">
+      <p>Each of these is a place candidates reliably lose ground.</p>
+      <p><strong>Confusing the direct effect with the reflex.</strong> "Norepinephrine causes bradycardia" is wrong as stated &#8212; &#946;&#8321; stimulation is chronotropic. The reflex opposes it, and sometimes wins. Always name which force you are describing.</p>
+      <p><strong>Treating pressure as perfusion.</strong> MAP is the number you can see; flow is what delivers oxygen. Phenylephrine can improve one while reducing the other.</p>
+      <p><strong>Believing tidy dose cutoffs.</strong> Both epinephrine and dopamine are taught with numeric thresholds that do not exist. Occupancy is continuous, receptor density differs by bed, and plasma levels vary between patients.</p>
+      <p><strong>Overclaiming.</strong> Cardiac output is <em>usually</em> preserved on norepinephrine. Epinephrine-associated lactate is <em>often</em> aerobic. In a shocked patient it can be both at once. Saying so is a strength, not a hedge &#8212; certainty where the evidence is softer is exactly what a good examiner probes.</p>
+    </div>
+  </section>
+
+  <!-- QUIZ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><h2>Check yourself</h2></div>
+    <div class="spine"><p>Six questions spanning the whole module. Each one requires a derivation rather than a lookup.</p></div>
+    <div id="quiz"></div>
+    <div class="score" id="score">0 of 6 answered</div>
+  </section>
+
+  <div class="next">
+    <div class="panel-label">Next &#183; Lesson 6</div>
+    <p style="font-family:var(--display);font-size:22px;font-weight:600;margin:0 0 8px">Think Like a CRNA</p>
+    <p style="color:var(--ink-2);margin:0">Progressive ICU scenarios with real numbers, then the interview section &#8212; each question with what the examiner is testing, a weak answer, a good ICU-nurse answer, an elite answer, and the follow-up you should expect.</p>
+  </div>
+
+</div>
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- derivation drill ----------
+     "varies" is a first-class answer: for some drug/variable pairs it is the
+     only honest one, and offering it teaches that as much as the drill does. */
+  var DRUGS = [
+    {
+      id: "ne", name: "Norepinephrine",
+      rx: "α₁ ≫ β₁ · minimal β₂",
+      ans: { svr: "up", hr: "flat", co: "flat" },
+      chain:
+        "α₁ → Gq → PLCβ → IP₃/DAG → ↑Ca²⁺ → MLCK → constriction → ↑SVR ↑MAP\n" +
+        "α₁ on veins → ↑stressed volume → ↑venous return → ↑preload\n" +
+        "β₁ → Gs → ↑cAMP → PKA → ↑contractility, ↑SA node rate\n" +
+        "↑MAP → baroreceptors → ↑vagal → opposes the β₁ rate effect",
+      note:
+        "HR is the sum of a real β₁ increase and a real vagal brake — most often roughly flat, sometimes slower. " +
+        "CO usually holds or rises, because added preload and inotropy pay for the afterload. In a ventricle with no reserve it can still fall."
+    },
+    {
+      id: "epi", name: "Epinephrine",
+      rx: "α₁ · β₁ · β₂",
+      ans: { svr: "varies", hr: "up", co: "up" },
+      chain:
+        "β₁ → Gs → ↑cAMP → PKA → ↑contractility and ↑rate → ↑CO\n" +
+        "β₂ → Gs → PKA in smooth muscle → inhibits MLCK → vasodilation → ↓SVR\n" +
+        "α₁ → Gq → constriction → ↑SVR, engaged at higher concentrations\n" +
+        "net vascular effect = α₁ against β₂, and which wins shifts with concentration",
+      note:
+        "SVR genuinely varies — that is the answer, not a dodge. At lower concentrations β₂ can dominate and drop SVR; higher up, α₁ prevails. " +
+        "CO rises throughout because β₁ is engaged early and never stops."
+    },
+    {
+      id: "phe", name: "Phenylephrine",
+      rx: "α₁ only",
+      ans: { svr: "up", hr: "down", co: "down" },
+      chain:
+        "α₁ → Gq → PLCβ → IP₃/DAG → ↑Ca²⁺ → MLCK → constriction → ↑SVR ↑MAP\n" +
+        "↑MAP → baroreceptors → ↑vagal → M₂ → Gi → SA node slows → ↓HR\n" +
+        "↑SVR = ↑afterload, and no β₁ to defend stroke volume → ↓SV\n" +
+        "CO = HR × SV, and both terms fell",
+      note:
+        "The cleanest illustration in the module that pressure and flow can move in opposite directions. " +
+        "In a healthy ventricle with afterload reserve, CO holds up far better — the bradycardia still appears."
+    },
+    {
+      id: "dop", name: "Dopamine",
+      rx: "D₁ · β₁ · α₁ · releases stored NE",
+      ans: { svr: "varies", hr: "up", co: "up" },
+      chain:
+        "D₁ → Gs → ↑cAMP → renal/mesenteric vasodilation → ↓SVR at low concentrations\n" +
+        "β₁ → Gs → ↑contractility and rate → ↑CO\n" +
+        "α₁ → Gq → constriction → ↑SVR at higher concentrations\n" +
+        "indirect: releases norepinephrine from sympathetic nerve terminals",
+      note:
+        "SVR varies with concentration, as with epinephrine. The extra unpredictability is the indirect arm — " +
+        "it needs intact NE stores, which can be depleted in chronic heart failure or prolonged shock."
+    },
+    {
+      id: "avp", name: "Vasopressin",
+      rx: "V₁ₐ (vascular) · V₂ (renal)",
+      ans: { svr: "up", hr: "flat", co: "down" },
+      chain:
+        "V₁ₐ → Gq → PLC → IP₃/DAG → ↑Ca²⁺ → MLCK → constriction → ↑SVR ↑MAP\n" +
+        "no cardiac V-receptor → no inotropy at all\n" +
+        "↑MAP → baroreflex → mild vagal response → HR flat or slightly lower\n" +
+        "V₂ → Gs → cAMP → AQP2 insertion → water reabsorption (renal, not vascular)",
+      note:
+        "Same structural problem as phenylephrine: afterload up, nothing given back. CO tends to fall in a compromised ventricle and hold in a good one. " +
+        "Keep V₂ out of the hemodynamic answer entirely — different tissue, different job."
+    },
+    {
+      id: "at2", name: "Angiotensin II",
+      rx: "AT₁",
+      ans: { svr: "up", hr: "flat", co: "down" },
+      chain:
+        "AT₁ → Gq → PLC → IP₃/DAG → ↑Ca²⁺ → MLCK → constriction → ↑SVR ↑MAP\n" +
+        "no cardiac AT₁ inotropic effect of consequence here → no inotropy\n" +
+        "↑MAP → baroreflex → vagal response → HR flat or slightly lower\n" +
+        "also drives aldosterone release and ADH secretion via the RAAS",
+      note:
+        "Mechanistically almost interchangeable with vasopressin at the vascular level — Gq, no inotropy, same afterload caution. " +
+        "Its distinct value is being a third receptor when the other two are saturated."
+    }
+  ];
+
+  var VARS = [
+    { key: "svr", label: "SVR" },
+    { key: "hr", label: "HR" },
+    { key: "co", label: "CO" }
+  ];
+  var OPTS = [
+    { v: "up", t: "↑" },
+    { v: "flat", t: "↔" },
+    { v: "down", t: "↓" },
+    { v: "varies", t: "varies" }
+  ];
+
+  var pickEl = document.getElementById("drugpick"),
+      rxEl = document.getElementById("rxlist"),
+      rowsEl = document.getElementById("predrows"),
+      revealEl = document.getElementById("reveal"),
+      chainEl = document.getElementById("chain");
+
+  var current = DRUGS[0];
+  var picked = {};
+
+  DRUGS.forEach(function (d) {
+    var b = document.createElement("button");
+    b.className = "dbtn";
+    b.type = "button";
+    b.textContent = d.name;
+    b.setAttribute("aria-pressed", d === current ? "true" : "false");
+    b.addEventListener("click", function () {
+      current = d;
+      Array.prototype.forEach.call(pickEl.children, function (c) {
+        c.setAttribute("aria-pressed", c === b ? "true" : "false");
+      });
+      render();
+    });
+    pickEl.appendChild(b);
+  });
+
+  function render() {
+    picked = {};
+    rxEl.textContent = "Receptors — " + current.rx;
+    rowsEl.innerHTML = "";
+    chainEl.hidden = true;
+
+    VARS.forEach(function (v) {
+      var row = document.createElement("div");
+      row.className = "predrow";
+      var lab = document.createElement("span");
+      lab.textContent = "Predict " + v.label;
+      row.appendChild(lab);
+
+      var box = document.createElement("div");
+      box.className = "choices";
+      OPTS.forEach(function (o) {
+        var b = document.createElement("button");
+        b.className = "ch";
+        b.type = "button";
+        b.textContent = o.t;
+        b.setAttribute("aria-pressed", "false");
+        b.setAttribute("aria-label", v.label + " " + (o.v === "varies" ? "varies" : o.v));
+        b.addEventListener("click", function () {
+          if (b.dataset.r) return;
+          picked[v.key] = o.v;
+          Array.prototype.forEach.call(box.children, function (c) {
+            c.setAttribute("aria-pressed", c === b ? "true" : "false");
+          });
+        });
+        box.appendChild(b);
+      });
+      row.appendChild(box);
+      rowsEl.appendChild(row);
+    });
+  }
+
+  revealEl.addEventListener("click", function () {
+    var rows = rowsEl.querySelectorAll(".choices");
+    VARS.forEach(function (v, i) {
+      var correct = current.ans[v.key];
+      Array.prototype.forEach.call(rows[i].children, function (c, oi) {
+        var val = OPTS[oi].v;
+        c.disabled = true;
+        if (val === correct) c.dataset.r = "hit";
+        else if (picked[v.key] === val) c.dataset.r = "miss";
+      });
+    });
+
+    var html = '<div class="ct">' + current.name + ' &#183; the chain</div>';
+    html += "<code>" + current.chain.replace(/\n/g, "<br>") + "</code>";
+    html += "<p style='margin:0'>" + current.note + "</p>";
+    chainEl.innerHTML = html;
+    chainEl.hidden = false;
+  });
+
+  render();
+
+  /* ---------- quiz ---------- */
+  var QUESTIONS = [
+    {
+      q: "Three drugs in this module share the same core limitation in a failing ventricle. Which grouping identifies them, and what is the shared mechanism?",
+      opts: [
+        "Epinephrine, dopamine, norepinephrine — all raise myocardial oxygen consumption",
+        "Norepinephrine, vasopressin, dopamine — all constrict the pulmonary vasculature",
+        "Epinephrine, phenylephrine, vasopressin — all provoke reflex bradycardia at higher doses",
+        "Phenylephrine, vasopressin, angiotensin II — all raise afterload with no inotropic support"
+      ],
+      a: 3,
+      tested: "Collapsing three separate facts into one structural idea",
+      why: "These three are pure vasoconstrictors with no cardiac receptor providing inotropy. Each raises afterload and offers the ventricle nothing back, so stroke volume falls where contractile reserve is absent.",
+      wrong: [
+        "All three do raise oxygen consumption, but each also provides inotropy, which changes the picture entirely.",
+        "Pulmonary vasoconstriction is a genuine concern with several agents; it is not the limitation shared by this trio.",
+        "Epinephrine typically produces tachycardia through β1, not reflex bradycardia, so this grouping does not hold.",
+        null
+      ]
+    },
+    {
+      q: "Why does deriving a drug's effects outperform memorising a table when an interviewer asks a follow-up?",
+      opts: [
+        "Derivation regenerates the answer under conditions the table never listed",
+        "Tables commonly contain factual errors that derivation naturally corrects",
+        "Interviewers explicitly penalise candidates who reference memorised material",
+        "Receptor pharmacology changes often enough that tables become outdated"
+      ],
+      a: 0,
+      tested: "Understanding why the method is taught rather than the chart",
+      why: "A table stores conclusions for an average patient. A follow-up usually changes a condition — a denervated heart, a failing ventricle, an acidotic patient — and only a derivation can regenerate the answer under the new conditions.",
+      wrong: [
+        null,
+        "A good table is accurate. The problem is not error but that it cannot extend to conditions it does not list.",
+        "Interviewers reward correct answers regardless of source; what they probe is whether understanding sits behind them.",
+        "Receptor pharmacology is stable. The limitation is the table's scope, not its currency."
+      ]
+    },
+    {
+      q: "A heart-transplant recipient with a denervated heart receives phenylephrine. What should you predict, and why?",
+      opts: [
+        "Marked bradycardia, because denervation leaves vagal tone unopposed at the node",
+        "Rise in SVR without the usual reflex slowing, since the reflex arc is interrupted",
+        "No change in SVR, because α1 receptors are downregulated after transplantation",
+        "Tachycardia, because the denervated node depends on circulating catecholamines"
+      ],
+      a: 1,
+      tested: "Applying step four of the method to a patient whose reflex arc is absent",
+      why: "α₁ receptors on vascular smooth muscle are unaffected by cardiac denervation, so SVR and MAP rise normally. The reflex requires efferent vagal innervation to the SA node, which transplantation interrupts — so the expected slowing does not occur.",
+      wrong: [
+        "Denervation removes vagal innervation rather than leaving it unopposed, so reflex bradycardia is what goes missing.",
+        null,
+        "Cardiac denervation says nothing about vascular α1 receptors, which respond as usual.",
+        "The absence of reflex slowing is not the same as active tachycardia; phenylephrine provides no chronotropic drive."
+      ]
+    },
+    {
+      q: "Which pair of drugs is closest mechanistically at the level of vascular smooth muscle, despite binding entirely different receptors?",
+      opts: [
+        "Epinephrine and dopamine, which both recruit receptors in a concentration-dependent order",
+        "Norepinephrine and epinephrine, which share α1 and β1 activity in similar proportions",
+        "Vasopressin and angiotensin II, which both couple to Gq and provide no inotropy",
+        "Phenylephrine and norepinephrine, which both act predominantly through α1 receptors"
+      ],
+      a: 2,
+      tested: "Recognising convergence of different receptors on a shared cascade",
+      why: "V₁ₐ and AT₁ are unrelated receptors responding to unrelated ligands, but both couple to Gq and run the identical PLC/IP₃/calcium/MLCK cascade, and neither provides inotropy. At the vascular level they are near-interchangeable.",
+      wrong: [
+        "Both do show concentration-dependent recruitment, but their receptor profiles and downstream effects differ substantially.",
+        "Their proportions differ importantly — epinephrine has significant β2 activity that norepinephrine essentially lacks.",
+        null,
+        "Both use α1, but norepinephrine's additional β1 activity makes their hemodynamic profiles meaningfully different."
+      ]
+    },
+    {
+      q: "A patient on high-dose norepinephrine and epinephrine remains vasoplegic. What is the mechanistic case for adding vasopressin rather than escalating further?",
+      opts: [
+        "Vasopressin produces stronger vasoconstriction per unit than either catecholamine",
+        "Its longer half-life provides more stable pressures than titrated catecholamines",
+        "It supplies the inotropic support that catecholamines can no longer generate",
+        "It engages a separate receptor pool unaffected by adrenergic desensitisation"
+      ],
+      a: 3,
+      tested: "Arguing from pathway independence rather than from potency",
+      why: "Adrenergic receptors desensitise and downregulate under sustained exposure, and acidosis blunts them further, so escalation pushes on a degraded mechanism. V₁ₐ is a separate pool feeding the same Gq cascade, and vasopressin additionally interferes with the K-ATP and NO pathways driving the vasoplegia.",
+      wrong: [
+        "Relative potency is not the argument, and it would not explain why escalating the catecholamine has stopped working.",
+        "Pharmacokinetic convenience is not the mechanistic case for adding it in refractory vasoplegia.",
+        "Vasopressin has no inotropic activity at all — this is one of its principal limitations.",
+        null
+      ]
+    },
+    {
+      q: "Which statement about epinephrine's effect on SVR is most defensible?",
+      opts: [
+        "It varies, because α1 constriction and β2 dilation compete across the concentration range",
+        "It rises consistently, since α1 activity predominates at all clinically relevant levels",
+        "It falls consistently, because β2 receptors have higher affinity than α1 receptors do",
+        "It is unchanged, as the α1 and β2 effects cancel precisely across the usable range"
+      ],
+      a: 0,
+      tested: "Accepting a genuinely conditional answer instead of forcing a single direction",
+      why: "Epinephrine engages both α1 and β2, which act in opposite directions on the vasculature. β receptors engage at lower concentrations, so β2 dilation can dominate early while α1 prevails higher up. 'It varies' is the accurate answer, not an evasion.",
+      wrong: [
+        null,
+        "At lower concentrations β2-mediated vasodilation can dominate, so SVR does not rise consistently.",
+        "β receptors do engage at lower concentrations, but α1 becomes substantial higher up and can raise SVR markedly.",
+        "The two effects do not cancel precisely; their balance shifts continuously with concentration."
+      ]
+    }
+  ];
+
+  var LETTERS = ["A", "B", "C", "D"];
+  var answered = 0, correct = 0;
+  var quizEl = document.getElementById("quiz");
+  var scoreEl = document.getElementById("score");
+
+  QUESTIONS.forEach(function (item, qi) {
+    var card = document.createElement("div");
+    card.className = "quiz-q";
+    var num = document.createElement("div");
+    num.className = "qnum";
+    num.textContent = "QUESTION " + (qi + 1) + " OF " + QUESTIONS.length;
+    card.appendChild(num);
+    var qt = document.createElement("div");
+    qt.className = "qtext";
+    qt.innerHTML = item.q;
+    card.appendChild(qt);
+
+    var opts = document.createElement("div");
+    opts.className = "opts";
+    var explain = document.createElement("div");
+    explain.className = "explain";
+    explain.hidden = true;
+
+    item.opts.forEach(function (text, oi) {
+      var b = document.createElement("button");
+      b.className = "opt";
+      b.type = "button";
+      b.innerHTML = '<span class="ltr">' + LETTERS[oi] + '</span><span>' + text + '</span>';
+      b.addEventListener("click", function () {
+        if (card.dataset.done) return;
+        card.dataset.done = "1";
+        answered++;
+        if (oi === item.a) correct++;
+        Array.prototype.forEach.call(opts.children, function (el, i) {
+          el.disabled = true;
+          if (i === item.a) el.dataset.state = "correct";
+          else if (i === oi) el.dataset.state = "wrong";
+        });
+        var html = '<div class="tested">Testing &#183; ' + item.tested + '</div>';
+        html += '<p><strong>' + LETTERS[item.a] + ' is correct.</strong> ' + item.why + '</p><ul>';
+        item.wrong.forEach(function (w, i) {
+          if (w) html += '<li><strong>' + LETTERS[i] + '</strong> &#8212; ' + w + '</li>';
+        });
+        html += '</ul>';
+        explain.innerHTML = html;
+        explain.hidden = false;
+        scoreEl.innerHTML = answered + " of " + QUESTIONS.length +
+          " answered &#183; <strong>" + correct + " correct</strong>";
+      });
+      opts.appendChild(b);
+    });
+
+    card.appendChild(opts);
+    card.appendChild(explain);
+    quizEl.appendChild(card);
+  });
+})();
+</script>
