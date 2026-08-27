@@ -1,0 +1,886 @@
+<title>Three Ways to Break the Pattern</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground: #F5F6F8;
+    --surface: #FFFFFF;
+    --surface-2: #EDEFF3;
+    --ink: #14181F;
+    --ink-2: #454C59;
+    --ink-3: #6D7585;
+    --rule: #DCE0E7;
+    --rule-2: #C6CCD6;
+
+    /* Color encodes physiology, not decoration:
+       constrict = arterial crimson, dilate = teal, signal/calcium = amber. */
+    --constrict: #B62D46;
+    --constrict-soft: #FBEAED;
+    --dilate: #17706E;
+    --dilate-soft: #E3F1F0;
+    --signal: #A96322;
+    --signal-soft: #FBEFE1;
+
+    --shadow: 0 1px 2px rgba(20,24,31,.05), 0 8px 24px rgba(20,24,31,.05);
+
+    --display: "Fraunces", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --measure: 66ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0E1116;
+      --surface: #161B22;
+      --surface-2: #1D242D;
+      --ink: #E9ECF1;
+      --ink-2: #B2BAC7;
+      --ink-3: #838D9C;
+      --rule: #2A323C;
+      --rule-2: #3B4552;
+      --constrict: #F2758C;
+      --constrict-soft: #33161C;
+      --dilate: #57C4BF;
+      --dilate-soft: #102A29;
+      --signal: #E0A05E;
+      --signal-soft: #2C1F11;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0E1116;
+    --surface: #161B22;
+    --surface-2: #1D242D;
+    --ink: #E9ECF1;
+    --ink-2: #B2BAC7;
+    --ink-3: #838D9C;
+    --rule: #2A323C;
+    --rule-2: #3B4552;
+    --constrict: #F2758C;
+    --constrict-soft: #33161C;
+    --dilate: #57C4BF;
+    --dilate-soft: #102A29;
+    --signal: #E0A05E;
+    --signal-soft: #2C1F11;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px 96px; }
+  .spine { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 48px;
+    padding: 40px 0 28px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .crumb {
+    font-family: var(--mono);
+    font-size: 11.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  }
+  .crumb .sep { color: var(--rule-2); }
+  .crumb .here { color: var(--constrict); }
+  h1 {
+    font-family: var(--display);
+    font-optical-sizing: auto;
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.06;
+    letter-spacing: -.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 19px; color: var(--ink-2); margin: 0; max-width: 58ch;
+  }
+  .pips { display: flex; gap: 5px; align-items: center; }
+  .pip { width: 30px; height: 4px; border-radius: 2px; background: var(--rule-2); }
+  .pip.on { background: var(--constrict); }
+  .pip-label { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-left: 8px; letter-spacing: .06em; }
+
+  /* ---------- structure ---------- */
+  section { margin: 0 0 56px; }
+  .sec-head { display: flex; gap: 14px; align-items: baseline; margin-bottom: 18px; }
+  .sec-num {
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    color: var(--constrict); letter-spacing: .1em; padding-top: 6px;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 600;
+    font-size: clamp(24px, 3.4vw, 31px); line-height: 1.18; letter-spacing: -.015em;
+    margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--body); font-weight: 700; font-size: 17.5px;
+    letter-spacing: .005em; margin: 32px 0 8px;
+  }
+  p { margin: 0 0 16px; }
+  .spine p, .spine ul, .spine ol { max-width: var(--measure); }
+  strong { font-weight: 700; }
+  em.term { font-style: normal; font-weight: 700; color: var(--constrict); }
+  ul, ol { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 7px; }
+
+  code, .m { font-family: var(--mono); font-size: .88em; }
+  .m { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+
+  /* ---------- panels ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 26px;
+    margin: 26px 0;
+    box-shadow: var(--shadow);
+  }
+  .panel-label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px;
+  }
+
+  .callout {
+    border-left: 3px solid var(--signal);
+    background: var(--signal-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .callout .callout-t {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--signal); font-weight: 600; margin-bottom: 6px;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .myth {
+    border-left: 3px solid var(--constrict);
+    background: var(--constrict-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .myth .callout-t { color: var(--constrict); }
+  .myth p:last-child { margin-bottom: 0; }
+
+  /* ---------- figures ---------- */
+  figure { margin: 28px 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; }
+  figcaption {
+    font-size: 14.5px; color: var(--ink-2); margin-top: 12px;
+    max-width: 62ch; line-height: 1.55;
+  }
+  .scroller { overflow-x: auto; }
+
+  /* ---------- predict ---------- */
+  details.predict {
+    border: 1px solid var(--rule); border-radius: 10px;
+    background: var(--surface); margin: 24px 0; overflow: hidden;
+  }
+  details.predict > summary {
+    cursor: pointer; padding: 16px 20px; list-style: none;
+    font-weight: 600; display: flex; gap: 12px; align-items: flex-start;
+  }
+  details.predict > summary::-webkit-details-marker { display: none; }
+  details.predict > summary::before {
+    content: "PREDICT"; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .12em; color: var(--dilate); border: 1px solid var(--dilate);
+    padding: 3px 7px; border-radius: 4px; flex-shrink: 0; margin-top: 2px;
+  }
+  details.predict[open] > summary::before { content: "REVEALED"; color: var(--ink-3); border-color: var(--rule-2); }
+  details.predict > summary:hover { background: var(--surface-2); }
+  details.predict > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: -2px; }
+  .predict-body { padding: 0 20px 18px 20px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  .predict-body p:last-child { margin-bottom: 0; }
+
+  details.deeper {
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    margin: 26px 0; padding: 0;
+  }
+  details.deeper > summary {
+    cursor: pointer; padding: 14px 0; list-style: none;
+    font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--dilate); display: flex; gap: 10px; align-items: center;
+  }
+  details.deeper > summary::-webkit-details-marker { display: none; }
+  details.deeper > summary::after { content: "+"; margin-left: auto; font-size: 16px; }
+  details.deeper[open] > summary::after { content: "\2212"; }
+  details.deeper > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .deeper-body { padding-bottom: 18px; }
+  .deeper-body p:last-child { margin-bottom: 0; }
+
+  /* ---------- interactive: MAP explorer ---------- */
+  .sim { display: grid; grid-template-columns: 1fr 200px; gap: 26px; align-items: start; }
+  @media (max-width: 720px) { .sim { grid-template-columns: 1fr; } }
+  .ctl { margin-bottom: 20px; }
+  .ctl-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2); margin-bottom: 7px;
+  }
+  .ctl-top b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--constrict); height: 22px; }
+  input[type=range]:focus-visible { outline: 2px solid var(--constrict); outline-offset: 4px; }
+  .readout {
+    background: var(--surface-2); border-radius: 8px; padding: 18px; text-align: center;
+  }
+  .readout .big {
+    font-family: var(--mono); font-weight: 600; font-size: 42px; line-height: 1;
+    font-variant-numeric: tabular-nums; color: var(--constrict);
+  }
+  .readout .unit { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .1em; margin-top: 6px; }
+  .verdict { font-size: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rule); color: var(--ink-2); min-height: 3.2em; }
+
+  /* ---------- interactive: pathway switcher ---------- */
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tab {
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em;
+    padding: 8px 15px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--rule-2); background: transparent; color: var(--ink-2);
+  }
+  .tab:hover { border-color: var(--ink-3); color: var(--ink); }
+  .tab:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+  .pathway[hidden] { display: none; }
+  .pathway h4 { font-family: var(--body); font-size: 16px; font-weight: 700; margin: 0 0 8px; }
+  .pathway p { font-size: 15.5px; color: var(--ink-2); }
+
+  /* ---------- table ---------- */
+  .tbl-wrap { overflow-x: auto; margin: 24px 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 15px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+    border-bottom: 1px solid var(--rule-2);
+  }
+  td.k { font-family: var(--mono); font-size: 13px; color: var(--ink); white-space: nowrap; }
+
+  /* ---------- quiz ---------- */
+  .quiz-q { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); padding: 24px; margin-bottom: 18px; }
+  .qnum { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; color: var(--ink-3); margin-bottom: 10px; }
+  .qtext { font-weight: 600; margin-bottom: 16px; }
+  .opts { display: flex; flex-direction: column; gap: 8px; }
+  .opt {
+    display: flex; gap: 11px; align-items: flex-start; width: 100%; text-align: left;
+    padding: 12px 14px; border: 1px solid var(--rule-2); border-radius: 7px;
+    background: transparent; color: var(--ink); font: inherit; font-size: 15.5px;
+    cursor: pointer; line-height: 1.5;
+  }
+  .opt:hover:not([disabled]) { border-color: var(--ink-3); background: var(--surface-2); }
+  .opt:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .opt .ltr { font-family: var(--mono); font-size: 12px; color: var(--ink-3); flex-shrink: 0; padding-top: 2px; }
+  .opt[data-state="correct"] { border-color: var(--dilate); background: var(--dilate-soft); }
+  .opt[data-state="correct"] .ltr { color: var(--dilate); }
+  .opt[data-state="wrong"] { border-color: var(--constrict); background: var(--constrict-soft); }
+  .opt[data-state="wrong"] .ltr { color: var(--constrict); }
+  .opt[disabled] { cursor: default; }
+  .explain { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 15px; }
+  .explain[hidden] { display: none; }
+  .explain .tested {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 10px;
+  }
+  .explain ul { margin: 10px 0 0; }
+  .explain li { font-size: 14.5px; color: var(--ink-2); }
+  .score {
+    font-family: var(--mono); font-size: 13px; color: var(--ink-2);
+    padding: 14px 0 0; border-top: 1px solid var(--rule); margin-top: 8px;
+  }
+
+  .next {
+    border: 1px solid var(--rule-2); border-radius: 10px; padding: 24px;
+    background: var(--surface-2); margin-top: 40px;
+  }
+  .next .panel-label { color: var(--constrict); }
+  .next p:last-child { margin-bottom: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+
+<style>
+  .occ { display:grid; grid-template-columns:1fr 210px; gap:26px; align-items:start; }
+  @media (max-width:760px){ .occ { grid-template-columns:1fr; } }
+  .rbar { display:grid; grid-template-columns:64px 1fr 46px; gap:10px; align-items:center;
+          font-family:var(--mono); font-size:11.5px; color:var(--ink-2); margin-bottom:11px; }
+  .rtrack { height:15px; background:var(--surface-2); border-radius:8px; overflow:hidden; }
+  .rfill { height:100%; border-radius:8px; transition:width .12s linear; }
+  .rbar b { text-align:right; font-variant-numeric:tabular-nums; color:var(--ink); font-weight:600; }
+  .hemo { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:18px;
+          padding-top:16px; border-top:1px solid var(--rule); }
+  .hemo div { text-align:center; font-family:var(--mono); }
+  .hemo .lab { font-size:10px; letter-spacing:.1em; color:var(--ink-3); }
+  .hemo .v { font-size:19px; font-weight:600; margin-top:3px; }
+  .drug-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:26px 0; }
+  @media (max-width:820px){ .drug-grid { grid-template-columns:1fr; } }
+  .drug { border:1px solid var(--rule); border-radius:10px; background:var(--surface); padding:20px; }
+  .drug h4 { font-family:var(--display); font-size:19px; font-weight:600; margin:0 0 4px; }
+  .drug .rx { font-family:var(--mono); font-size:11px; color:var(--constrict); letter-spacing:.06em; margin-bottom:12px; }
+  .drug p { font-size:14.5px; color:var(--ink-2); margin:0; }
+  .warn { display:inline-block; font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+          text-transform:uppercase; color:var(--signal); border:1px solid var(--signal);
+          padding:3px 8px; border-radius:4px; margin-bottom:12px; }
+</style>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="crumb">
+      <span>Vasopressors</span><span class="sep">/</span>
+      <span class="here">Lesson 3 of 6</span><span class="sep">/</span>
+      <span>Epinephrine &#183; Phenylephrine &#183; Dopamine</span>
+    </div>
+    <h1>Three Ways to Break the Pattern</h1>
+    <p class="standfirst">Norepinephrine was the clean case. These three are where the template gets tested &#8212; one adds a receptor, one removes a receptor, and one refuses to behave predictably at all.</p>
+    <div class="pips" aria-label="Lesson 3 of 6">
+      <span class="pip on"></span><span class="pip on"></span><span class="pip on"></span>
+      <span class="pip"></span><span class="pip"></span><span class="pip"></span>
+      <span class="pip-label">THREE DRUGS</span>
+    </div>
+  </header>
+
+  <div class="spine">
+    <p>You now have a working method: name the receptors, run each cascade separately, then combine them and check the reflex. Lesson 2 applied it to a drug that cooperates.</p>
+    <p>These three do not. Each one breaks the pattern in a different, instructive way &#8212; and two of them come wrapped in teaching so oversimplified that repeating it in an interview will cost you.</p>
+  </div>
+
+  <div class="drug-grid">
+    <div class="drug">
+      <h4>Epinephrine</h4>
+      <div class="rx">&#945;&#8321; &#183; &#946;&#8321; &#183; &#946;&#8322;</div>
+      <p>Adds &#946;&#8322;. Now the drug has a vasodilator arm competing with its own vasoconstrictor arm.</p>
+    </div>
+    <div class="drug">
+      <h4>Phenylephrine</h4>
+      <div class="rx">&#945;&#8321; only</div>
+      <p>Removes &#946;&#8321;. Shows you exactly what norepinephrine's &#946;&#8321; activity was quietly paying for.</p>
+    </div>
+    <div class="drug">
+      <h4>Dopamine</h4>
+      <div class="rx">D&#8321; &#183; &#946;&#8321; &#183; &#945;&#8321; &#183; indirect</div>
+      <p>Four mechanisms, one of which depends on the patient's own neurotransmitter stores.</p>
+    </div>
+  </div>
+
+  <!-- 01 EPINEPHRINE -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>Epinephrine: the drug that argues with itself</h2></div>
+    <div class="spine">
+      <p>Epinephrine hits all three adrenergic receptors that matter here. Two of them do opposite things to the vasculature.</p>
+      <ul>
+        <li><strong>&#945;&#8321;</strong> &#8594; Gq &#8594; vasoconstriction &#8594; &#8593; SVR</li>
+        <li><strong>&#946;&#8321;</strong> &#8594; Gs &#8594; &#8593; contractility and rate &#8594; &#8593; CO</li>
+        <li><strong>&#946;&#8322;</strong> &#8594; Gs &#8594; <em>vaso<strong>dilation</strong></em>, particularly in skeletal muscle &#8594; &#8595; SVR</li>
+      </ul>
+      <p>Return to <span class="m">MAP &#8776; CO &#215; SVR</span>. Epinephrine reliably raises CO. What it does to SVR depends on which of &#945;&#8321; and &#946;&#8322; is winning &#8212; and that balance shifts with concentration.</p>
+    </div>
+
+    <div class="myth">
+      <div class="callout-t">The oversimplification to avoid</div>
+      <p>You will have been taught "low dose is beta, high dose is alpha," with tidy numeric cutoffs. Directionally there is something real here &#8212; &#946; receptors are engaged at lower concentrations than &#945;&#8321; &#8212; but the tidy version is wrong in three ways worth being able to name.</p>
+      <p>The transition is <strong>gradual and overlapping</strong>, not stepped: &#946; effects do not switch off when &#945; arrives. Receptor density <strong>varies by vascular bed</strong>, so different circulations cross over at different points. And the plasma concentration produced by a given infusion rate <strong>varies enormously between patients</strong> &#8212; so a number that behaves one way in one patient behaves differently in the next.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">Interactive &#183; Watch the balance shift</div>
+      <div class="occ">
+        <div>
+          <div class="ctl">
+            <div class="ctl-top"><span>Relative concentration</span><b id="concLabel">Low</b></div>
+            <input type="range" id="conc" min="0" max="100" step="1" value="18" aria-label="Relative epinephrine concentration, low to high">
+          </div>
+          <div class="rbar">
+            <span>&#946;&#8321;</span>
+            <span class="rtrack"><span class="rfill" id="fB1" style="background:var(--constrict);width:40%"></span></span>
+            <b id="vB1">40</b>
+          </div>
+          <div class="rbar">
+            <span>&#946;&#8322;</span>
+            <span class="rtrack"><span class="rfill" id="fB2" style="background:var(--dilate);width:40%"></span></span>
+            <b id="vB2">40</b>
+          </div>
+          <div class="rbar">
+            <span>&#945;&#8321;</span>
+            <span class="rtrack"><span class="rfill" id="fA1" style="background:var(--signal);width:10%"></span></span>
+            <b id="vA1">10</b>
+          </div>
+          <p style="font-size:13.5px;color:var(--ink-3);margin:14px 0 0">Notice there is no cliff. Every receptor is engaged to some degree everywhere on the slider &#8212; the &#946; curves never fall to zero when &#945;&#8321; climbs. That absence of a threshold is the whole point.</p>
+        </div>
+        <div class="readout">
+          <div class="unit" style="margin:0 0 10px">NET EFFECT</div>
+          <div class="hemo" style="border-top:none;padding-top:0;margin-top:0">
+            <div><div class="lab">SVR</div><div class="v" id="oSVR">&#8595;</div></div>
+            <div><div class="lab">CO</div><div class="v" id="oCO">&#8593;</div></div>
+            <div><div class="lab">MAP</div><div class="v" id="oMAP">&#8596;</div></div>
+          </div>
+          <div class="verdict" id="epiVerdict"></div>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--ink-3);margin:16px 0 0;padding-top:14px;border-top:1px solid var(--rule)">Illustrative model of relative receptor engagement. It is not a dosing guide and deliberately carries no mcg/min values &#8212; attaching numbers would recreate the false precision this section exists to dismantle.</p>
+    </div>
+
+    <details class="predict">
+      <summary>At lower concentrations, epinephrine can raise cardiac output while the diastolic pressure <em>falls</em>. Why?</summary>
+      <div class="predict-body">
+        <p><strong>&#946;&#8322; is dilating faster than &#945;&#8321; is constricting.</strong></p>
+        <p>&#946;&#8321; raises stroke volume, which widens the pulse pressure and lifts the systolic. Meanwhile &#946;&#8322;-mediated vasodilation in skeletal muscle drops SVR, and diastolic pressure depends heavily on SVR &#8212; so the diastolic falls.</p>
+        <p>The result looks contradictory on the monitor: a rising systolic, a falling diastolic, a MAP that barely moves, and a genuinely improved cardiac output. Every part of that is predictable from the receptor list.</p>
+      </div>
+    </details>
+
+    <h3>Why the lactate rises &#8212; and why that isn't necessarily bad news</h3>
+    <div class="spine">
+      <p>Start epinephrine and the lactate often climbs. The reflex interpretation is that perfusion is worsening. Frequently it is not, and this is one of the most quotable mechanisms in the whole module.</p>
+    </div>
+
+    <div class="scroller">
+      <figure>
+        <svg viewBox="0 0 680 240" role="img" aria-label="Epinephrine acting on beta-2 receptors raises cyclic AMP, which increases glycogenolysis and glycolysis and stimulates the sodium potassium ATPase. Pyruvate production exceeds mitochondrial capacity, so pyruvate is converted to lactate despite adequate oxygen delivery. This is aerobic lactate production, distinct from lactate generated by tissue hypoxia.">
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <g font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">
+            <rect x="12" y="94" width="112" height="38" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+            <text x="68" y="118" text-anchor="middle" fill="var(--dilate)" font-weight="600">&#946;&#8322; &#8594; &#8593;cAMP</text>
+
+            <line x1="124" y1="113" x2="160" y2="113" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="160" y1="113" x2="160" y2="60" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="160" y1="113" x2="160" y2="166" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="160" y1="60" x2="196" y2="60" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+            <line x1="160" y1="113" x2="196" y2="113" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+            <line x1="160" y1="166" x2="196" y2="166" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+
+            <rect x="198" y="42" width="150" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="273" y="65" text-anchor="middle" font-size="11.5">&#8593; glycogenolysis</text>
+            <rect x="198" y="95" width="150" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="273" y="118" text-anchor="middle" font-size="11.5">&#8593; glycolysis</text>
+            <rect x="198" y="148" width="150" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="273" y="171" text-anchor="middle" font-size="11.5">&#8593; Na&#8314;/K&#8314;-ATPase</text>
+
+            <line x1="348" y1="60" x2="384" y2="60" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="348" y1="113" x2="384" y2="113" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="348" y1="166" x2="384" y2="166" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="384" y1="60" x2="384" y2="166" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="384" y1="113" x2="416" y2="113" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+
+            <rect x="418" y="94" width="150" height="38" rx="6" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.3"/>
+            <text x="493" y="110" text-anchor="middle" fill="var(--signal)" font-weight="600" font-size="11.5">pyruvate exceeds</text>
+            <text x="493" y="125" text-anchor="middle" font-size="10" opacity=".8">mitochondrial capacity</text>
+
+            <line x1="568" y1="113" x2="600" y2="113" stroke="var(--constrict)" stroke-width="1.7" marker-end="url(#a3)"/>
+            <rect x="602" y="94" width="68" height="38" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.4"/>
+            <text x="636" y="118" text-anchor="middle" fill="var(--constrict)" font-weight="600">lactate</text>
+
+            <text x="340" y="216" text-anchor="middle" font-size="11" fill="var(--dilate)" font-weight="600">oxygen delivery is adequate throughout &#8212; this is not anaerobic</text>
+          </g>
+        </svg>
+        <figcaption>Epinephrine drives substrate through glycolysis faster than mitochondria can accept pyruvate. The excess becomes lactate <em>with oxygen present</em>. The same &#946;&#8322;/cAMP mechanism drives potassium intracellularly, which is why hypokalaemia often appears alongside.</figcaption>
+      </figure>
+    </div>
+
+    <div class="callout">
+      <div class="callout-t">How to say it under questioning</div>
+      <p>"A rising lactate on epinephrine isn't automatically a perfusion failure. &#946;&#8322; stimulation raises cAMP, accelerates glycogenolysis and glycolysis, and stimulates the Na&#8314;/K&#8314;-ATPase &#8212; so pyruvate production outruns mitochondrial capacity and the excess becomes lactate aerobically. I'd interpret the number alongside the trend in other perfusion markers rather than in isolation." Then stop &#8212; do not overclaim that the lactate <em>never</em> reflects hypoperfusion. In a shocked patient it can be both at once, and saying so is a strength.</p>
+    </div>
+  </section>
+
+  <!-- 02 PHENYLEPHRINE -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>Phenylephrine: the control experiment</h2></div>
+    <div class="spine">
+      <p>Phenylephrine is essentially a selective &#945;&#8321; agonist. It runs the Gq cascade from Lesson 1 and nothing else of consequence &#8212; which makes it the cleanest illustration in the module of what happens when you raise resistance and offer the ventricle nothing in return.</p>
+      <p>The trace is short: <span class="m">&#945;&#8321; &#8594; Gq &#8594; PLC&#946; &#8594; IP&#8323;/DAG &#8594; &#8593;Ca&#178;&#8314; &#8594; MLCK &#8594; contraction &#8594; &#8593;SVR &#8594; &#8593;MAP</span>.</p>
+      <p>What follows is where it gets interesting. Two consequences arrive that the drug did not directly cause.</p>
+    </div>
+
+    <div class="scroller">
+      <figure>
+        <svg viewBox="0 0 680 250" role="img" aria-label="Phenylephrine stimulates alpha-1 receptors, raising systemic vascular resistance and mean arterial pressure. Two consequences follow: baroreceptor activation increases vagal tone and lowers heart rate, and the increased afterload lowers stroke volume. Both reduce cardiac output, which can fall even as mean arterial pressure rises.">
+          <g font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">
+            <rect x="256" y="8" width="168" height="34" rx="6" fill="var(--constrict)" stroke="var(--constrict)"/>
+            <text x="340" y="30" text-anchor="middle" fill="var(--ground)" font-weight="600">PHENYLEPHRINE</text>
+            <line x1="340" y1="42" x2="340" y2="62" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+            <rect x="268" y="64" width="144" height="32" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.3"/>
+            <text x="340" y="85" text-anchor="middle" fill="var(--constrict)" font-weight="600">&#945;&#8321; &#8594; &#8593; SVR &#8594; &#8593; MAP</text>
+
+            <line x1="340" y1="96" x2="340" y2="112" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="150" y1="112" x2="530" y2="112" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="150" y1="112" x2="150" y2="132" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+            <line x1="530" y1="112" x2="530" y2="132" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+
+            <rect x="58" y="134" width="184" height="52" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+            <text x="150" y="153" text-anchor="middle" fill="var(--dilate)" font-weight="600" font-size="11.5">baroreflex &#8594; &#8593; vagal</text>
+            <text x="150" y="171" text-anchor="middle" font-size="11">&#8595; HEART RATE</text>
+
+            <rect x="438" y="134" width="184" height="52" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+            <text x="530" y="153" text-anchor="middle" fill="var(--dilate)" font-weight="600" font-size="11.5">&#8593; afterload, no inotropy</text>
+            <text x="530" y="171" text-anchor="middle" font-size="11">&#8595; STROKE VOLUME</text>
+
+            <line x1="150" y1="186" x2="150" y2="206" stroke="var(--dilate)" stroke-width="1.5"/>
+            <line x1="530" y1="186" x2="530" y2="206" stroke="var(--dilate)" stroke-width="1.5"/>
+            <line x1="150" y1="206" x2="530" y2="206" stroke="var(--dilate)" stroke-width="1.5"/>
+            <line x1="340" y1="206" x2="340" y2="222" stroke="var(--dilate)" stroke-width="1.8" marker-end="url(#a3)"/>
+            <rect x="236" y="224" width="208" height="26" rx="6" fill="none" stroke="var(--dilate)" stroke-width="1.4"/>
+            <text x="340" y="242" text-anchor="middle" fill="var(--dilate)" font-weight="600" font-size="11.5">CO = HR &#215; SV &#8212; both fell</text>
+          </g>
+        </svg>
+        <figcaption>Both branches of <span class="m">CO = HR &#215; SV</span> get pushed down at once, while MAP goes up. This is the mechanism behind the interview question "why might phenylephrine raise the MAP but lower cardiac output?"</figcaption>
+      </figure>
+    </div>
+
+    <div class="callout">
+      <div class="callout-t">The idea the whole module is built around</div>
+      <p><strong>A higher blood pressure does not mean better perfusion.</strong> Pressure is what you can measure easily; flow is what delivers oxygen. Phenylephrine can improve the first while reducing the second, and a patient can look better on the monitor while their tissues receive less.</p>
+    </div>
+
+    <details class="deeper">
+      <summary>Go deeper &#183; So is phenylephrine a bad drug?</summary>
+      <div class="deeper-body">
+        <p>No &#8212; and an interviewer may well push here to see whether you over-corrected.</p>
+        <p>The falling-CO problem is worst when the ventricle is already struggling. In a patient with good ventricular function whose problem is genuinely vasodilation &#8212; a spinal or epidural-induced sympathectomy, say, or hypotension after an anaesthetic induction &#8212; a selective &#945;&#8321; agonist addresses the actual defect, and a healthy ventricle absorbs the added afterload with little loss of stroke volume.</p>
+        <p>Phenylephrine also constricts veins, which recruits some preload back. The honest position is not "phenylephrine lowers cardiac output" but "phenylephrine offers no inotropic support, so whether output falls depends on how much afterload reserve that particular ventricle has."</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- 03 DOPAMINE -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>Dopamine: four mechanisms and a myth</h2></div>
+    <div class="spine">
+      <p>Dopamine is the least predictable drug in this module, and the reasons are worth understanding rather than memorising.</p>
+      <ul>
+        <li><strong>D&#8321;</strong> &#8594; Gs &#8594; &#8593;cAMP &#8594; <em>vasodilation</em> in renal, mesenteric and coronary beds.</li>
+        <li><strong>&#946;&#8321;</strong> &#8594; Gs &#8594; &#8593; contractility and rate.</li>
+        <li><strong>&#945;&#8321;</strong> &#8594; Gq &#8594; vasoconstriction, engaged at higher concentrations.</li>
+        <li><strong>Indirect</strong> &#8212; it also triggers <em>norepinephrine release</em> from sympathetic nerve terminals.</li>
+      </ul>
+      <p>That last mechanism is the one that makes dopamine genuinely different. Part of its effect is not the drug at all &#8212; it is the patient's own stored norepinephrine being released.</p>
+    </div>
+
+    <div class="myth">
+      <div class="callout-t">Two claims to retire</div>
+      <p><strong>"Renal-dose dopamine protects the kidneys."</strong> The D&#8321;-mediated renal vasodilation and increased urine output are real. What has not held up is the inference that this prevents or treats acute kidney injury &#8212; more urine is not more renal recovery. Presenting the observation is fine; presenting the conclusion is not.</p>
+      <p><strong>"Low dose is renal, mid is cardiac, high is pressor."</strong> Same three problems as with epinephrine, plus one worse: the plasma concentration achieved at any given infusion rate varies dramatically between patients, so the same number lands in different parts of the curve in different people. The ranges describe a tendency, not a switchboard.</p>
+    </div>
+
+    <details class="predict">
+      <summary>Two patients get identical dopamine infusions. One responds briskly; the other barely moves. Beyond dose-response variability, what could explain it?</summary>
+      <div class="predict-body">
+        <p><strong>Their norepinephrine stores differ.</strong></p>
+        <p>A meaningful part of dopamine's effect is indirect &#8212; it releases norepinephrine from sympathetic nerve terminals. That mechanism needs something in the terminals to release.</p>
+        <p>In chronic heart failure, or after prolonged shock with sustained sympathetic activation, those stores can be substantially depleted. The indirect component then contributes far less, and the patient responds mainly to dopamine's direct receptor effects. A drug whose effect partly depends on the patient's own reserves is inherently harder to titrate than one that acts entirely on its own.</p>
+      </div>
+    </details>
+
+    <div class="spine">
+      <p>Dopamine is also more arrhythmogenic than norepinephrine at comparable pressure targets &#8212; unsurprising given the &#946;&#8321; stimulation plus the additional endogenous norepinephrine it liberates. That combination of unpredictable dose-response and higher arrhythmia burden is why it has largely been displaced as a first-line vasopressor.</p>
+    </div>
+  </section>
+
+  <!-- 04 COMPARE -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>Side by side</h2></div>
+    <div class="spine">
+      <p>Read this as derivations, not facts to memorise. Cover the right-hand columns and rebuild them from the receptor list.</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Drug</th><th>Receptors</th><th>SVR</th><th>HR</th><th>CO</th><th>The distinguishing feature</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="k">Norepinephrine</td><td class="k">&#945;&#8321; &#8811; &#946;&#8321;</td>
+            <td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k">&#8596;/&#8595;</td><td class="k">&#8596;/&#8593;</td>
+            <td>Raises afterload and preload together; &#946;&#8321; protects flow</td>
+          </tr>
+          <tr>
+            <td class="k">Epinephrine</td><td class="k">&#945;&#8321; &#946;&#8321; &#946;&#8322;</td>
+            <td class="k">&#8595; then &#8593;</td><td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k" style="color:var(--constrict)">&#8593;&#8593;</td>
+            <td>&#946;&#8322; opposes its own &#945;&#8321;; aerobic lactate rise</td>
+          </tr>
+          <tr>
+            <td class="k">Phenylephrine</td><td class="k">&#945;&#8321; only</td>
+            <td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k" style="color:var(--dilate)">&#8595;</td><td class="k" style="color:var(--dilate)">&#8596;/&#8595;</td>
+            <td>No inotropic support; MAP can rise as flow falls</td>
+          </tr>
+          <tr>
+            <td class="k">Dopamine</td><td class="k">D&#8321; &#946;&#8321; &#945;&#8321; + indirect</td>
+            <td class="k">&#8595; then &#8593;</td><td class="k" style="color:var(--constrict)">&#8593;&#8593;</td><td class="k" style="color:var(--constrict)">&#8593;</td>
+            <td>Partly depends on the patient's own NE stores</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <div class="callout-t">The reasoning move to practise</div>
+      <p>Never answer "what does this drug do to heart rate" from memory. Answer it in three beats: what the receptors do directly, what the pressure change provokes reflexively, and which of the two is likely to win in <em>this</em> patient. That structure works for every drug in the module, including the two you meet next.</p>
+    </div>
+  </section>
+
+  <!-- QUIZ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>Check yourself</h2></div>
+    <div class="spine"><p>Six questions. Two of them are about resisting a conclusion that feels obvious.</p></div>
+    <div id="quiz"></div>
+    <div class="score" id="score">0 of 6 answered</div>
+  </section>
+
+  <div class="next">
+    <div class="panel-label">Next &#183; Lesson 4</div>
+    <p style="font-family:var(--display);font-size:22px;font-weight:600;margin:0 0 8px">When Adrenergic Receptors Stop Answering</p>
+    <p style="color:var(--ink-2);margin:0">Vasopressin and angiotensin II work through pathways that have nothing to do with catecholamines &#8212; which is precisely why they still work in a patient whose adrenergic receptors are already saturated. V&#8321;&#8342;, V&#8322;, AT&#8321;, and where the RAAS fits.</p>
+  </div>
+
+</div>
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- epinephrine receptor balance ----------
+     Occupancy curves are deliberately smooth and overlapping: the teaching
+     point is that no threshold exists, so nothing here snaps between states. */
+  var conc = document.getElementById("conc"),
+      concLabel = document.getElementById("concLabel"),
+      fB1 = document.getElementById("fB1"), vB1 = document.getElementById("vB1"),
+      fB2 = document.getElementById("fB2"), vB2 = document.getElementById("vB2"),
+      fA1 = document.getElementById("fA1"), vA1 = document.getElementById("vA1"),
+      oSVR = document.getElementById("oSVR"),
+      oCO = document.getElementById("oCO"),
+      oMAP = document.getElementById("oMAP"),
+      epiVerdict = document.getElementById("epiVerdict");
+
+  // Higher affinity at beta than alpha-1: beta curves rise earlier, alpha later.
+  function occupancy(x, halfMax) {
+    return 100 * (x / (x + halfMax));
+  }
+
+  function epi() {
+    var x = parseFloat(conc.value);
+    var b1 = occupancy(x, 14);
+    var b2 = occupancy(x, 11);
+    var a1 = occupancy(x, 58);
+
+    concLabel.textContent = x < 25 ? "Low" : x < 55 ? "Moderate" : x < 80 ? "High" : "Very high";
+    fB1.style.width = b1 + "%"; vB1.textContent = Math.round(b1);
+    fB2.style.width = b2 + "%"; vB2.textContent = Math.round(b2);
+    fA1.style.width = a1 + "%"; vA1.textContent = Math.round(a1);
+
+    // Vascular net: alpha-1 constriction against beta-2 dilation.
+    var vascular = a1 - b2 * 0.8;
+    var svr = vascular < -12 ? "↓" : vascular < 6 ? "↔" : vascular < 30 ? "↑" : "↑↑";
+    var co = b1 < 25 ? "↑" : "↑↑";
+    var mapArrow;
+    if (vascular < -12) mapArrow = "↔";
+    else if (vascular < 20) mapArrow = "↑";
+    else mapArrow = "↑↑";
+
+    oSVR.textContent = svr;
+    oCO.textContent = co;
+    oMAP.textContent = mapArrow;
+    oSVR.style.color = vascular < -12 ? "var(--dilate)" : vascular < 6 ? "var(--ink-3)" : "var(--constrict)";
+    oCO.style.color = "var(--constrict)";
+    oMAP.style.color = mapArrow === "↔" ? "var(--ink-3)" : "var(--constrict)";
+
+    var msg;
+    if (x < 8) {
+      msg = "Barely engaged. Move the slider.";
+    } else if (vascular < -12) {
+      msg = "β2 is outrunning α1 — resistance is falling while output climbs. Diastolic pressure may drop even as the patient improves.";
+    } else if (vascular < 6) {
+      msg = "The vasodilator and vasoconstrictor arms have roughly cancelled. MAP moves little; the benefit here is flow, not pressure.";
+    } else {
+      msg = "α1 now dominates the vascular effect, but note β2 has not switched off — it is still engaged, just outweighed.";
+    }
+    epiVerdict.textContent = msg;
+  }
+  conc.addEventListener("input", epi);
+  epi();
+
+  /* ---------- quiz ---------- */
+  var QUESTIONS = [
+    {
+      q: "A patient started on epinephrine shows a lactate rising from 2.1 to 4.0 while capillary refill, mentation and urine output all improve. What is the most defensible interpretation?",
+      opts: [
+        "Tissue oxygen debt is worsening and the infusion should be stopped immediately",
+        "The rise is artefactual and reflects interference with the laboratory assay",
+        "β2-driven glycolysis can raise lactate aerobically, so the trend needs context",
+        "Hepatic clearance of lactate has failed, indicating new hepatic hypoperfusion"
+      ],
+      a: 2,
+      tested: "Resisting the reflex that a rising lactate always means worsening perfusion",
+      why: "β2 stimulation raises cAMP, accelerates glycogenolysis and glycolysis, and stimulates the Na⁺/K⁺-ATPase. Pyruvate outruns mitochondrial capacity and becomes lactate with oxygen present. With other perfusion markers improving, an aerobic mechanism fits better than worsening oxygen debt.",
+      wrong: [
+        "Three independent perfusion markers moving the right way argues against worsening oxygen debt as the sole explanation.",
+        "Epinephrine does not interfere with lactate assays. The measured rise is real; what is in question is its cause.",
+        null,
+        "Impaired hepatic clearance can raise lactate, but there is nothing here to suggest it, and it does not explain the improving perfusion."
+      ]
+    },
+    {
+      q: "Why is describing epinephrine with fixed dose cutoffs — beta below a threshold, alpha above it — physiologically misleading?",
+      opts: [
+        "Receptor occupancy shifts gradually and overlapping, and plasma levels vary between patients",
+        "Epinephrine has negligible α1 activity at any concentration reached in clinical practice",
+        "β receptors desensitise within minutes, so the described sequence reverses over time",
+        "The α1 effect appears first, making the conventional ordering exactly backwards"
+      ],
+      a: 0,
+      tested: "Understanding dose-response as a continuum rather than a set of switches",
+      why: "β receptors engage at lower concentrations than α1, so the direction is right. But occupancy curves overlap continuously, receptor density differs between vascular beds, and the plasma level produced by a given infusion rate varies substantially between patients.",
+      wrong: [
+        null,
+        "Epinephrine is a potent α1 agonist at higher concentrations. That effect is central to its use as a vasopressor.",
+        "Tachyphylaxis occurs over prolonged infusion, not within minutes, and it is not why fixed cutoffs mislead.",
+        "The conventional ordering is directionally correct — β engagement does precede α1. The problem is the false precision, not the sequence."
+      ]
+    },
+    {
+      q: "A patient with poor ventricular function receives phenylephrine. MAP rises from 60 to 78 while cardiac output falls. Which pair of changes best accounts for the fall?",
+      opts: [
+        "Direct negative inotropy combined with α1-mediated coronary vasoconstriction",
+        "Reduced venous return alongside a drug-induced fall in myocardial contractility",
+        "Increased pulmonary vascular resistance together with impaired right heart filling",
+        "Baroreflex-mediated slowing together with reduced stroke volume from added afterload"
+      ],
+      a: 3,
+      tested: "Deriving both terms of CO = HR × SV from a single receptor effect",
+      why: "Rising MAP triggers baroreceptor firing and vagal slowing, lowering HR. Simultaneously the higher afterload reduces stroke volume in a ventricle with no reserve and no inotropic support. Both terms of CO = HR × SV fall together.",
+      wrong: [
+        "Phenylephrine has no direct negative inotropic effect. The contractile apparatus is unchanged; only the load and the rate have moved.",
+        "Phenylephrine constricts veins, which raises rather than reduces venous return, and it does not depress contractility.",
+        "α1 stimulation can raise pulmonary vascular resistance, but the dominant mechanism here is systemic afterload and reflex bradycardia.",
+        null
+      ]
+    },
+    {
+      q: "Which feature of dopamine most directly explains why two patients on identical infusion rates can respond very differently?",
+      opts: [
+        "Its metabolism by catechol-O-methyltransferase saturates at clinically used rates",
+        "Part of its effect comes from releasing the patient's own stored norepinephrine",
+        "It binds dopamine receptors irreversibly, so responses depend on receptor turnover",
+        "Its D1-mediated renal vasodilation alters the rate at which it is itself cleared"
+      ],
+      a: 1,
+      tested: "Recognising an indirect mechanism as a source of unpredictability",
+      why: "Dopamine acts partly indirectly, releasing norepinephrine from sympathetic nerve terminals. That component requires intact stores, which can be substantially depleted in chronic heart failure or prolonged shock — so the same rate produces different effects in different patients.",
+      wrong: [
+        "Metabolic differences contribute to variable plasma levels, but the indirect mechanism is the distinctive feature that sets dopamine apart.",
+        null,
+        "Dopamine binds reversibly. Response variability is not a function of receptor turnover.",
+        "Renal vasodilation does not meaningfully govern dopamine's own clearance or explain the variability described."
+      ]
+    },
+    {
+      q: "What is the most accurate statement about the renal effects of low-rate dopamine?",
+      opts: [
+        "It has no measurable effect on renal blood flow or urine output at any rate",
+        "It reliably prevents acute kidney injury when started early in critical illness",
+        "It produces renal vasodilation and diuresis without demonstrated protection from injury",
+        "It reduces renal perfusion through α1 stimulation despite raising urine output"
+      ],
+      a: 2,
+      tested: "Separating an observed physiological effect from an unsupported clinical conclusion",
+      why: "D1-mediated renal vasodilation and increased urine output are real and measurable. What has not held up is that these translate into prevention or treatment of acute kidney injury — more urine is not more renal recovery.",
+      wrong: [
+        "The renal vasodilation and diuresis are genuine, measurable D1-mediated effects.",
+        "This is the specific claim that has not survived scrutiny, and asserting it is the error the question targets.",
+        null,
+        "At low rates the D1 effect dominates and renal perfusion increases. α1-mediated renal vasoconstriction is a higher-concentration phenomenon."
+      ]
+    },
+    {
+      q: "At lower epinephrine concentrations a patient shows a rising systolic pressure, a falling diastolic pressure and an improved cardiac output. Which combination explains this pattern?",
+      opts: [
+        "β1-driven stroke volume raising systolic while β2 vasodilation lowers diastolic",
+        "α1 constriction raising systolic while reflex bradycardia lowers diastolic pressure",
+        "Increased venous return raising systolic while coronary steal lowers the diastolic",
+        "Rising contractility raising systolic while aortic compliance falls with the diastolic"
+      ],
+      a: 0,
+      tested: "Reading a pulse pressure pattern back to two receptors acting in opposite directions",
+      why: "β1 raises stroke volume, which widens pulse pressure and lifts systolic. β2 vasodilation in skeletal muscle lowers SVR, and diastolic pressure depends heavily on SVR — so it falls. The apparent contradiction is two receptors doing different jobs.",
+      wrong: [
+        null,
+        "α1 constriction raises diastolic rather than lowering it, and reflex bradycardia tends to raise diastolic by lengthening diastole.",
+        "Coronary steal describes redistribution within the coronary circulation and does not account for a systemic diastolic fall.",
+        "Reduced aortic compliance widens pulse pressure by raising systolic, but it is not what drops SVR and the diastolic here."
+      ]
+    }
+  ];
+
+  var LETTERS = ["A", "B", "C", "D"];
+  var answered = 0, correct = 0;
+  var quizEl = document.getElementById("quiz");
+  var scoreEl = document.getElementById("score");
+
+  QUESTIONS.forEach(function (item, qi) {
+    var card = document.createElement("div");
+    card.className = "quiz-q";
+
+    var num = document.createElement("div");
+    num.className = "qnum";
+    num.textContent = "QUESTION " + (qi + 1) + " OF " + QUESTIONS.length;
+    card.appendChild(num);
+
+    var qt = document.createElement("div");
+    qt.className = "qtext";
+    qt.innerHTML = item.q;
+    card.appendChild(qt);
+
+    var opts = document.createElement("div");
+    opts.className = "opts";
+    var explain = document.createElement("div");
+    explain.className = "explain";
+    explain.hidden = true;
+
+    item.opts.forEach(function (text, oi) {
+      var b = document.createElement("button");
+      b.className = "opt";
+      b.type = "button";
+      b.innerHTML = '<span class="ltr">' + LETTERS[oi] + '</span><span>' + text + '</span>';
+      b.addEventListener("click", function () {
+        if (card.dataset.done) return;
+        card.dataset.done = "1";
+        answered++;
+        if (oi === item.a) correct++;
+        Array.prototype.forEach.call(opts.children, function (el, i) {
+          el.disabled = true;
+          if (i === item.a) el.dataset.state = "correct";
+          else if (i === oi) el.dataset.state = "wrong";
+        });
+        var html = '<div class="tested">Testing &#183; ' + item.tested + '</div>';
+        html += '<p><strong>' + LETTERS[item.a] + ' is correct.</strong> ' + item.why + '</p><ul>';
+        item.wrong.forEach(function (w, i) {
+          if (w) html += '<li><strong>' + LETTERS[i] + '</strong> &#8212; ' + w + '</li>';
+        });
+        html += '</ul>';
+        explain.innerHTML = html;
+        explain.hidden = false;
+        scoreEl.innerHTML = answered + " of " + QUESTIONS.length +
+          " answered &#183; <strong>" + correct + " correct</strong>";
+      });
+      opts.appendChild(b);
+    });
+
+    card.appendChild(opts);
+    card.appendChild(explain);
+    quizEl.appendChild(card);
+  });
+})();
+</script>

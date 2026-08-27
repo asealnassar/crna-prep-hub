@@ -24,6 +24,12 @@ export const DRAFT_LESSONS = [
     title: 'Tracing Norepinephrine',
     blurb: 'α₁ and β₁ traced separately, then combined into a full profile.',
   },
+  {
+    slug: 'vasopressors-3',
+    number: 3,
+    title: 'Three Ways to Break the Pattern',
+    blurb: 'Epinephrine, phenylephrine and dopamine — and the two myths they come wrapped in.',
+  },
 ] as const
 
 export function isDraftSlug(slug: string): boolean {
