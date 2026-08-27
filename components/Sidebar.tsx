@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import {
   BarChart3,
+  BookOpen,
   Calculator,
   ChevronLeft,
   ChevronRight,
@@ -116,6 +117,7 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
     { href: '/schools', label: 'Schools', icon: School, group: 'Prepare', requiresAuth: false },
     { href: '/interview', label: 'Mock Interview', icon: Mic, group: 'Prepare', requiresAuth: false },
     { href: '/interview-prep', label: 'School Interview Styles', icon: GraduationCap, group: 'Prepare', requiresAuth: false },
+    ...(isAdmin ? [{ href: '/lessons', label: 'Learning Modules', icon: BookOpen, group: 'Build', requiresAuth: true } as NavItem] : []),
     { href: '/gpa-calculator', label: 'GPA Calculator', icon: Calculator, group: 'Build', requiresAuth: false },
     { href: '/personal-statement', label: 'Personal Statement', icon: FileText, group: 'Build', requiresAuth: false },
     { href: '/resume-builder', label: 'Resume Builder', icon: FileUser, group: 'Build', requiresAuth: false },
