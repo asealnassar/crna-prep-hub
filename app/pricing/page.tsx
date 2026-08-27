@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { FREE_INTERVIEW_ALLOWANCE } from '@/lib/plans'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
@@ -289,7 +290,7 @@ const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic GPA calculator</span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic personal statement analyzer</span></li>
                 <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume Builder (1 resume)</strong></span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>1 free mock interview</strong></span></li>              
+                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>{FREE_INTERVIEW_ALLOWANCE} free mock interviews</strong></span></li>              
                 <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Advanced filters (state, deadline, GRE, prerequisites)</span></li>
                 <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Unlimited mock interviews</span></li>
                 <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Premium GPA analytics</span></li>

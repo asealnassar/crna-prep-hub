@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import type { ChatMessage, InterviewMode, InterviewState, InterviewTurnResponse, TurnRender } from '@/lib/interview/types'
 import { InterviewMessage } from '@/components/InterviewFeedback'
+import { FREE_INTERVIEW_ALLOWANCE } from '@/lib/plans'
 import {
   ArrowRight,
   Brain,
@@ -73,7 +74,8 @@ export default function Interview() {
   const supabase = createClient()
 
   const isUltimate = userTier === 'ultimate'
-  const canInterview = isLoggedIn && (isUltimate || interviewCount < 1)
+  const canInterview = isLoggedIn && (isUltimate || interviewCount < FREE_INTERVIEW_ALLOWANCE)
+  const freeRemaining = Math.max(0, FREE_INTERVIEW_ALLOWANCE - interviewCount)
   const maxQuestions = MAX_PRIMARY_QUESTIONS
   const questionNumber = Math.min(Math.max(engineState?.primaryQuestionNumber || 1, 1), maxQuestions)
   const onFollowUp = engineState?.turnKind === 'follow_up'
@@ -566,7 +568,11 @@ export default function Interview() {
                     <span className="text-slate-500">Free plan</span>
                     <span className="hidden h-1 w-1 rounded-full bg-slate-300 sm:block" />
                     <span className={interviewCount === 0 ? 'text-emerald-600' : 'text-slate-400'}>
-                      {interviewCount === 0 ? '1 free interview available' : 'Free interview used'}
+                      {freeRemaining === 0
+                        ? 'Free interviews used'
+                        : interviewCount === 0
+                          ? `${FREE_INTERVIEW_ALLOWANCE} free interviews available`
+                          : `${freeRemaining} of ${FREE_INTERVIEW_ALLOWANCE} free interviews left`}
                     </span>
                     <Link href="/pricing" className="normal-case tracking-normal text-violet-600 underline-offset-2 hover:underline">
                       Upgrade for unlimited
@@ -575,7 +581,7 @@ export default function Interview() {
                 )}
                 {!isLoggedIn && (
                   <span className="normal-case tracking-normal text-slate-500">
-                    Sign up free to get 1 mock interview
+                    Sign up free to get {FREE_INTERVIEW_ALLOWANCE} mock interviews
                   </span>
                 )}
               </div>
@@ -771,7 +777,7 @@ export default function Interview() {
                             <ArrowRight className="h-5 w-5" />
                           </Link>
                           <p className="mt-3 text-center text-sm text-slate-500">
-                            Get 1 free interview. Upgrade to Ultimate for unlimited.
+                            Get {FREE_INTERVIEW_ALLOWANCE} free interviews. Upgrade to Ultimate for unlimited.
                           </p>
                         </>
                       ) : canInterview ? (
@@ -785,7 +791,9 @@ export default function Interview() {
                         </button>
                       ) : (
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-center">
-                          <p className="text-sm font-medium text-slate-700">You have used your free interview.</p>
+                          <p className="text-sm font-medium text-slate-700">
+                            You have used all {FREE_INTERVIEW_ALLOWANCE} of your free interviews.
+                          </p>
                           <Link
                             href="/pricing"
                             className="mt-4 inline-flex h-[50px] items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-500 px-6 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition hover:from-violet-700 hover:to-indigo-600"
