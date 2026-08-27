@@ -1,0 +1,835 @@
+<title>When Catecholamines Stop Answering</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground: #F5F6F8;
+    --surface: #FFFFFF;
+    --surface-2: #EDEFF3;
+    --ink: #14181F;
+    --ink-2: #454C59;
+    --ink-3: #6D7585;
+    --rule: #DCE0E7;
+    --rule-2: #C6CCD6;
+
+    /* Color encodes physiology, not decoration:
+       constrict = arterial crimson, dilate = teal, signal/calcium = amber. */
+    --constrict: #B62D46;
+    --constrict-soft: #FBEAED;
+    --dilate: #17706E;
+    --dilate-soft: #E3F1F0;
+    --signal: #A96322;
+    --signal-soft: #FBEFE1;
+
+    --shadow: 0 1px 2px rgba(20,24,31,.05), 0 8px 24px rgba(20,24,31,.05);
+
+    --display: "Fraunces", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --measure: 66ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0E1116;
+      --surface: #161B22;
+      --surface-2: #1D242D;
+      --ink: #E9ECF1;
+      --ink-2: #B2BAC7;
+      --ink-3: #838D9C;
+      --rule: #2A323C;
+      --rule-2: #3B4552;
+      --constrict: #F2758C;
+      --constrict-soft: #33161C;
+      --dilate: #57C4BF;
+      --dilate-soft: #102A29;
+      --signal: #E0A05E;
+      --signal-soft: #2C1F11;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0E1116;
+    --surface: #161B22;
+    --surface-2: #1D242D;
+    --ink: #E9ECF1;
+    --ink-2: #B2BAC7;
+    --ink-3: #838D9C;
+    --rule: #2A323C;
+    --rule-2: #3B4552;
+    --constrict: #F2758C;
+    --constrict-soft: #33161C;
+    --dilate: #57C4BF;
+    --dilate-soft: #102A29;
+    --signal: #E0A05E;
+    --signal-soft: #2C1F11;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px 96px; }
+  .spine { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 48px;
+    padding: 40px 0 28px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .crumb {
+    font-family: var(--mono);
+    font-size: 11.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  }
+  .crumb .sep { color: var(--rule-2); }
+  .crumb .here { color: var(--constrict); }
+  h1 {
+    font-family: var(--display);
+    font-optical-sizing: auto;
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.06;
+    letter-spacing: -.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 19px; color: var(--ink-2); margin: 0; max-width: 58ch;
+  }
+  .pips { display: flex; gap: 5px; align-items: center; }
+  .pip { width: 30px; height: 4px; border-radius: 2px; background: var(--rule-2); }
+  .pip.on { background: var(--constrict); }
+  .pip-label { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-left: 8px; letter-spacing: .06em; }
+
+  /* ---------- structure ---------- */
+  section { margin: 0 0 56px; }
+  .sec-head { display: flex; gap: 14px; align-items: baseline; margin-bottom: 18px; }
+  .sec-num {
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    color: var(--constrict); letter-spacing: .1em; padding-top: 6px;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 600;
+    font-size: clamp(24px, 3.4vw, 31px); line-height: 1.18; letter-spacing: -.015em;
+    margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--body); font-weight: 700; font-size: 17.5px;
+    letter-spacing: .005em; margin: 32px 0 8px;
+  }
+  p { margin: 0 0 16px; }
+  .spine p, .spine ul, .spine ol { max-width: var(--measure); }
+  strong { font-weight: 700; }
+  em.term { font-style: normal; font-weight: 700; color: var(--constrict); }
+  ul, ol { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 7px; }
+
+  code, .m { font-family: var(--mono); font-size: .88em; }
+  .m { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+
+  /* ---------- panels ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 26px;
+    margin: 26px 0;
+    box-shadow: var(--shadow);
+  }
+  .panel-label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px;
+  }
+
+  .callout {
+    border-left: 3px solid var(--signal);
+    background: var(--signal-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .callout .callout-t {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--signal); font-weight: 600; margin-bottom: 6px;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .myth {
+    border-left: 3px solid var(--constrict);
+    background: var(--constrict-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .myth .callout-t { color: var(--constrict); }
+  .myth p:last-child { margin-bottom: 0; }
+
+  /* ---------- figures ---------- */
+  figure { margin: 28px 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; }
+  figcaption {
+    font-size: 14.5px; color: var(--ink-2); margin-top: 12px;
+    max-width: 62ch; line-height: 1.55;
+  }
+  .scroller { overflow-x: auto; }
+
+  /* ---------- predict ---------- */
+  details.predict {
+    border: 1px solid var(--rule); border-radius: 10px;
+    background: var(--surface); margin: 24px 0; overflow: hidden;
+  }
+  details.predict > summary {
+    cursor: pointer; padding: 16px 20px; list-style: none;
+    font-weight: 600; display: flex; gap: 12px; align-items: flex-start;
+  }
+  details.predict > summary::-webkit-details-marker { display: none; }
+  details.predict > summary::before {
+    content: "PREDICT"; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .12em; color: var(--dilate); border: 1px solid var(--dilate);
+    padding: 3px 7px; border-radius: 4px; flex-shrink: 0; margin-top: 2px;
+  }
+  details.predict[open] > summary::before { content: "REVEALED"; color: var(--ink-3); border-color: var(--rule-2); }
+  details.predict > summary:hover { background: var(--surface-2); }
+  details.predict > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: -2px; }
+  .predict-body { padding: 0 20px 18px 20px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  .predict-body p:last-child { margin-bottom: 0; }
+
+  details.deeper {
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    margin: 26px 0; padding: 0;
+  }
+  details.deeper > summary {
+    cursor: pointer; padding: 14px 0; list-style: none;
+    font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--dilate); display: flex; gap: 10px; align-items: center;
+  }
+  details.deeper > summary::-webkit-details-marker { display: none; }
+  details.deeper > summary::after { content: "+"; margin-left: auto; font-size: 16px; }
+  details.deeper[open] > summary::after { content: "\2212"; }
+  details.deeper > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .deeper-body { padding-bottom: 18px; }
+  .deeper-body p:last-child { margin-bottom: 0; }
+
+  /* ---------- interactive: MAP explorer ---------- */
+  .sim { display: grid; grid-template-columns: 1fr 200px; gap: 26px; align-items: start; }
+  @media (max-width: 720px) { .sim { grid-template-columns: 1fr; } }
+  .ctl { margin-bottom: 20px; }
+  .ctl-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2); margin-bottom: 7px;
+  }
+  .ctl-top b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--constrict); height: 22px; }
+  input[type=range]:focus-visible { outline: 2px solid var(--constrict); outline-offset: 4px; }
+  .readout {
+    background: var(--surface-2); border-radius: 8px; padding: 18px; text-align: center;
+  }
+  .readout .big {
+    font-family: var(--mono); font-weight: 600; font-size: 42px; line-height: 1;
+    font-variant-numeric: tabular-nums; color: var(--constrict);
+  }
+  .readout .unit { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .1em; margin-top: 6px; }
+  .verdict { font-size: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rule); color: var(--ink-2); min-height: 3.2em; }
+
+  /* ---------- interactive: pathway switcher ---------- */
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tab {
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em;
+    padding: 8px 15px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--rule-2); background: transparent; color: var(--ink-2);
+  }
+  .tab:hover { border-color: var(--ink-3); color: var(--ink); }
+  .tab:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+  .pathway[hidden] { display: none; }
+  .pathway h4 { font-family: var(--body); font-size: 16px; font-weight: 700; margin: 0 0 8px; }
+  .pathway p { font-size: 15.5px; color: var(--ink-2); }
+
+  /* ---------- table ---------- */
+  .tbl-wrap { overflow-x: auto; margin: 24px 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 15px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+    border-bottom: 1px solid var(--rule-2);
+  }
+  td.k { font-family: var(--mono); font-size: 13px; color: var(--ink); white-space: nowrap; }
+
+  /* ---------- quiz ---------- */
+  .quiz-q { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); padding: 24px; margin-bottom: 18px; }
+  .qnum { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; color: var(--ink-3); margin-bottom: 10px; }
+  .qtext { font-weight: 600; margin-bottom: 16px; }
+  .opts { display: flex; flex-direction: column; gap: 8px; }
+  .opt {
+    display: flex; gap: 11px; align-items: flex-start; width: 100%; text-align: left;
+    padding: 12px 14px; border: 1px solid var(--rule-2); border-radius: 7px;
+    background: transparent; color: var(--ink); font: inherit; font-size: 15.5px;
+    cursor: pointer; line-height: 1.5;
+  }
+  .opt:hover:not([disabled]) { border-color: var(--ink-3); background: var(--surface-2); }
+  .opt:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .opt .ltr { font-family: var(--mono); font-size: 12px; color: var(--ink-3); flex-shrink: 0; padding-top: 2px; }
+  .opt[data-state="correct"] { border-color: var(--dilate); background: var(--dilate-soft); }
+  .opt[data-state="correct"] .ltr { color: var(--dilate); }
+  .opt[data-state="wrong"] { border-color: var(--constrict); background: var(--constrict-soft); }
+  .opt[data-state="wrong"] .ltr { color: var(--constrict); }
+  .opt[disabled] { cursor: default; }
+  .explain { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 15px; }
+  .explain[hidden] { display: none; }
+  .explain .tested {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 10px;
+  }
+  .explain ul { margin: 10px 0 0; }
+  .explain li { font-size: 14.5px; color: var(--ink-2); }
+  .score {
+    font-family: var(--mono); font-size: 13px; color: var(--ink-2);
+    padding: 14px 0 0; border-top: 1px solid var(--rule); margin-top: 8px;
+  }
+
+  .next {
+    border: 1px solid var(--rule-2); border-radius: 10px; padding: 24px;
+    background: var(--surface-2); margin-top: 40px;
+  }
+  .next .panel-label { color: var(--constrict); }
+  .next p:last-child { margin-bottom: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+
+<style>
+  .pillars { display:grid; grid-template-columns:1fr 200px; gap:26px; align-items:start; }
+  @media (max-width:760px){ .pillars { grid-template-columns:1fr; } }
+  .pill-row { margin-bottom:18px; }
+  .pill-head { display:flex; justify-content:space-between; align-items:baseline;
+               font-family:var(--mono); font-size:12px; color:var(--ink-2); margin-bottom:6px; }
+  .pill-head b { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
+  .pill-note { font-family:var(--mono); font-size:10.5px; color:var(--signal); margin-top:4px; min-height:1.2em; }
+  .tone-bar { height:16px; background:var(--surface-2); border-radius:8px; overflow:hidden; margin-top:4px; }
+  .tone-fill { height:100%; border-radius:8px; background:var(--constrict); transition:width .12s linear; }
+  .twocol { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:26px 0; }
+  @media (max-width:700px){ .twocol { grid-template-columns:1fr; } }
+  .box { border:1px solid var(--rule); border-radius:10px; background:var(--surface); padding:20px; }
+  .box h4 { font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+            margin:0 0 10px; color:var(--ink-3); font-weight:500; }
+  .box p { font-size:15px; margin:0 0 10px; color:var(--ink-2); }
+  .box p:last-child { margin-bottom:0; }
+</style>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="crumb">
+      <span>Vasopressors</span><span class="sep">/</span>
+      <span class="here">Lesson 4 of 6</span><span class="sep">/</span>
+      <span>Vasopressin &#183; Angiotensin II</span>
+    </div>
+    <h1>When Catecholamines Stop Answering</h1>
+    <p class="standfirst">Every drug so far has worked through adrenergic receptors. This lesson is about what you reach for when those receptors have stopped listening &#8212; and why a completely different pathway is the point, not a detail.</p>
+    <div class="pips" aria-label="Lesson 4 of 6">
+      <span class="pip on"></span><span class="pip on"></span><span class="pip on"></span>
+      <span class="pip on"></span><span class="pip"></span><span class="pip"></span>
+      <span class="pip-label">NON-ADRENERGIC</span>
+    </div>
+  </header>
+
+  <div class="spine">
+    <p>A patient has been in vasodilatory shock for eighteen hours. Norepinephrine is running high, epinephrine has been added, and the MAP is still 54. Each escalation buys less than the one before.</p>
+    <p>The instinct is to push harder. The better question is <em class="term">why the pathway has stopped responding</em> &#8212; because once you can answer that, the reason a non-catecholamine works becomes obvious rather than arbitrary.</p>
+  </div>
+
+  <!-- 01 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>Why the adrenergic pathway runs out</h2></div>
+    <div class="spine">
+      <p>Three things happen to adrenergic signalling during prolonged, severe vasodilatory shock, and none of them are fixed by more drug.</p>
+      <ul>
+        <li><strong>Receptor desensitisation and downregulation.</strong> Sustained high catecholamine exposure uncouples receptors from their G-proteins and reduces surface receptor density. The ligand still arrives; fewer functional receptors are there to receive it.</li>
+        <li><strong>Acidosis.</strong> Adrenergic responsiveness falls as pH drops &#8212; and the shocked patient is usually acidotic, so the impairment compounds exactly when you need the drug most.</li>
+        <li><strong>Vasoplegic machinery.</strong> Inflammatory mediators drive nitric oxide production and open ATP-sensitive potassium channels in vascular smooth muscle. Hyperpolarised cells resist contraction regardless of which receptor you stimulate.</li>
+      </ul>
+      <p>So escalating the same drug means pushing harder on a mechanism that has degraded. A drug acting through an <strong>entirely separate receptor</strong> is not just an alternative &#8212; it is the response the physiology actually calls for.</p>
+    </div>
+
+    <div class="callout">
+      <div class="callout-t">The frame to carry through this lesson</div>
+      <p>The body maintains vascular tone through <strong>three independent systems</strong>: the adrenergic system, vasopressin, and the renin&#8211;angiotensin system. Each has its own receptor, and two of the three have nothing to do with catecholamines. Modern practice increasingly recruits more than one at moderate doses instead of driving a single one to its ceiling.</p>
+    </div>
+  </section>
+
+  <!-- 02 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>Vasopressin has two jobs, and they are not related</h2></div>
+    <div class="spine">
+      <p>Vasopressin is a nonapeptide from the posterior pituitary &#8212; not a catecholamine, not structurally related to one. It acts on two receptors that do completely different things in completely different tissues. Keeping them separate is the single most common failure point when candidates describe this drug.</p>
+    </div>
+
+    <div class="scroller">
+      <figure>
+        <svg viewBox="0 0 700 330" role="img" aria-label="Vasopressin acts at two receptors. V1a on vascular smooth muscle couples to Gq, activating phospholipase C, producing IP3 and DAG, raising calcium, activating myosin light chain kinase and causing vasoconstriction. V2 on renal collecting duct cells couples to Gs, raising cyclic AMP and activating protein kinase A, which drives aquaporin-2 channels into the apical membrane, causing water reabsorption.">
+          <defs>
+            <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <g font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">
+            <rect x="272" y="8" width="156" height="34" rx="6" fill="var(--ink)" stroke="var(--ink)"/>
+            <text x="350" y="30" text-anchor="middle" fill="var(--ground)" font-weight="600">VASOPRESSIN</text>
+            <line x1="350" y1="42" x2="350" y2="58" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="180" y1="58" x2="520" y2="58" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="180" y1="58" x2="180" y2="76" stroke="currentColor" stroke-width="1.5" marker-end="url(#a4)"/>
+            <line x1="520" y1="58" x2="520" y2="76" stroke="currentColor" stroke-width="1.5" marker-end="url(#a4)"/>
+
+            <!-- V1a -->
+            <rect x="112" y="78" width="136" height="34" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.4"/>
+            <text x="180" y="100" text-anchor="middle" fill="var(--constrict)" font-weight="600">V&#8321;&#8342;</text>
+            <text x="180" y="126" text-anchor="middle" font-size="10" opacity=".65">vascular smooth muscle</text>
+            <line x1="180" y1="132" x2="180" y2="150" stroke="currentColor" stroke-width="1.4" marker-end="url(#a4)"/>
+            <rect x="140" y="152" width="80" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="180" y="170" text-anchor="middle" font-size="11">Gq</text>
+            <line x1="180" y1="178" x2="180" y2="194" stroke="currentColor" stroke-width="1.4" marker-end="url(#a4)"/>
+            <rect x="128" y="196" width="104" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="180" y="214" text-anchor="middle" font-size="11">PLC &#8594; IP&#8323;/DAG</text>
+            <line x1="180" y1="222" x2="180" y2="238" stroke="var(--signal)" stroke-width="1.5" marker-end="url(#a4)"/>
+            <text x="180" y="252" text-anchor="middle" font-size="11" fill="var(--signal)" font-weight="600">&#8593; Ca&#178;&#8314; &#8594; MLCK</text>
+            <line x1="180" y1="258" x2="180" y2="276" stroke="var(--constrict)" stroke-width="1.6" marker-end="url(#a4)"/>
+            <rect x="104" y="278" width="152" height="34" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.4"/>
+            <text x="180" y="300" text-anchor="middle" fill="var(--constrict)" font-weight="600" font-size="11.5">VASOCONSTRICTION</text>
+
+            <!-- V2 -->
+            <rect x="452" y="78" width="136" height="34" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.4"/>
+            <text x="520" y="100" text-anchor="middle" fill="var(--dilate)" font-weight="600">V&#8322;</text>
+            <text x="520" y="126" text-anchor="middle" font-size="10" opacity=".65">renal collecting duct</text>
+            <line x1="520" y1="132" x2="520" y2="150" stroke="currentColor" stroke-width="1.4" marker-end="url(#a4)"/>
+            <rect x="480" y="152" width="80" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="520" y="170" text-anchor="middle" font-size="11">Gs</text>
+            <line x1="520" y1="178" x2="520" y2="194" stroke="currentColor" stroke-width="1.4" marker-end="url(#a4)"/>
+            <rect x="464" y="196" width="112" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="520" y="214" text-anchor="middle" font-size="11">&#8593;cAMP &#8594; PKA</text>
+            <line x1="520" y1="222" x2="520" y2="238" stroke="var(--signal)" stroke-width="1.5" marker-end="url(#a4)"/>
+            <text x="520" y="252" text-anchor="middle" font-size="11" fill="var(--signal)" font-weight="600">AQP2 &#8594; apical membrane</text>
+            <line x1="520" y1="258" x2="520" y2="276" stroke="var(--dilate)" stroke-width="1.6" marker-end="url(#a4)"/>
+            <rect x="444" y="278" width="152" height="34" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.4"/>
+            <text x="520" y="300" text-anchor="middle" fill="var(--dilate)" font-weight="600" font-size="11.5">WATER REABSORPTION</text>
+
+            <line x1="350" y1="90" x2="350" y2="300" stroke="currentColor" stroke-width="1" stroke-dasharray="3 5" opacity=".3"/>
+            <text x="350" y="200" text-anchor="middle" font-size="9.5" opacity=".5" transform="rotate(-90 350 200)">separate tissues, separate G-proteins</text>
+          </g>
+        </svg>
+        <figcaption>Two receptors, two G-proteins, two unrelated jobs. V&#8321;&#8342; is why vasopressin is a vasopressor; V&#8322; is why the same molecule is antidiuretic hormone. Blur them together and the mechanism stops making sense.</figcaption>
+      </figure>
+    </div>
+
+    <div class="twocol">
+      <div class="box">
+        <h4>The vascular arm &#183; V&#8321;&#8342;</h4>
+        <p>Notice the cascade is <strong>identical to &#945;&#8321;</strong> from Lesson 2 — Gq, PLC, IP&#8323; and DAG, calcium, MLCK. Different receptor, different ligand, same machinery.</p>
+        <p>That shared ending is exactly why it works when adrenergic receptors have failed: the contractile apparatus was never the problem, only the door you were knocking on.</p>
+      </div>
+      <div class="box">
+        <h4>The renal arm &#183; V&#8322;</h4>
+        <p>PKA drives vesicles carrying aquaporin-2 into the apical membrane of collecting duct cells, making the tubule permeable to water. Water follows the medullary gradient, and urine concentrates.</p>
+        <p>This is the arm that has nothing to do with blood pressure — and the reason vasopressin and ADH are the same molecule under two names.</p>
+      </div>
+    </div>
+
+    <details class="deeper">
+      <summary>Go deeper &#183; The vasoplegia-specific effects</summary>
+      <div class="deeper-body">
+        <p>Beyond straightforward V&#8321;&#8342; constriction, vasopressin acts on two of the mechanisms that make vasoplegic shock resistant in the first place. It inhibits the ATP-sensitive potassium channels that hyperpolarise vascular smooth muscle, and it attenuates nitric-oxide-mediated cGMP signalling.</p>
+        <p>So it is not simply a substitute constrictor. It works partly by interfering with the machinery that was defeating your catecholamines. That is a genuinely strong point to make if an interviewer asks why it is effective specifically in vasoplegia rather than in shock generally.</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- 03 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>The deficiency argument</h2></div>
+    <div class="spine">
+      <p>There is a second reason vasopressin suits prolonged vasodilatory shock, and it is about the patient rather than the drug.</p>
+      <p>Early in shock, endogenous vasopressin release rises sharply &#8212; an appropriate response to hypotension. Sustained over hours, that release depletes pituitary stores, and plasma levels fall to values that are <strong>inappropriately low for the degree of hypotension present</strong>. This is often described as a relative vasopressin deficiency.</p>
+      <p>That reframes what you are doing: at the low fixed doses used in shock, you are less "adding a vasopressor" than <em class="term">restoring a hormone the patient has run out of</em>. It also explains why vasopressin is typically given at a fixed low dose rather than titrated the way a catecholamine is &#8212; the goal is replacement, not escalation.</p>
+    </div>
+
+    <div class="myth">
+      <div class="callout-t">Where to stop</div>
+      <p>The depletion observation is well described. Be careful not to extend it into a claim that measuring a vasopressin level should guide therapy, or that every vasodilatory shock patient is deficient. Present the mechanism as a rationale, not a diagnostic test &#8212; and if an examiner pushes on how well-established it is, the honest answer is that the physiology is clearer than the outcome data.</p>
+    </div>
+  </section>
+
+  <!-- 04 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>What it costs</h2></div>
+    <div class="spine">
+      <p>Two limitations follow directly from the receptor list, and you should be able to derive both.</p>
+      <p><strong>No inotropy.</strong> There is no V-receptor on the cardiac myocyte doing what &#946;&#8321; does. Vasopressin is a pure vasoconstrictor, which puts it in the same category as phenylephrine from Lesson 3: it raises afterload and offers the ventricle nothing in return. In a failing heart, cardiac output can fall.</p>
+      <p><strong>Regional vasoconstriction is not uniform.</strong> V&#8321;&#8342; density varies by vascular bed. Skin, skeletal muscle and splanchnic circulations constrict readily; at higher doses this shows up as digital and mesenteric ischaemia. Coronary vasoconstriction is also possible. This is the main reason vasopressin is used at low fixed doses rather than pushed upward &#8212; the dose-limiting problem is regional ischaemia, not systemic pressure.</p>
+    </div>
+  </section>
+
+  <!-- 05 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>Angiotensin II and the third system</h2></div>
+    <div class="spine">
+      <p>The renin&#8211;angiotensin system is the third independent lever on vascular tone. Knowing where angiotensin II comes from matters as much as knowing what it does.</p>
+    </div>
+
+    <div class="scroller">
+      <figure>
+        <svg viewBox="0 0 700 200" role="img" aria-label="Renin from juxtaglomerular cells cleaves angiotensinogen from the liver into angiotensin one. Angiotensin converting enzyme, largely in pulmonary endothelium, converts it to angiotensin two, which acts at AT1 receptors through Gq to cause vasoconstriction, and also stimulates aldosterone release and thirst.">
+          <g font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">
+            <rect x="8" y="60" width="118" height="40" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="67" y="78" text-anchor="middle">angiotensinogen</text>
+            <text x="67" y="92" text-anchor="middle" font-size="9.5" opacity=".65">liver</text>
+            <line x1="126" y1="80" x2="166" y2="80" stroke="currentColor" stroke-width="1.5" marker-end="url(#a4)"/>
+            <text x="146" y="72" text-anchor="middle" font-size="9.5" opacity=".7">renin</text>
+            <text x="146" y="96" text-anchor="middle" font-size="8.5" opacity=".5">JG cells</text>
+
+            <rect x="168" y="60" width="104" height="40" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+            <text x="220" y="85" text-anchor="middle">angiotensin I</text>
+            <line x1="272" y1="80" x2="312" y2="80" stroke="currentColor" stroke-width="1.5" marker-end="url(#a4)"/>
+            <text x="292" y="72" text-anchor="middle" font-size="9.5" opacity=".7">ACE</text>
+            <text x="292" y="96" text-anchor="middle" font-size="8.5" opacity=".5">lung</text>
+
+            <rect x="314" y="58" width="116" height="44" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.4"/>
+            <text x="372" y="85" text-anchor="middle" fill="var(--constrict)" font-weight="600">angiotensin II</text>
+
+            <line x1="430" y1="80" x2="462" y2="80" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="462" y1="80" x2="462" y2="34" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="462" y1="80" x2="462" y2="126" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="462" y1="34" x2="494" y2="34" stroke="currentColor" stroke-width="1.5" marker-end="url(#a4)"/>
+            <line x1="462" y1="80" x2="494" y2="80" stroke="var(--constrict)" stroke-width="1.7" marker-end="url(#a4)"/>
+            <line x1="462" y1="126" x2="494" y2="126" stroke="currentColor" stroke-width="1.5" marker-end="url(#a4)"/>
+
+            <rect x="496" y="16" width="196" height="34" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/>
+            <text x="594" y="37" text-anchor="middle" font-size="11">aldosterone &#8594; Na&#8314;/H&#8322;O retention</text>
+
+            <rect x="496" y="60" width="196" height="42" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.4"/>
+            <text x="594" y="78" text-anchor="middle" fill="var(--constrict)" font-weight="600" font-size="11.5">AT&#8321; &#8594; Gq &#8594; PLC</text>
+            <text x="594" y="93" text-anchor="middle" font-size="10">&#8593;Ca&#178;&#8314; &#8594; vasoconstriction</text>
+
+            <rect x="496" y="110" width="196" height="34" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/>
+            <text x="594" y="131" text-anchor="middle" font-size="11">ADH release &#183; thirst</text>
+
+            <text x="350" y="180" text-anchor="middle" font-size="10.5" opacity=".65">a third receptor, arriving at the same Gq cascade as &#945;&#8321; and V&#8321;&#8342;</text>
+          </g>
+        </svg>
+        <figcaption>Angiotensin II is the effector of a hormonal cascade, not a single-step drug. AT&#8321; couples to Gq &#8212; so the intracellular story from here is one you already know.</figcaption>
+      </figure>
+    </div>
+
+    <div class="spine">
+      <p>Like vasopressin, angiotensin II offers no inotropy, and its value in refractory vasoplegia is the same argument: a third receptor, independent of the two you have already saturated.</p>
+    </div>
+  </section>
+
+  <!-- 06 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><h2>Three doors, one room</h2></div>
+    <div class="spine">
+      <p>&#945;&#8321;, V&#8321;&#8342; and AT&#8321; are different receptors responding to different ligands &#8212; and all three couple to Gq and end at the same MLCK switch. Saturating one says nothing about the availability of the other two.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">Interactive &#183; Recruiting pathways</div>
+      <div class="pillars">
+        <div>
+          <div class="pill-row">
+            <div class="pill-head"><span>Adrenergic &#183; &#945;&#8321;</span><b><span id="vAd">70</span>%</b></div>
+            <input type="range" id="ad" min="0" max="100" step="5" value="70" aria-label="Adrenergic pathway stimulation">
+            <div class="pill-note" id="nAd"></div>
+          </div>
+          <div class="pill-row">
+            <div class="pill-head"><span>Vasopressin &#183; V&#8321;&#8342;</span><b><span id="vVp">0</span>%</b></div>
+            <input type="range" id="vp" min="0" max="100" step="5" value="0" aria-label="Vasopressin pathway stimulation">
+          </div>
+          <div class="pill-row">
+            <div class="pill-head"><span>Angiotensin II &#183; AT&#8321;</span><b><span id="vAt">0</span>%</b></div>
+            <input type="range" id="at" min="0" max="100" step="5" value="0" aria-label="Angiotensin two pathway stimulation">
+          </div>
+          <p style="font-size:13.5px;color:var(--ink-3);margin:14px 0 0">Push the adrenergic slider to 100 and watch how little the last stretch adds. Then add 30% of either other pathway and compare.</p>
+        </div>
+        <div class="readout">
+          <div class="unit" style="margin:0 0 8px">VASCULAR TONE</div>
+          <div class="big" id="toneOut">48</div>
+          <div class="tone-bar"><span class="tone-fill" id="toneFill" style="width:48%"></span></div>
+          <div class="verdict" id="toneVerdict"></div>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--ink-3);margin:16px 0 0;padding-top:14px;border-top:1px solid var(--rule)">Illustrative model of diminishing returns within one pathway. It carries no doses and is not a treatment algorithm.</p>
+    </div>
+
+    <details class="predict">
+      <summary>Adding a second pathway at a modest level often achieves more than driving the first one higher. Why, mechanistically?</summary>
+      <div class="predict-body">
+        <p><strong>Because each receptor pool saturates independently.</strong></p>
+        <p>Occupancy follows a saturating curve. Once most &#945;&#8321; receptors are engaged &#8212; and, in prolonged shock, once a fraction of them have been downregulated or uncoupled &#8212; additional catecholamine adds progressively less constriction while continuing to add its dose-related costs: chronotropy, arrhythmogenicity, myocardial oxygen demand.</p>
+        <p>V&#8321;&#8342; and AT&#8321; are separate receptor pools, unaffected by adrenergic saturation, and both feed the same Gq cascade. Recruiting them starts on the steep part of a fresh curve rather than the flat part of an exhausted one.</p>
+        <p>This is the physiological argument behind using more than one pathway at moderate doses instead of maximising a single one.</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- QUIZ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">07</span><h2>Check yourself</h2></div>
+    <div class="spine"><p>Six questions. Several turn on keeping vasopressin's two receptors apart.</p></div>
+    <div id="quiz"></div>
+    <div class="score" id="score">0 of 6 answered</div>
+  </section>
+
+  <div class="next">
+    <div class="panel-label">Next &#183; Lesson 5</div>
+    <p style="font-family:var(--display);font-size:22px;font-weight:600;margin:0 0 8px">Predicting Instead of Remembering</p>
+    <p style="color:var(--ink-2);margin:0">All six drugs in one comparison &#8212; built so you derive each cell from the receptor list rather than memorising the grid. Then the reasoning drill that turns this into an interview answer.</p>
+  </div>
+
+</div>
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- three-pathway recruitment ----------
+     Each pathway saturates on its own curve, so stacking two at moderate levels
+     beats driving one to its ceiling. Illustrative only — no doses implied. */
+  var ad = document.getElementById("ad"),
+      vp = document.getElementById("vp"),
+      at = document.getElementById("at"),
+      vAd = document.getElementById("vAd"),
+      vVp = document.getElementById("vVp"),
+      vAt = document.getElementById("vAt"),
+      nAd = document.getElementById("nAd"),
+      toneOut = document.getElementById("toneOut"),
+      toneFill = document.getElementById("toneFill"),
+      toneVerdict = document.getElementById("toneVerdict");
+
+  // Saturating response: steep early, flat late.
+  function contribution(pct, ceiling) {
+    var x = pct / 100;
+    return ceiling * (x / (x + 0.35));
+  }
+
+  function tone() {
+    var a = parseFloat(ad.value), v = parseFloat(vp.value), t = parseFloat(at.value);
+    vAd.textContent = a; vVp.textContent = v; vAt.textContent = t;
+
+    var cA = contribution(a, 42);
+    var cV = contribution(v, 30);
+    var cT = contribution(t, 28);
+    var total = Math.round(cA + cV + cT);
+
+    toneOut.textContent = total;
+    toneFill.style.width = Math.min(100, total) + "%";
+
+    // What the last increment of adrenergic actually bought.
+    if (a >= 85) {
+      var marginal = contribution(a, 42) - contribution(a - 15, 42);
+      nAd.textContent = "last 15% added only " + marginal.toFixed(1) + " — the curve has flattened";
+    } else {
+      nAd.textContent = "";
+    }
+
+    var used = [a > 0, v > 0, t > 0].filter(Boolean).length;
+    var msg;
+    if (total === 0) {
+      msg = "No pathway engaged.";
+    } else if (used === 1 && a >= 85) {
+      msg = "One pathway at its ceiling. Further catecholamine adds little tone while its costs keep accruing.";
+    } else if (used === 1) {
+      msg = "A single pathway, still on the steep part of its curve.";
+    } else if (used === 2) {
+      msg = "Two independent receptor pools recruited. Note the total for the effort spent.";
+    } else {
+      msg = "All three systems engaged — the physiological argument for moderate doses across pathways rather than one maximal.";
+    }
+    toneVerdict.textContent = msg;
+  }
+  [ad, vp, at].forEach(function (el) { el.addEventListener("input", tone); });
+  tone();
+
+  /* ---------- quiz ---------- */
+  var QUESTIONS = [
+    {
+      q: "A patient in prolonged vasodilatory shock responds progressively less to each norepinephrine increase. Which explanation is most complete?",
+      opts: [
+        "The infusion has begun degrading in the bag, reducing the delivered concentration",
+        "Adrenergic receptors have desensitised and acidosis has blunted their responsiveness",
+        "Norepinephrine is being cleared faster as hepatic blood flow improves with treatment",
+        "Alpha-1 receptors have converted to a beta-2 phenotype under sustained stimulation"
+      ],
+      a: 1,
+      tested: "Explaining catecholamine refractoriness at the receptor level",
+      why: "Sustained catecholamine exposure uncouples receptors from their G-proteins and reduces surface density, while the accompanying acidosis independently blunts adrenergic responsiveness. Inflammatory nitric oxide and open K-ATP channels compound it.",
+      wrong: [
+        "Catecholamine degradation in solution is not the mechanism behind clinical refractoriness at these timescales.",
+        null,
+        "Hepatic clearance changes do not account for the progressive loss of response seen in prolonged vasoplegia.",
+        "Receptors do not convert between subtypes. They are distinct gene products with distinct signalling."
+      ]
+    },
+    {
+      q: "Which statement correctly separates vasopressin's two principal receptors?",
+      opts: [
+        "V1a couples to Gs raising cAMP; V2 couples to Gq and raises intracellular calcium",
+        "Both couple to Gq, with V2 producing water retention through a calcium-dependent route",
+        "V1a couples to Gq causing vasoconstriction; V2 couples to Gs and inserts aquaporin-2",
+        "V1a acts on renal vasculature while V2 acts on systemic vessels through the same Gq route"
+      ],
+      a: 2,
+      tested: "Keeping the vascular and renal arms of one molecule distinct",
+      why: "V1a sits on vascular smooth muscle, couples to Gq, and runs the same PLC/IP₃/calcium/MLCK cascade as α₁. V2 sits on renal collecting duct cells, couples to Gs, and PKA drives aquaporin-2 into the apical membrane for water reabsorption.",
+      wrong: [
+        "This reverses both couplings. V1a is Gq and V2 is Gs, not the other way round.",
+        "V2 is Gs-coupled and works through cAMP and PKA, not through a calcium-dependent pathway.",
+        null,
+        "V2 is not a systemic vascular receptor. It is confined to the renal collecting duct and mediates water handling."
+      ]
+    },
+    {
+      q: "What is the strongest mechanistic argument for adding vasopressin to a patient already on high-dose norepinephrine?",
+      opts: [
+        "It acts through a receptor unaffected by adrenergic desensitisation and saturation",
+        "It has a longer duration of action, giving more stable pressures between adjustments",
+        "It provides inotropic support that norepinephrine alone cannot deliver at high doses",
+        "It reverses the acidosis that is limiting the response to catecholamine therapy"
+      ],
+      a: 0,
+      tested: "Recognising pathway independence as the reason for combining agents",
+      why: "V1a is a separate receptor pool from α₁, so adrenergic saturation and downregulation do not limit it. It also interferes with K-ATP channel opening and NO-mediated cGMP signalling — two mechanisms driving the vasoplegia itself.",
+      wrong: [
+        null,
+        "Duration is a practical convenience, not the mechanistic reason it works where catecholamines have stopped.",
+        "Vasopressin has no inotropic activity. There is no V-receptor performing the cardiac role β1 performs.",
+        "Vasopressin does not correct acidosis. It produces vasoconstriction through a pathway less impaired by it."
+      ]
+    },
+    {
+      q: "Vasopressin is typically given at a low fixed dose rather than titrated upward like a catecholamine. Which reasoning best supports that?",
+      opts: [
+        "Its vascular effect plateaus completely, so higher doses produce no further constriction",
+        "Higher doses risk regional ischaemia in splanchnic, digital and coronary beds",
+        "Rapid tachyphylaxis develops within hours, making dose escalation pointless",
+        "It cannot be measured in plasma, so titration has no endpoint to work against"
+      ],
+      a: 1,
+      tested: "Identifying the dose-limiting toxicity rather than assuming a ceiling effect",
+      why: "V1a receptor density varies by vascular bed. Skin, skeletal muscle and splanchnic circulations constrict readily, and at higher doses this appears as digital and mesenteric ischaemia; coronary vasoconstriction is also possible. The dose limit is regional ischaemia, not systemic pressure.",
+      wrong: [
+        "Higher doses do produce more vasoconstriction. The constraint is what that constriction costs regionally.",
+        null,
+        "Vasopressin does not show the rapid tachyphylaxis this option describes, and that is not the rationale for fixed dosing.",
+        "Assay availability is not the reason. The dosing convention follows from the toxicity profile."
+      ]
+    },
+    {
+      q: "Where does angiotensin-converting enzyme principally act in the pathway that generates angiotensin II?",
+      opts: [
+        "It releases renin from juxtaglomerular cells in response to reduced renal perfusion",
+        "It stimulates aldosterone secretion from the adrenal cortex after angiotensin II forms",
+        "It cleaves angiotensinogen produced by the liver into angiotensin I in the circulation",
+        "It converts angiotensin I into angiotensin II, largely within pulmonary endothelium"
+      ],
+      a: 3,
+      tested: "Placing each enzymatic step of the RAAS correctly",
+      why: "Renin cleaves liver-derived angiotensinogen to angiotensin I. ACE, concentrated in pulmonary endothelium, then converts angiotensin I to angiotensin II, which acts at AT1 receptors through Gq.",
+      wrong: [
+        "Renin release is triggered by renal hypoperfusion, macula densa signalling and β1 stimulation — not by ACE.",
+        "Angiotensin II stimulates aldosterone release; ACE is not the agent of that step.",
+        "That cleavage is renin's role. ACE acts one step further down the cascade.",
+        null
+      ]
+    },
+    {
+      q: "A patient with a severely impaired left ventricle is given vasopressin for refractory vasoplegia. MAP improves but cardiac output falls. Why is this predictable?",
+      opts: [
+        "V2 stimulation expands plasma volume and overloads an already failing ventricle",
+        "V1a stimulation directly depresses myocardial contractility through Gq signalling",
+        "Vasopressin raises afterload while providing no inotropic support to offset it",
+        "Coronary vasoconstriction produces immediate ischaemic contractile dysfunction"
+      ],
+      a: 2,
+      tested: "Applying the pure-vasoconstrictor pattern to a non-adrenergic drug",
+      why: "Vasopressin is a pure vasoconstrictor with no inotropic activity — the same structural problem as phenylephrine. It raises afterload and gives the ventricle nothing back, so a heart without contractile reserve ejects less against the higher load.",
+      wrong: [
+        "V2-mediated water retention develops over a longer timeframe and is not what drops output acutely here.",
+        "Gq signalling in vascular smooth muscle causes constriction. Vasopressin does not directly depress contractility.",
+        null,
+        "Coronary vasoconstriction is a genuine higher-dose concern, but the immediate and predictable mechanism is the afterload rise without inotropic support."
+      ]
+    }
+  ];
+
+  var LETTERS = ["A", "B", "C", "D"];
+  var answered = 0, correct = 0;
+  var quizEl = document.getElementById("quiz");
+  var scoreEl = document.getElementById("score");
+
+  QUESTIONS.forEach(function (item, qi) {
+    var card = document.createElement("div");
+    card.className = "quiz-q";
+    var num = document.createElement("div");
+    num.className = "qnum";
+    num.textContent = "QUESTION " + (qi + 1) + " OF " + QUESTIONS.length;
+    card.appendChild(num);
+    var qt = document.createElement("div");
+    qt.className = "qtext";
+    qt.innerHTML = item.q;
+    card.appendChild(qt);
+
+    var opts = document.createElement("div");
+    opts.className = "opts";
+    var explain = document.createElement("div");
+    explain.className = "explain";
+    explain.hidden = true;
+
+    item.opts.forEach(function (text, oi) {
+      var b = document.createElement("button");
+      b.className = "opt";
+      b.type = "button";
+      b.innerHTML = '<span class="ltr">' + LETTERS[oi] + '</span><span>' + text + '</span>';
+      b.addEventListener("click", function () {
+        if (card.dataset.done) return;
+        card.dataset.done = "1";
+        answered++;
+        if (oi === item.a) correct++;
+        Array.prototype.forEach.call(opts.children, function (el, i) {
+          el.disabled = true;
+          if (i === item.a) el.dataset.state = "correct";
+          else if (i === oi) el.dataset.state = "wrong";
+        });
+        var html = '<div class="tested">Testing &#183; ' + item.tested + '</div>';
+        html += '<p><strong>' + LETTERS[item.a] + ' is correct.</strong> ' + item.why + '</p><ul>';
+        item.wrong.forEach(function (w, i) {
+          if (w) html += '<li><strong>' + LETTERS[i] + '</strong> &#8212; ' + w + '</li>';
+        });
+        html += '</ul>';
+        explain.innerHTML = html;
+        explain.hidden = false;
+        scoreEl.innerHTML = answered + " of " + QUESTIONS.length +
+          " answered &#183; <strong>" + correct + " correct</strong>";
+      });
+      opts.appendChild(b);
+    });
+
+    card.appendChild(opts);
+    card.appendChild(explain);
+    quizEl.appendChild(card);
+  });
+})();
+</script>

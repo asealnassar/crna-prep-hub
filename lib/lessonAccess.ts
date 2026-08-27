@@ -30,6 +30,12 @@ export const DRAFT_LESSONS = [
     title: 'Three Ways to Break the Pattern',
     blurb: 'Epinephrine, phenylephrine and dopamine — and the two myths they come wrapped in.',
   },
+  {
+    slug: 'vasopressors-4',
+    number: 4,
+    title: 'When Catecholamines Stop Answering',
+    blurb: 'Vasopressin and angiotensin II — three independent systems, one shared cascade.',
+  },
 ] as const
 
 export function isDraftSlug(slug: string): boolean {
