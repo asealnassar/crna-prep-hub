@@ -51,7 +51,11 @@ export default function AdminReports() {
           <div className="flex justify-between items-center">
             <h1 className="text-2xl font-bold text-purple-600">Admin - Error Reports</h1>
             <div className="flex gap-4">
-              <Link href="/admin" className="text-gray-600 hover:text-purple-600">Dashboard</Link>
+              <div className="flex gap-4 flex-wrap"><Link href="/admin" className="text-gray-700 hover:text-blue-600">Manage Schools</Link>
+              <Link href="/admin/schools" className="text-gray-700 hover:text-blue-600">Edit Schools</Link>
+              <Link href="/admin/school-unlocks" className="text-gray-700 hover:text-blue-600">Unlock Requests</Link>
+              <Link href="/admin/reports" className="text-gray-700 hover:text-blue-600">Error Reports</Link>
+              <Link href="/dashboard" className="text-gray-700 hover:text-blue-600">User Dashboard</Link></div>
               <Link href="/schools" className="text-gray-600 hover:text-purple-600">Schools</Link>
             </div>
           </div>

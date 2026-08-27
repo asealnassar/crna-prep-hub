@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { useRouter, useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import { generateResumePDF } from '@/lib/generateResumePDF'
@@ -18,7 +19,7 @@ export default function PreviewResume() {
   const [userEmail, setUserEmail] = useState('')
   const [userTier, setUserTier] = useState('free')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const { sidebarCollapsed } = useSidebarCollapsed()
   const [selectedTemplate, setSelectedTemplate] = useState('modern')
   const [showTemplateSelector, setShowTemplateSelector] = useState(false)
   const router = useRouter()
@@ -217,12 +218,6 @@ setEnhancedBullets((prev: any) => ({
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <Sidebar
-        isLoggedIn={isLoggedIn}
-        userEmail={userEmail}
-        isAdmin={userEmail === 'asealnassar@gmail.com'}
-        onCollapsedChange={setSidebarCollapsed}
-      />
 
       <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">

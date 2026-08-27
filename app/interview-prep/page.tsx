@@ -21,26 +21,68 @@ export default function InterviewPrep() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false) 
   const [editingSchool, setEditingSchool] = useState<any>(null)
+  const [unlockedSchools, setUnlockedSchools] = useState<Set<string>>(new Set())
+  const [requestedSchools, setRequestedSchools] = useState<Set<string>>(new Set())
+  const [userId, setUserId] = useState('')
   const supabase = createClient()
 
   const isUltimate = userTier === 'ultimate'
-  const previewSchools = ['AdventHealth University', 'Arkansas State University', 'Clarkson College']
+  const previewSchools = ['university of Tulsa']
+
+  const loadUnlockStatus = async (uid: string) => {
+    const { data } = await supabase
+      .from('school_unlock_requests')
+      .select('school_name, status')
+      .eq('user_id', uid)
+
+    const unlocked = new Set<string>()
+    const requested = new Set<string>()
+    ;(data || []).forEach((row: any) => {
+      if (row.status === 'approved') unlocked.add(row.school_name)
+      else requested.add(row.school_name)
+    })
+    setUnlockedSchools(unlocked)
+    setRequestedSchools(requested)
+  }
+
+  const requestUnlock = async (schoolName: string) => {
+    if (!userId) return
+    setRequestedSchools(prev => new Set(prev).add(schoolName))
+    await supabase.from('school_unlock_requests').insert({
+      user_id: userId,
+      user_email: userEmail,
+      school_name: schoolName,
+      status: 'pending'
+    })
+  }
 
   useEffect(() => {
     const init = async () => {
-      const { data: schoolsData } = await supabase.from('schools').select('*').order('name')
-      setSchools(schoolsData || [])
+      // These three don't depend on each other, so they run concurrently
+      // instead of one after another - this was the main cause of the slow
+      // load, since the old version made 5 sequential round trips.
+      const [schoolsResult, infoResult, userResult] = await Promise.all([
+        supabase.from('schools').select('*').order('name'),
+        supabase.from('school_interview_info').select('*'),
+        supabase.auth.getUser(),
+      ])
 
-      const { data: infoData } = await supabase.from('school_interview_info').select('*')
-      setInterviewInfo(infoData || [])
+      setSchools(schoolsResult.data || [])
+      setInterviewInfo(infoResult.data || [])
 
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = userResult.data.user
       if (user) {
         setIsLoggedIn(true)
         setUserEmail(user.email || '')
+        setUserId(user.id)
         setIsAdmin(user.email === 'asealnassar@gmail.com')
-        const { data: profile } = await supabase.from('user_profiles').select('subscription_tier').eq('id', user.id).single()
-        if (profile) { setUserTier(profile.subscription_tier || 'free') }
+
+        // Profile and unlock status also don't depend on each other.
+        const [profileResult] = await Promise.all([
+          supabase.from('user_profiles').select('subscription_tier').eq('id', user.id).single(),
+          loadUnlockStatus(user.id),
+        ])
+        if (profileResult.data) { setUserTier(profileResult.data.subscription_tier || 'free') }
       }
       setLoading(false)
     }
@@ -111,7 +153,6 @@ export default function InterviewPrep() {
   if (!isLoggedIn) {
     return (
       <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-        <Sidebar isLoggedIn={false} userEmail="" isAdmin={false} onCollapsedChange={setSidebarCollapsed} />
         <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
           <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
             <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition text-sm">Login</Link>
@@ -128,7 +169,6 @@ export default function InterviewPrep() {
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <Sidebar isLoggedIn={isLoggedIn} userEmail={userEmail} isAdmin={isAdmin} onCollapsedChange={setSidebarCollapsed} />
       <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
         <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end" />
 
@@ -138,28 +178,38 @@ export default function InterviewPrep() {
             <p className="text-sm sm:text-base text-indigo-200">Real interview info, tips, and insider knowledge for {schools.length} CRNA programs</p>
           </div>
 
-          {/* Notice Banner */}
-          <div className="bg-yellow-500/20 border border-yellow-500/50 rounded-xl p-3 sm:p-4 mb-6 sm:mb-8">
-            <div className="flex items-start gap-2 sm:gap-3">
-              <span className="text-xl sm:text-2xl">🚧</span>
-              <div>
-                <h3 className="text-yellow-300 font-semibold text-sm sm:text-base">We're Building This Database</h3>
-                <p className="text-yellow-200/80 text-xs sm:text-sm">This list is growing daily as we gather information from students and programs. Don't see info for your school? Request expedited info below!</p>
-              </div>
-            </div>
-          </div>
-
           {/* Preview Banner for non-Ultimate users */}
           {!isUltimate && !isAdmin && (
             <div className="bg-purple-500/20 border border-purple-500/50 rounded-xl p-4 sm:p-6 mb-6 sm:mb-8">
               <div className="flex flex-col md:flex-row items-center justify-between gap-4">
                 <div>
                   <h3 className="text-purple-300 font-semibold text-base sm:text-lg">🔓 Preview Mode</h3>
-                  <p className="text-purple-200/80 text-xs sm:text-sm">You're viewing 3 sample schools. Upgrade to Ultimate to unlock all {schools.length} schools!</p>
+                  <p className="text-purple-200/80 text-xs sm:text-sm">You're viewing 1 sample school. Upgrade to Ultimate to unlock all {schools.length} schools!</p>
                 </div>
                 <Link href="/pricing" className="w-full md:w-auto text-center px-4 sm:px-6 py-2 sm:py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition whitespace-nowrap text-sm sm:text-base">
                   Upgrade to Ultimate
                 </Link>
+              </div>
+            </div>
+          )}
+
+          {/* Ultimate Member Security Notice */}
+          {isUltimate && !isAdmin && (
+            <div className="bg-indigo-500/20 border border-indigo-400/50 rounded-xl p-4 sm:p-5 mb-6 sm:mb-8">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl flex-shrink-0">🔒</span>
+                <div>
+                  <h3 className="text-indigo-200 font-semibold text-sm sm:text-base mb-1">A Quick Note on School Access</h3>
+                  <p className="text-indigo-200/80 text-xs sm:text-sm mb-3">
+                    For security purposes, all schools are now locked by default — this protects our community's hard-earned research from being scraped and republished elsewhere. Simply click <strong>"Request Access"</strong> on any school and we'll unlock it for you within 24 hours. Once unlocked, it's yours permanently. Thanks for helping us protect this resource for everyone! 💜
+                  </p>
+                  <div className="bg-red-500/20 border-2 border-red-400/60 rounded-lg p-3 flex items-start gap-2">
+                    <span className="text-lg flex-shrink-0">⚠️</span>
+                    <p className="text-red-200 text-xs sm:text-sm font-semibold">
+                      Please note: Before requesting, we may do an audit on any or all requests. You can only request schools you are currently applying to. Do not request programs you do not have an active application for.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -185,28 +235,76 @@ export default function InterviewPrep() {
                     ➕ Add Info
                   </button>
                 )}
-                {(isUltimate || isAdmin) && (
-                  <button
-                    onClick={() => setShowRequestModal(true)}
-                    className="flex-1 md:flex-none px-4 sm:px-6 py-2 sm:py-3 bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-semibold rounded-xl hover:opacity-90 transition whitespace-nowrap text-sm sm:text-base"
-                  >
-                    🚀 Request Info
-                  </button>
-                )}
+
               </div>
             </div>
           </div>
 
           {/* Preview Schools Section Label */}
           {!isUltimate && !isAdmin && displaySchools.length > 0 && (
-            <h2 className="text-lg sm:text-xl font-semibold text-white mb-4">📖 Sample Schools (3 of {schools.length})</h2>
+            <h2 className="text-lg sm:text-xl font-semibold text-white mb-4">📖 Sample School (1 of {schools.length})</h2>
           )}
 
-          {/* Schools List - Unlocked */}
+          {/* Schools List */}
           <div className="space-y-4">
             {displaySchools.map((school) => {
               const info = getSchoolInfo(school.name)
               const hasInfo = info && info.interview_style && info.interview_style !== 'No information found'
+
+              // For Ultimate (non-admin) users, each school requires individual manual
+              // approval before its content is shown — this prevents someone from
+              // screenshotting/scraping the entire database in one sitting.
+              const needsUnlockGate = isUltimate && !isAdmin
+              const isUnlocked = !needsUnlockGate || unlockedSchools.has(school.name)
+              const isRequested = requestedSchools.has(school.name)
+
+              if (needsUnlockGate && !isUnlocked) {
+                return (
+                  <div key={school.id} className="bg-white rounded-xl shadow-lg p-4 sm:p-6 relative overflow-hidden">
+                    {/* Visible header - not blurred, so users know what they're browsing */}
+                    <div className="flex flex-col sm:flex-row items-start justify-between gap-3 mb-3">
+                      <div className="flex-1 w-full">
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 flex-wrap">
+                          <h3 className="font-bold text-lg sm:text-xl text-gray-800">{school.name}</h3>
+                          <span className="text-gray-500 text-xs sm:text-sm">📍 {school.location_city}, {school.location_state}</span>
+                          <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full w-fit">Info Available</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Blurred content preview underneath, to entice the request */}
+                    <div className="relative">
+                      <div className="blur-sm select-none pointer-events-none space-y-2 sm:space-y-3 text-sm sm:text-base">
+                        <div>
+                          <span className="text-purple-600 font-semibold">🎯 Interview Style: </span>
+                          <span className="text-gray-700">Detailed insider information available after approval.</span>
+                        </div>
+                        <div>
+                          <span className="text-blue-600 font-semibold">🏥 Clinical Focus: </span>
+                          <span className="text-gray-700">Real questions and preparation tips from past applicants.</span>
+                        </div>
+                      </div>
+
+                      <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-white/80 to-white flex items-end justify-center pb-2">
+                        <div className="text-center">
+                          <div className="text-2xl sm:text-3xl mb-2">🔒</div>
+                          {isRequested ? (
+                            <p className="text-gray-700 font-semibold text-sm sm:text-base">⏳ Access Requested — Pending Approval</p>
+                          ) : (
+                            <button
+                              onClick={() => requestUnlock(school.name)}
+                              className="px-4 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition text-sm sm:text-base"
+                            >
+                              🔓 Request Access
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              }
+
               return (
                 <div
                   key={school.id}

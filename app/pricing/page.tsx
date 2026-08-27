@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
 import Sidebar from '@/components/Sidebar'
@@ -13,7 +14,7 @@ export default function Pricing() {
   const [promoValid, setPromoValid] = useState<boolean | null>(null)
   const [promoData, setPromoData] = useState<any>(null)
   const [checkingPromo, setCheckingPromo] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const { sidebarCollapsed } = useSidebarCollapsed()
   
   // Banner states
   const [banner, setBanner] = useState<any>(null)
@@ -158,7 +159,7 @@ export default function Pricing() {
 
 const discountAmount = promoData?.discount_amount ? promoData.discount_amount / 100 : 0
 const premiumPrice = promoValid ? (14.99 - discountAmount).toFixed(2) : '14.99'
-const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
+const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
 
   const renderBannerText = (text: string, code: string) => {
     return text.split('{CODE}').map((part, idx, arr) => (
@@ -175,12 +176,6 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <Sidebar
-        isLoggedIn={!!user}
-        userEmail={user?.email || ''}
-        isAdmin={isAdmin}
-        onCollapsedChange={setSidebarCollapsed}
-      />
 
       <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
         
@@ -243,10 +238,6 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
               Login
             </Link>
           )}
-        </div>
-
-        <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-2 sm:py-3 px-4 text-center">
-          <a href="/interview-prep" className="text-black text-xs sm:text-sm font-semibold hover:underline">🚀 NEW: School-Specific Interview Prep is NOW LIVE for Ultimate members →</a>
         </div>
 
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
@@ -319,8 +310,13 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
 
 {/* PREMIUM PLAN */}
             <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 border-2 border-blue-500 relative">
-              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-blue-500 text-white px-3 sm:px-4 py-1 rounded-full text-xs sm:text-sm font-semibold">
-                POPULAR
+              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 flex gap-2">
+                <span className="bg-blue-500 text-white px-3 sm:px-4 py-1 rounded-full text-xs sm:text-sm font-semibold whitespace-nowrap">
+                  POPULAR
+                </span>
+                <span className="bg-red-500 text-white px-3 sm:px-4 py-1 rounded-full text-xs sm:text-sm font-semibold whitespace-nowrap">
+                  LIMITED TIME
+                </span>
               </div>
               <h2 className="text-xl sm:text-2xl font-bold mb-2 text-gray-800">Premium</h2>
               <div className="mb-3 sm:mb-4">
@@ -330,7 +326,10 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
                     <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">${premiumPrice}</span>
                   </>
                 ) : (
-                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$14.99</span>
+                  <>
+                    <span className="text-xl sm:text-2xl text-gray-400 line-through">$14.99</span>
+                    <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">$5.00</span>
+                  </>
                 )}
               </div>
               <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Find Schools with a few clicks!</p>
@@ -370,11 +369,11 @@ const ultimatePrice = promoValid ? (34.99 - discountAmount).toFixed(2) : '34.99'
               <div className="mb-3 sm:mb-4">
                 {promoValid ? (
                   <>
-                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'34.99'}</span>
+                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'49.99'}</span>
                     <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">${ultimatePrice}</span>
                   </>
                 ) : (
-                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$34.99</span>
+                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$49.99</span>
                 )}
               </div>
               <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Unlimited Access on Everything </p>

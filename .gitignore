@@ -5,3 +5,11 @@ node_modules
 .DS_Store
 *.log
 .env.local.save
+.vercel
+.env*.local
+
+# Editor/AI backup copies — never source of truth
+*.bak
+*.save
+# Local TypeScript incremental build cache
+tsconfig.tsbuildinfo

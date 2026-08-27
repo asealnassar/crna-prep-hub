@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
 import Sidebar from '@/components/Sidebar'
@@ -9,7 +10,7 @@ export default function Updates() {
   const [updates, setUpdates] = useState<any[]>([])
   const [user, setUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const { sidebarCollapsed } = useSidebarCollapsed()
   const [filterCategory, setFilterCategory] = useState('all')
   const supabase = createClient()
 
@@ -121,12 +122,6 @@ export default function Updates() {
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <Sidebar
-        isLoggedIn={!!user}
-        userEmail={user?.email || ''}
-        isAdmin={isAdmin}
-        onCollapsedChange={setSidebarCollapsed}
-      />
 
       <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
         <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-between items-center">

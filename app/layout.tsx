@@ -22,9 +22,9 @@ export default function RootLayout({
         {/* Google Ads */}
         <Script
           src="https://www.googletagmanager.com/gtag/js?id=AW-17939352347"
-          strategy="afterInteractive"
+          strategy="lazyOnload"
         />
-        <Script id="google-ads" strategy="afterInteractive">
+        <Script id="google-ads" strategy="lazyOnload">
           {`
             window.dataLayer = window.dataLayer || [];
             function gtag(){dataLayer.push(arguments);}
@@ -34,7 +34,7 @@ export default function RootLayout({
         </Script>
 
         {/* TikTok Pixel */}
-        <Script id="tiktok-pixel" strategy="afterInteractive">
+        <Script id="tiktok-pixel" strategy="lazyOnload">
           {`
             !function (w, d, t) {
               w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie","holdConsent","revokeConsent","grantConsent"];

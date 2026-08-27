@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import Sidebar from '@/components/Sidebar'
@@ -12,7 +13,7 @@ export default function ResumeBuilder() {
   const [userEmail, setUserEmail] = useState('')
   const [userTier, setUserTier] = useState('free')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const { sidebarCollapsed } = useSidebarCollapsed()
   const [deleting, setDeleting] = useState<string | null>(null)
   const router = useRouter()
   const supabase = createClient()
@@ -82,7 +83,6 @@ export default function ResumeBuilder() {
   if ((userTier === 'free' || userTier === 'premium') && resumes.length >= 1) {
     return (
       <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-        <Sidebar isLoggedIn={isLoggedIn} userEmail={userEmail} isAdmin={userEmail === 'asealnassar@gmail.com'} onCollapsedChange={setSidebarCollapsed} />
         <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
             <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
@@ -103,7 +103,7 @@ export default function ResumeBuilder() {
               </div>
 
               <Link href="/pricing" className="inline-block px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white text-lg font-semibold rounded-xl hover:opacity-90 transition">
-                Upgrade to Ultimate - $34.99
+                Upgrade to Ultimate - $49.99
               </Link>
               
 <div className="mt-6">
@@ -119,7 +119,6 @@ export default function ResumeBuilder() {
   }
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <Sidebar isLoggedIn={isLoggedIn} userEmail={userEmail} isAdmin={userEmail === 'asealnassar@gmail.com'} onCollapsedChange={setSidebarCollapsed} />
       <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           
@@ -154,6 +153,120 @@ export default function ResumeBuilder() {
                 Choose from 5 professional templates, get your resume scored (0-100), and download as PDF.
               </p>
             </div>
+          </div>
+
+          {/* Tier Access Note */}
+          <div className="bg-indigo-500/20 border border-indigo-400/50 rounded-xl p-3 sm:p-4 mb-8 flex items-center gap-3">
+            <span className="text-xl flex-shrink-0">💎</span>
+            {userTier === 'ultimate' ? (
+              <p className="text-indigo-200 text-xs sm:text-sm">You're on the <strong>Ultimate</strong> plan — build unlimited resumes!</p>
+            ) : (
+              <p className="text-indigo-200 text-xs sm:text-sm">Free and Premium members can create <strong>1 resume</strong>. Upgrade to <strong>Ultimate</strong> for unlimited resumes.</p>
+            )}
+          </div>
+
+          {/* Template Options */}
+          <div className="bg-white/10 backdrop-blur-sm border-2 border-white/20 rounded-2xl p-6 mb-8">
+            <h3 className="text-lg font-bold text-white mb-4">🎨 Choose From 5 Template Styles</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
+              <div className="bg-white rounded-lg p-3 text-center">
+                <div className="h-16 bg-gray-100 rounded mb-2 flex flex-col gap-1 p-2">
+                  <div className="h-1.5 bg-gray-800 rounded w-3/4 mx-auto"></div>
+                  <div className="h-1 bg-gray-300 rounded w-full mt-1"></div>
+                  <div className="h-1 bg-gray-300 rounded w-full"></div>
+                  <div className="h-1 bg-gray-300 rounded w-2/3"></div>
+                </div>
+                <p className="text-xs font-semibold text-gray-800">Modern</p>
+                <p className="text-[10px] text-gray-400">Clean & minimal</p>
+              </div>
+              <div className="bg-white rounded-lg p-3 text-center">
+                <div className="h-16 bg-gray-100 rounded mb-2 flex flex-col gap-1 p-2 border-l-2 border-purple-500">
+                  <div className="h-1.5 bg-purple-700 rounded w-3/4"></div>
+                  <div className="h-1 bg-gray-300 rounded w-full mt-1"></div>
+                  <div className="h-1 bg-gray-300 rounded w-full"></div>
+                  <div className="h-1 bg-gray-300 rounded w-2/3"></div>
+                </div>
+                <p className="text-xs font-semibold text-gray-800">Professional</p>
+                <p className="text-[10px] text-gray-400">Traditional healthcare</p>
+              </div>
+              <div className="bg-white rounded-lg p-3 text-center">
+                <div className="h-16 bg-gray-100 rounded mb-2 flex flex-col gap-1 p-2">
+                  <div className="h-1.5 bg-gray-800 rounded w-1/2"></div>
+                  <div className="h-1 bg-gray-400 rounded w-full mt-1"></div>
+                  <div className="h-1 bg-gray-400 rounded w-full"></div>
+                  <div className="h-1 bg-gray-400 rounded w-full"></div>
+                </div>
+                <p className="text-xs font-semibold text-gray-800">ATS-Optimized</p>
+                <p className="text-[10px] text-gray-400">Keyword-focused</p>
+              </div>
+              <div className="bg-white rounded-lg p-3 text-center">
+                <div className="h-16 bg-gray-100 rounded mb-2 flex flex-col gap-0.5 p-1.5">
+                  <div className="h-1 bg-gray-800 rounded w-3/4 mx-auto"></div>
+                  <div className="h-0.5 bg-gray-300 rounded w-full mt-1"></div>
+                  <div className="h-0.5 bg-gray-300 rounded w-full"></div>
+                  <div className="h-0.5 bg-gray-300 rounded w-full"></div>
+                  <div className="h-0.5 bg-gray-300 rounded w-full"></div>
+                </div>
+                <p className="text-xs font-semibold text-gray-800">Compact</p>
+                <p className="text-[10px] text-gray-400">Space-efficient</p>
+              </div>
+              <div className="bg-white rounded-lg p-3 text-center">
+                <div className="h-16 bg-gradient-to-br from-purple-50 to-pink-50 rounded mb-2 flex flex-col gap-1 p-2">
+                  <div className="h-1.5 bg-gradient-to-r from-purple-600 to-pink-500 rounded w-3/4 mx-auto"></div>
+                  <div className="h-1 bg-gray-300 rounded w-full mt-1"></div>
+                  <div className="h-1 bg-gray-300 rounded w-full"></div>
+                  <div className="h-1 bg-gray-300 rounded w-2/3"></div>
+                </div>
+                <p className="text-xs font-semibold text-gray-800">Creative</p>
+                <p className="text-[10px] text-gray-400">Subtle design</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Sample Resume Preview */}
+          <div className="bg-white rounded-2xl p-6 sm:p-8 mb-8 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900">📄 See a Sample Resume</h3>
+              <span className="px-3 py-1 bg-gray-100 text-gray-500 text-xs font-semibold rounded-full">SAMPLE — NOT A REAL RESUME</span>
+            </div>
+            <div className="border border-gray-200 rounded-xl p-5 sm:p-6 bg-gray-50">
+              <div className="text-center mb-4 pb-4 border-b border-gray-200">
+                <p className="font-black text-gray-900 text-lg">Jordan Reyes, BSN, RN, CCRN</p>
+                <p className="text-gray-500 text-xs mt-1">jordan.reyes@email.com &nbsp;•&nbsp; (555) 123-4567 &nbsp;•&nbsp; Atlanta, GA</p>
+              </div>
+              <div className="mb-4">
+                <p className="text-purple-600 font-bold text-xs uppercase tracking-wide mb-2">Professional Summary</p>
+                <p className="text-gray-700 text-sm">ICU nurse with 4+ years of critical care experience seeking a CRNA program to advance into nurse anesthesia practice. Skilled in hemodynamic monitoring, vasoactive titration, and multi-organ critical care.</p>
+              </div>
+              <div className="mb-4">
+                <p className="text-purple-600 font-bold text-xs uppercase tracking-wide mb-2">Experience</p>
+                <p className="font-semibold text-gray-800 text-sm">ICU Registered Nurse — Emory University Hospital</p>
+                <p className="text-gray-400 text-xs mb-2">June 2021 – Present</p>
+                <ul className="text-gray-700 text-sm space-y-1.5 list-disc pl-5">
+                  <li>Managed continuous renal replacement therapy for critically ill patients with acute kidney injury and multi-organ dysfunction, optimizing fluid balance and electrolyte management</li>
+                  <li>Titrated vasoactive drips and sedation for hemodynamically unstable patients, collaborating with intensivists to achieve target MAP and RASS goals</li>
+                  <li>Served as charge nurse for a 24-bed ICU, coordinating staffing and triaging critical admissions during high-acuity shifts</li>
+                </ul>
+              </div>
+              <div className="mb-4">
+                <p className="text-purple-600 font-bold text-xs uppercase tracking-wide mb-2">Education</p>
+                <p className="font-semibold text-gray-800 text-sm">Bachelor of Science in Nursing — University of Georgia</p>
+                <p className="text-gray-400 text-xs">Graduated May 2020</p>
+              </div>
+              <div className="mb-4">
+                <p className="text-purple-600 font-bold text-xs uppercase tracking-wide mb-2">Certifications</p>
+                <p className="text-gray-700 text-sm">CCRN &nbsp;•&nbsp; ACLS &nbsp;•&nbsp; PALS &nbsp;•&nbsp; BLS</p>
+              </div>
+              <div className="mb-4">
+                <p className="text-purple-600 font-bold text-xs uppercase tracking-wide mb-2">CRNA Shadowing Experience</p>
+                <p className="text-gray-700 text-sm">40 hours shadowing CRNAs across cardiac, orthopedic, and general surgery cases — Emory University Hospital, 2023</p>
+              </div>
+              <div>
+                <p className="text-purple-600 font-bold text-xs uppercase tracking-wide mb-2">Leadership & Involvement</p>
+                <p className="text-gray-700 text-sm">Preceptor for new ICU graduate nurses &nbsp;•&nbsp; Unit-based shared governance committee member</p>
+              </div>
+            </div>
+            <p className="text-gray-400 text-xs text-center mt-4">This is just one of 5 available template styles — yours will be built entirely from your own experience.</p>
           </div>
 
           {/* AI Example */}

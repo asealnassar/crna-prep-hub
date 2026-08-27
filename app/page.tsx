@@ -1,27 +1,21 @@
 import Link from 'next/link'
+import LazyTikTokSection from '@/components/LazyTikTokSection'
 
 export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      {/* Banner */}
-      <div className="bg-gradient-to-r from-yellow-500 to-orange-500 py-2 sm:py-3 px-4 text-center">
-        <Link href="/interview-prep" className="text-black text-xs sm:text-sm font-semibold hover:underline">
-          🚀 NEW: School-Specific Interview Style is NOW LIVE for Ultimate members →
-        </Link>
-      </div>
-
       {/* Navigation */}
       <nav className="bg-white/10 backdrop-blur-md border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 py-3 sm:py-4">
           <div className="flex flex-col sm:flex-row justify-between items-center gap-3 sm:gap-0">
             <div className="flex items-center gap-3 sm:gap-4 w-full sm:w-auto justify-between sm:justify-start">
               <h1 className="text-xl sm:text-2xl font-bold text-white">CRNA Prep Hub</h1>
-              <Link href="/sponsors" className="text-yellow-400 hover:text-yellow-300 text-xs sm:text-sm font-medium">Sponsors</Link>
             </div>
             <div className="flex flex-wrap justify-center gap-3 sm:gap-6 text-sm">
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Interview</Link>
               <Link href="/interview-prep" className="text-white/80 hover:text-white transition hidden sm:inline">School Interview</Link>
+              <Link href="/forum" className="text-white/80 hover:text-white transition hidden sm:inline">Forum</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
               <Link href="/login" className="bg-white text-indigo-900 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg font-semibold hover:bg-indigo-100 transition text-sm">Login</Link>
             </div>
@@ -52,6 +46,7 @@ export default function Home() {
             Browse Schools
           </Link>
         </div>
+        <p className="text-indigo-300 text-xs sm:text-sm mt-4">🎓 Join 600+ future CRNAs already using CRNA Prep Hub</p>
       </div>
 
       {/* Stats Bar */}
@@ -67,12 +62,12 @@ export default function Home() {
               <div className="text-xs sm:text-sm lg:text-base text-indigo-300">States Covered</div>
             </div>
             <div>
-              <div className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-1 sm:mb-2">AI</div>
+              <div className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-1 sm:mb-2">Unlimited</div>
               <div className="text-xs sm:text-sm lg:text-base text-indigo-300">Mock Interviews</div>
             </div>
             <div>
-              <div className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-1 sm:mb-2">24/7</div>
-              <div className="text-xs sm:text-sm lg:text-base text-indigo-300">Access</div>
+              <div className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-1 sm:mb-2">600+</div>
+              <div className="text-xs sm:text-sm lg:text-base text-indigo-300">Members</div>
             </div>
           </div>
         </div>
@@ -97,7 +92,7 @@ export default function Home() {
       {/* Features Section */}
       <div className="max-w-7xl mx-auto px-4 pb-12 sm:pb-24">
         <h2 className="text-2xl sm:text-3xl font-bold text-white text-center mb-8 sm:mb-12">Everything You Need to Get Accepted</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8">
           <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
             <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">🎓</div>
             <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">School Database</h3>
@@ -113,10 +108,28 @@ export default function Home() {
             <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">Premium Filters</h3>
             <p className="text-sm sm:text-base text-indigo-200">Unlock advanced filters for GRE requirements, application deadlines, prerequisites, and more to find your perfect match.</p>
           </div>
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
+            <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">📝</div>
+            <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">Personal Statement Builder</h3>
+            <p className="text-sm sm:text-base text-indigo-200">Build a compelling personal statement with guided prompts designed specifically for CRNA applications.</p>
+          </div>
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
+            <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">📄</div>
+            <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">Resume Builder</h3>
+            <p className="text-sm sm:text-base text-indigo-200">Create a polished, ATS-friendly resume built for nurse anesthesia applications in minutes.</p>
+          </div>
+          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
+            <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">🗣️</div>
+            <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">Community Forum</h3>
+            <p className="text-sm sm:text-base text-indigo-200">Connect with 600+ future CRNAs. Ask questions, share experiences, and get support from people on the same journey.</p>
+          </div>
         </div>
       </div>
 
       {/* CTA Section */}
+      {/* TikTok Section - lazy-loaded, only mounts the heavy embeds once scrolled near */}
+      <LazyTikTokSection />
+
       <div className="bg-gradient-to-r from-pink-600 to-purple-600 py-12 sm:py-16 px-4">
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="text-2xl sm:text-3xl font-bold text-white mb-3 sm:mb-4">Ready to Start Your CRNA Journey?</h2>

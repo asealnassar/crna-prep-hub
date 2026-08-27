@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase-browser'
+import { useSidebarCollapsed } from '@/lib/SidebarContext'
 
 interface MessagesModalProps {
   userEmail: string
@@ -12,6 +13,7 @@ type View = 'compose'
 
 export default function MessagesModal({ userEmail, isAdmin }: MessagesModalProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const { setMessagesUnreadCount: setGlobalMessagesUnreadCount } = useSidebarCollapsed()
   const [threads, setThreads] = useState<any[]>([])
   const [selectedThread, setSelectedThread] = useState<any>(null)
   const [messages, setMessages] = useState<any[]>([])
@@ -49,12 +51,35 @@ const [compose, setCompose] = useState({
     loadThreads()
     if (isAdmin) loadUsers()
     getAdminId()
-    
-    const interval = setInterval(() => {
-      loadThreads()
-    }, 5000)
-    
-    return () => clearInterval(interval)
+
+    // Polling (even slowed down) still costs egress on every single active user,
+    // every few seconds, whether anything actually changed or not. Supabase
+    // Realtime instead pushes an event only when a row actually changes — idle
+    // users generate zero requests, which is a much better fit for this feature.
+    const channel = supabase
+      .channel('thread_messages_live')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'thread_messages' },
+        () => {
+          loadThreads()
+        }
+      )
+      .subscribe()
+
+    // Still refresh once when the tab becomes visible again, in case the
+    // realtime connection dropped while the tab was in the background.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadThreads()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      supabase.removeChannel(channel)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [])
 
   const getAdminId = async () => {
@@ -80,18 +105,6 @@ const [compose, setCompose] = useState({
     }
   }
 
-  const updateSidebarBadge = (count: number) => {
-    const badge = document.getElementById('messages-unread-badge')
-    if (badge) {
-      if (count > 0) {
-        badge.textContent = count.toString()
-        badge.classList.remove('hidden')
-      } else {
-        badge.classList.add('hidden')
-      }
-    }
-  }
-
   const loadThreads = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
@@ -104,7 +117,7 @@ const [compose, setCompose] = useState({
 
     if (!myParticipations || myParticipations.length === 0) {
       setThreads([])
-      updateSidebarBadge(0)
+      setGlobalMessagesUnreadCount(0)
       return
     }
 
@@ -118,7 +131,7 @@ const [compose, setCompose] = useState({
 
     if (!threadsData) {
       setThreads([])
-      updateSidebarBadge(0)
+      setGlobalMessagesUnreadCount(0)
       return
     }
 
@@ -214,7 +227,7 @@ let otherEmail = 'Unknown'
 
     setThreads(processedThreads)
     const totalUnread = processedThreads.filter(t => t.unreadCount > 0).length
-    updateSidebarBadge(totalUnread)
+    setGlobalMessagesUnreadCount(totalUnread)
   }
 
   const loadThread = async (threadId: string) => {

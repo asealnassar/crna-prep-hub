@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
@@ -35,7 +36,7 @@ export default function Schools() {
   const [reportField, setReportField] = useState('')
   const [reportDescription, setReportDescription] = useState('')
   const [reportSubmitting, setReportSubmitting] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const { sidebarCollapsed } = useSidebarCollapsed()
   const router = useRouter()
   const supabase = createClient()
   const isPremium = userTier === 'premium' || userTier === 'ultimate'
@@ -89,25 +90,40 @@ export default function Schools() {
     alert('Thank you! Your report has been submitted.')
   }
 
+  // Fetch the school list on its own - this is the only thing the page actually
+  // needs before it can render, so it no longer waits on the auth/profile/saved
+  // schools chain below. That chain used to block the whole page behind a single
+  // "loading" flag even though none of it is needed to show the school database.
   useEffect(() => {
-    const init = async () => {
+    const loadSchools = async () => {
       const { data: schoolsData } = await supabase.from('schools').select('*').order('name')
       setSchools(schoolsData || [])
       setFilteredSchools(schoolsData || [])
-
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        setIsLoggedIn(true)
-        setUserId(user.id)
-        setUserEmail(user.email || '')
-        const { data: profile } = await supabase.from('user_profiles').select('subscription_tier').eq('id', user.id).single()
-        if (profile) { setUserTier(profile.subscription_tier || 'free') }
-        const { data: savedData } = await supabase.from('saved_schools').select('school_id').eq('user_id', user.id)
-        if (savedData) { setSavedSchools(savedData.map(s => s.school_id)) }
-      }
       setLoading(false)
     }
-    init()
+    loadSchools()
+  }, [])
+
+  // Auth/profile/saved-schools data loads independently and in parallel (rather
+  // than one sequential chain), and updates the relevant UI (login state, premium
+  // filters, saved-star icons) whenever it resolves - without blocking the page.
+  useEffect(() => {
+    const loadAuthData = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      setIsLoggedIn(true)
+      setUserId(user.id)
+      setUserEmail(user.email || '')
+
+      const [profileResult, savedResult] = await Promise.all([
+        supabase.from('user_profiles').select('subscription_tier').eq('id', user.id).single(),
+        supabase.from('saved_schools').select('school_id').eq('user_id', user.id),
+      ])
+
+      if (profileResult.data) { setUserTier(profileResult.data.subscription_tier || 'free') }
+      if (savedResult.data) { setSavedSchools(savedResult.data.map(s => s.school_id)) }
+    }
+    loadAuthData()
   }, [])
 
   const toggleSaveSchool = async (schoolId: string) => {
@@ -181,15 +197,10 @@ export default function Schools() {
     else { setPrereqsNotRequired([...prereqsNotRequired, prereq]) }
   }
 
-  if (loading) {
-    return (<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 flex items-center justify-center"><div className="text-white text-xl">Loading...</div></div>)
-  }
-
   const states = [...new Set(schools.map(s => s.location_state))].sort()
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <Sidebar isLoggedIn={isLoggedIn} userEmail={userEmail} isAdmin={userEmail === 'asealnassar@gmail.com'} onCollapsedChange={setSidebarCollapsed} />
       <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
         <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
           {!isLoggedIn && (
@@ -368,7 +379,11 @@ export default function Schools() {
           </div>
 
           <div className="flex flex-col gap-4 sm:gap-6">
-            {filteredSchools.map((school) => (
+            {loading ? (
+              Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 h-[260px] sm:h-[220px] animate-pulse" />
+              ))
+            ) : filteredSchools.map((school) => (
               <div key={school.id} className="bg-white rounded-2xl shadow-xl p-4 sm:p-6 hover:shadow-2xl transition relative border-l-4 border-purple-500">
                 <button onClick={() => toggleSaveSchool(school.id)} className="absolute top-3 sm:top-4 right-3 sm:right-4 text-xl sm:text-2xl hover:scale-125 transition">
                   {savedSchools.includes(school.id) ? '❤️' : '🤍'}

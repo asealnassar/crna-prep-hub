@@ -14,7 +14,8 @@ export default function Analytics() {
   const [userEmail, setUserEmail] = useState('')
   const [isAdmin, setIsAdmin] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [activeTab, setActiveTab] = useState<'users' | 'feedback' | 'features'>('users')
+  const [activeTab, setActiveTab] = useState<'users' | 'feedback' | 'features' | 'unlocks'>('users')
+  const [unlockRequests, setUnlockRequests] = useState<any[]>([])
   const router = useRouter()
   const supabase = createClient()
 
@@ -76,6 +77,42 @@ export default function Analytics() {
       .order('created_at', { ascending: false })
 
     setFeatureRequests(featuresData || [])
+
+    const { data: unlocksData } = await supabase
+      .from('school_unlock_requests')
+      .select('*')
+      .order('requested_at', { ascending: false })
+
+    setUnlockRequests(unlocksData || [])
+  }
+
+  const deleteFeatureRequest = async (id: string) => {
+    if (!confirm('Delete this feature request?')) return
+    await supabase.from('feature_requests').delete().eq('id', id)
+    setFeatureRequests(prev => prev.filter(item => item.id !== id))
+  }
+
+  const approveUnlockRequest = async (id: string) => {
+    await supabase
+      .from('school_unlock_requests')
+      .update({ status: 'approved', approved_at: new Date().toISOString() })
+      .eq('id', id)
+    setUnlockRequests(prev => prev.map(r => r.id === id ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r))
+
+    const req = unlockRequests.find(r => r.id === id)
+    if (req) {
+      fetch('/api/school-unlock/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipientEmail: req.user_email, schoolName: req.school_name })
+      }).catch(err => console.error('Unlock email failed:', err))
+    }
+  }
+
+  const deleteUnlockRequest = async (id: string) => {
+    if (!confirm('Delete this unlock request?')) return
+    await supabase.from('school_unlock_requests').delete().eq('id', id)
+    setUnlockRequests(prev => prev.filter(item => item.id !== id))
   }
 
   useEffect(() => {
@@ -192,6 +229,21 @@ export default function Analytics() {
             >
               Feature Requests ({featureRequests.length})
             </button>
+            <button
+              onClick={() => setActiveTab('unlocks')}
+              className={`px-6 py-3 rounded-xl font-semibold transition relative ${
+                activeTab === 'unlocks'
+                  ? 'bg-white text-purple-600'
+                  : 'bg-white/10 text-white hover:bg-white/20'
+              }`}
+            >
+              School Requests ({unlockRequests.filter(r => r.status !== 'approved').length} pending)
+              {unlockRequests.filter(r => r.status !== 'approved').length > 0 && activeTab !== 'unlocks' && (
+                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">
+                  {unlockRequests.filter(r => r.status !== 'approved').length}
+                </span>
+              )}
+            </button>
           </div>
 
           {activeTab === 'users' && (
@@ -281,15 +333,68 @@ export default function Analytics() {
                         <p className="font-semibold text-gray-800">{item.user_email}</p>
                         <p className="text-sm text-gray-500">{new Date(item.created_at).toLocaleString()}</p>
                       </div>
-                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                        item.status === 'approved' ? 'bg-green-100 text-green-700' :
-                        item.status === 'reviewing' ? 'bg-yellow-100 text-yellow-700' :
-                        'bg-gray-100 text-gray-700'
-                      }`}>
-                        {item.status?.toUpperCase() || 'PENDING'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                          item.status === 'approved' ? 'bg-green-100 text-green-700' :
+                          item.status === 'reviewing' ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {item.status?.toUpperCase() || 'PENDING'}
+                        </span>
+                        <button
+                          onClick={() => deleteFeatureRequest(item.id)}
+                          className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-200 transition"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                     <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 p-4 rounded-lg">{item.idea}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {activeTab === 'unlocks' && (
+            <div className="space-y-4">
+              {unlockRequests.length === 0 ? (
+                <div className="bg-white rounded-2xl p-12 text-center">
+                  <p className="text-gray-500">No school unlock requests yet</p>
+                </div>
+              ) : (
+                unlockRequests.map((item) => (
+                  <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-bold text-gray-800">{item.school_name}</p>
+                          {item.status === 'approved' ? (
+                            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">✅ APPROVED</span>
+                          ) : (
+                            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700">⏳ PENDING</span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-500 mt-1">{item.user_email}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">Requested {new Date(item.requested_at).toLocaleString()}</p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {item.status !== 'approved' && (
+                          <button
+                            onClick={() => approveUnlockRequest(item.id)}
+                            className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700 transition"
+                          >
+                            ✅ Approve
+                          </button>
+                        )}
+                        <button
+                          onClick={() => deleteUnlockRequest(item.id)}
+                          className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-200 transition"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ))
               )}

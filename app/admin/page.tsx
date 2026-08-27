@@ -108,10 +108,12 @@ export default function Admin() {
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
             <Link href="/"><h1 className="text-2xl font-bold text-blue-600">CRNA Prep Hub</h1></Link>
-            <div className="flex gap-4">
-              <Link href="/dashboard" className="text-gray-700 hover:text-blue-600">Dashboard</Link>
-              <Link href="/schools" className="text-gray-700 hover:text-blue-600">Schools</Link>
-              <Link href="/admin" className="text-red-600 font-semibold">Admin</Link>
+            <div className="flex gap-4 flex-wrap">
+              <Link href="/admin" className="text-gray-700 hover:text-blue-600">Manage Schools</Link>
+              <Link href="/admin/schools" className="text-gray-700 hover:text-blue-600">Edit Schools</Link>
+              <Link href="/admin/school-unlocks" className="text-gray-700 hover:text-blue-600">Unlock Requests</Link>
+              <Link href="/admin/reports" className="text-gray-700 hover:text-blue-600">Error Reports</Link>
+              <Link href="/dashboard" className="text-gray-700 hover:text-blue-600">User Dashboard</Link>
             </div>
           </div>
         </div>
