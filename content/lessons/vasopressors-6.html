@@ -1,0 +1,769 @@
+<title>Think Like a CRNA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground: #F5F6F8;
+    --surface: #FFFFFF;
+    --surface-2: #EDEFF3;
+    --ink: #14181F;
+    --ink-2: #454C59;
+    --ink-3: #6D7585;
+    --rule: #DCE0E7;
+    --rule-2: #C6CCD6;
+
+    /* Color encodes physiology, not decoration:
+       constrict = arterial crimson, dilate = teal, signal/calcium = amber. */
+    --constrict: #B62D46;
+    --constrict-soft: #FBEAED;
+    --dilate: #17706E;
+    --dilate-soft: #E3F1F0;
+    --signal: #A96322;
+    --signal-soft: #FBEFE1;
+
+    --shadow: 0 1px 2px rgba(20,24,31,.05), 0 8px 24px rgba(20,24,31,.05);
+
+    --display: "Fraunces", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --measure: 66ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0E1116;
+      --surface: #161B22;
+      --surface-2: #1D242D;
+      --ink: #E9ECF1;
+      --ink-2: #B2BAC7;
+      --ink-3: #838D9C;
+      --rule: #2A323C;
+      --rule-2: #3B4552;
+      --constrict: #F2758C;
+      --constrict-soft: #33161C;
+      --dilate: #57C4BF;
+      --dilate-soft: #102A29;
+      --signal: #E0A05E;
+      --signal-soft: #2C1F11;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0E1116;
+    --surface: #161B22;
+    --surface-2: #1D242D;
+    --ink: #E9ECF1;
+    --ink-2: #B2BAC7;
+    --ink-3: #838D9C;
+    --rule: #2A323C;
+    --rule-2: #3B4552;
+    --constrict: #F2758C;
+    --constrict-soft: #33161C;
+    --dilate: #57C4BF;
+    --dilate-soft: #102A29;
+    --signal: #E0A05E;
+    --signal-soft: #2C1F11;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px 96px; }
+  .spine { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 48px;
+    padding: 40px 0 28px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .crumb {
+    font-family: var(--mono);
+    font-size: 11.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  }
+  .crumb .sep { color: var(--rule-2); }
+  .crumb .here { color: var(--constrict); }
+  h1 {
+    font-family: var(--display);
+    font-optical-sizing: auto;
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.06;
+    letter-spacing: -.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 19px; color: var(--ink-2); margin: 0; max-width: 58ch;
+  }
+  .pips { display: flex; gap: 5px; align-items: center; }
+  .pip { width: 30px; height: 4px; border-radius: 2px; background: var(--rule-2); }
+  .pip.on { background: var(--constrict); }
+  .pip-label { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-left: 8px; letter-spacing: .06em; }
+
+  /* ---------- structure ---------- */
+  section { margin: 0 0 56px; }
+  .sec-head { display: flex; gap: 14px; align-items: baseline; margin-bottom: 18px; }
+  .sec-num {
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    color: var(--constrict); letter-spacing: .1em; padding-top: 6px;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 600;
+    font-size: clamp(24px, 3.4vw, 31px); line-height: 1.18; letter-spacing: -.015em;
+    margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--body); font-weight: 700; font-size: 17.5px;
+    letter-spacing: .005em; margin: 32px 0 8px;
+  }
+  p { margin: 0 0 16px; }
+  .spine p, .spine ul, .spine ol { max-width: var(--measure); }
+  strong { font-weight: 700; }
+  em.term { font-style: normal; font-weight: 700; color: var(--constrict); }
+  ul, ol { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 7px; }
+
+  code, .m { font-family: var(--mono); font-size: .88em; }
+  .m { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+
+  /* ---------- panels ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 26px;
+    margin: 26px 0;
+    box-shadow: var(--shadow);
+  }
+  .panel-label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px;
+  }
+
+  .callout {
+    border-left: 3px solid var(--signal);
+    background: var(--signal-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .callout .callout-t {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--signal); font-weight: 600; margin-bottom: 6px;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .myth {
+    border-left: 3px solid var(--constrict);
+    background: var(--constrict-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .myth .callout-t { color: var(--constrict); }
+  .myth p:last-child { margin-bottom: 0; }
+
+  /* ---------- figures ---------- */
+  figure { margin: 28px 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; }
+  figcaption {
+    font-size: 14.5px; color: var(--ink-2); margin-top: 12px;
+    max-width: 62ch; line-height: 1.55;
+  }
+  .scroller { overflow-x: auto; }
+
+  /* ---------- predict ---------- */
+  details.predict {
+    border: 1px solid var(--rule); border-radius: 10px;
+    background: var(--surface); margin: 24px 0; overflow: hidden;
+  }
+  details.predict > summary {
+    cursor: pointer; padding: 16px 20px; list-style: none;
+    font-weight: 600; display: flex; gap: 12px; align-items: flex-start;
+  }
+  details.predict > summary::-webkit-details-marker { display: none; }
+  details.predict > summary::before {
+    content: "PREDICT"; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .12em; color: var(--dilate); border: 1px solid var(--dilate);
+    padding: 3px 7px; border-radius: 4px; flex-shrink: 0; margin-top: 2px;
+  }
+  details.predict[open] > summary::before { content: "REVEALED"; color: var(--ink-3); border-color: var(--rule-2); }
+  details.predict > summary:hover { background: var(--surface-2); }
+  details.predict > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: -2px; }
+  .predict-body { padding: 0 20px 18px 20px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  .predict-body p:last-child { margin-bottom: 0; }
+
+  details.deeper {
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    margin: 26px 0; padding: 0;
+  }
+  details.deeper > summary {
+    cursor: pointer; padding: 14px 0; list-style: none;
+    font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--dilate); display: flex; gap: 10px; align-items: center;
+  }
+  details.deeper > summary::-webkit-details-marker { display: none; }
+  details.deeper > summary::after { content: "+"; margin-left: auto; font-size: 16px; }
+  details.deeper[open] > summary::after { content: "\2212"; }
+  details.deeper > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .deeper-body { padding-bottom: 18px; }
+  .deeper-body p:last-child { margin-bottom: 0; }
+
+  /* ---------- interactive: MAP explorer ---------- */
+  .sim { display: grid; grid-template-columns: 1fr 200px; gap: 26px; align-items: start; }
+  @media (max-width: 720px) { .sim { grid-template-columns: 1fr; } }
+  .ctl { margin-bottom: 20px; }
+  .ctl-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2); margin-bottom: 7px;
+  }
+  .ctl-top b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--constrict); height: 22px; }
+  input[type=range]:focus-visible { outline: 2px solid var(--constrict); outline-offset: 4px; }
+  .readout {
+    background: var(--surface-2); border-radius: 8px; padding: 18px; text-align: center;
+  }
+  .readout .big {
+    font-family: var(--mono); font-weight: 600; font-size: 42px; line-height: 1;
+    font-variant-numeric: tabular-nums; color: var(--constrict);
+  }
+  .readout .unit { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .1em; margin-top: 6px; }
+  .verdict { font-size: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rule); color: var(--ink-2); min-height: 3.2em; }
+
+  /* ---------- interactive: pathway switcher ---------- */
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tab {
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em;
+    padding: 8px 15px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--rule-2); background: transparent; color: var(--ink-2);
+  }
+  .tab:hover { border-color: var(--ink-3); color: var(--ink); }
+  .tab:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+  .pathway[hidden] { display: none; }
+  .pathway h4 { font-family: var(--body); font-size: 16px; font-weight: 700; margin: 0 0 8px; }
+  .pathway p { font-size: 15.5px; color: var(--ink-2); }
+
+  /* ---------- table ---------- */
+  .tbl-wrap { overflow-x: auto; margin: 24px 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 15px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+    border-bottom: 1px solid var(--rule-2);
+  }
+  td.k { font-family: var(--mono); font-size: 13px; color: var(--ink); white-space: nowrap; }
+
+  /* ---------- quiz ---------- */
+  .quiz-q { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); padding: 24px; margin-bottom: 18px; }
+  .qnum { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; color: var(--ink-3); margin-bottom: 10px; }
+  .qtext { font-weight: 600; margin-bottom: 16px; }
+  .opts { display: flex; flex-direction: column; gap: 8px; }
+  .opt {
+    display: flex; gap: 11px; align-items: flex-start; width: 100%; text-align: left;
+    padding: 12px 14px; border: 1px solid var(--rule-2); border-radius: 7px;
+    background: transparent; color: var(--ink); font: inherit; font-size: 15.5px;
+    cursor: pointer; line-height: 1.5;
+  }
+  .opt:hover:not([disabled]) { border-color: var(--ink-3); background: var(--surface-2); }
+  .opt:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .opt .ltr { font-family: var(--mono); font-size: 12px; color: var(--ink-3); flex-shrink: 0; padding-top: 2px; }
+  .opt[data-state="correct"] { border-color: var(--dilate); background: var(--dilate-soft); }
+  .opt[data-state="correct"] .ltr { color: var(--dilate); }
+  .opt[data-state="wrong"] { border-color: var(--constrict); background: var(--constrict-soft); }
+  .opt[data-state="wrong"] .ltr { color: var(--constrict); }
+  .opt[disabled] { cursor: default; }
+  .explain { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 15px; }
+  .explain[hidden] { display: none; }
+  .explain .tested {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 10px;
+  }
+  .explain ul { margin: 10px 0 0; }
+  .explain li { font-size: 14.5px; color: var(--ink-2); }
+  .score {
+    font-family: var(--mono); font-size: 13px; color: var(--ink-2);
+    padding: 14px 0 0; border-top: 1px solid var(--rule); margin-top: 8px;
+  }
+
+  .next {
+    border: 1px solid var(--rule-2); border-radius: 10px; padding: 24px;
+    background: var(--surface-2); margin-top: 40px;
+  }
+  .next .panel-label { color: var(--constrict); }
+  .next p:last-child { margin-bottom: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+
+<style>
+  .vitals { background:var(--surface-2); border-radius:10px; padding:18px 20px; margin:20px 0;
+            border:1px solid var(--rule); }
+  .vitals .vh { font-family:var(--mono); font-size:10.5px; letter-spacing:.13em;
+                text-transform:uppercase; color:var(--ink-3); margin-bottom:12px; }
+  .vgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(88px,1fr)); gap:14px 18px; }
+  .vgrid div { font-family:var(--mono); }
+  .vgrid .l { font-size:10px; letter-spacing:.08em; color:var(--ink-3); }
+  .vgrid .n { font-size:17px; font-weight:600; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .vgrid .n.bad { color:var(--constrict); }
+  .vgrid .n.good { color:var(--dilate); }
+  .meds { font-family:var(--mono); font-size:12px; color:var(--ink-2); margin-top:14px;
+          padding-top:12px; border-top:1px solid var(--rule); line-height:1.7; }
+  .scn { border:1px solid var(--rule); border-radius:12px; background:var(--surface);
+         padding:24px; margin-bottom:22px; }
+  .scn > .st { display:flex; gap:12px; align-items:baseline; margin-bottom:6px; }
+  .scn .sno { font-family:var(--mono); font-size:11.5px; color:var(--constrict); letter-spacing:.1em; }
+  .scn h3 { font-family:var(--display); font-size:22px; font-weight:600; margin:0; letter-spacing:-.01em; }
+  .scn > p { font-size:15.5px; color:var(--ink-2); }
+  .tier { border-radius:9px; padding:15px 18px; margin-bottom:10px; border:1px solid var(--rule); }
+  .tier .tl { font-family:var(--mono); font-size:10.5px; letter-spacing:.12em;
+              text-transform:uppercase; font-weight:600; margin-bottom:7px; }
+  .tier p { font-size:15px; margin:0; line-height:1.6; }
+  .tier.weak { background:var(--constrict-soft); border-color:var(--constrict); }
+  .tier.weak .tl { color:var(--constrict); }
+  .tier.good { background:var(--surface-2); }
+  .tier.good .tl { color:var(--ink-3); }
+  .tier.elite { background:var(--dilate-soft); border-color:var(--dilate); }
+  .tier.elite .tl { color:var(--dilate); }
+  .followup { font-family:var(--mono); font-size:13px; color:var(--ink); background:var(--signal-soft);
+              border-left:3px solid var(--signal); padding:12px 16px; border-radius:0 8px 8px 0; margin-top:12px; }
+  .followup span { display:block; font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+                   color:var(--signal); font-weight:600; margin-bottom:5px; }
+  .iq { border-top:1px solid var(--rule); padding:26px 0; }
+  .iq:last-of-type { border-bottom:1px solid var(--rule); }
+  .iq .q { font-family:var(--display); font-size:21px; font-weight:600; line-height:1.3;
+           margin:0 0 6px; letter-spacing:-.01em; }
+  .iq .testing { font-size:14.5px; color:var(--ink-2); margin:0 0 18px; }
+</style>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="crumb">
+      <span>Vasopressors</span><span class="sep">/</span>
+      <span class="here">Lesson 6 of 6</span><span class="sep">/</span>
+      <span>Integration &amp; Interview</span>
+    </div>
+    <h1>Think Like a CRNA</h1>
+    <p class="standfirst">Five patients with real numbers, then the five questions you are most likely to be asked about them &#8212; each with a weak answer, a good one, and the one that changes how the room hears you.</p>
+    <div class="pips" aria-label="Lesson 6 of 6">
+      <span class="pip on"></span><span class="pip on"></span><span class="pip on"></span>
+      <span class="pip on"></span><span class="pip on"></span><span class="pip on"></span>
+      <span class="pip-label">FINAL</span>
+    </div>
+  </header>
+
+  <div class="spine">
+    <p>Everything so far has been mechanism. This lesson is about retrieval under pressure &#8212; which is a different skill, and the one that actually gets tested.</p>
+    <p>Work each scenario before opening the reveal. Commit to an answer out loud if you can; the gap between "I know this" and "I can say this" is exactly what an interview exposes.</p>
+  </div>
+
+  <!-- SCENARIOS -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>Five patients</h2></div>
+
+    <!-- S1 -->
+    <div class="scn">
+      <div class="st"><span class="sno">CASE 1</span><h3>Warm, fast, and dangerously low</h3></div>
+      <p>68-year-old, urosepsis, third hour of resuscitation. Three litres of crystalloid in. Extremities are warm. No vasopressor started yet.</p>
+      <div class="vitals">
+        <div class="vh">Hemodynamics</div>
+        <div class="vgrid">
+          <div><div class="l">BP</div><div class="n bad">78/42</div></div>
+          <div><div class="l">MAP</div><div class="n bad">54</div></div>
+          <div><div class="l">HR</div><div class="n">118</div></div>
+          <div><div class="l">CVP</div><div class="n">6</div></div>
+          <div><div class="l">CI</div><div class="n good">4.6</div></div>
+          <div><div class="l">SVR</div><div class="n bad">480</div></div>
+          <div><div class="l">LACTATE</div><div class="n bad">4.2</div></div>
+          <div><div class="l">ScvO&#8322;</div><div class="n">74%</div></div>
+        </div>
+      </div>
+      <details class="predict">
+        <summary>What is the physiology here, and which mechanism should the drug you choose address?</summary>
+        <div class="predict-body">
+          <p><strong>Flow is not the problem. Resistance is.</strong></p>
+          <p>Read the numbers against <span class="m">MAP &#8776; CO &#215; SVR</span>. The cardiac index is 4.6 &#8212; above normal. ScvO&#8322; is 74%, so oxygen delivery is adequate and extraction is not elevated. The extremities are warm. Every one of those says the heart is moving plenty of blood.</p>
+          <p>SVR at 480 is roughly half of normal. The MAP is low because the resistance term has collapsed, not because the flow term has.</p>
+          <p><strong>So the drug should raise SVR without sacrificing the flow that is currently keeping this patient alive.</strong> That argues for a dominant &#945;&#8321; agent with enough &#946;&#8321; activity to protect cardiac output &#8212; the norepinephrine profile from Lesson 2. Note the reasoning arrived there from the defect, not from a guideline.</p>
+          <p>A pure &#945;&#8321; agonist would also raise SVR, but it offers nothing to defend flow if the septic myocardium is more depressed than these numbers suggest. A strongly &#946;&#8322;-active drug would work partly against the very defect you are correcting.</p>
+          <p>On the lactate of 4.2 with a normal ScvO&#8322;: be careful. It is real and it matters, but with adequate delivery it reflects more than simple oxygen debt &#8212; impaired clearance and inflammatory metabolism both contribute in sepsis.</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- S2 -->
+    <div class="scn">
+      <div class="st"><span class="sno">CASE 2</span><h3>Ninety seconds after induction</h3></div>
+      <p>54-year-old, healthy, elective case. Propofol given for induction. The pressure falls before the surgeon has touched anything.</p>
+      <div class="vitals">
+        <div class="vh">Before &#8594; after induction</div>
+        <div class="vgrid">
+          <div><div class="l">BP</div><div class="n">128/74 &#8594; <span class="bad">76/40</span></div></div>
+          <div><div class="l">MAP</div><div class="n">92 &#8594; <span class="bad">52</span></div></div>
+          <div><div class="l">HR</div><div class="n">82 &#8594; 88</div></div>
+        </div>
+      </div>
+      <details class="predict">
+        <summary>Trace the mechanism from drug to hypotension, then reason about what to give.</summary>
+        <div class="predict-body">
+          <p><strong>Propofol drops the pressure through three routes at once, and blunts the reflex that would normally rescue it.</strong></p>
+          <p>It reduces central sympathetic outflow, so the tonic &#945;&#8321; stimulation that was maintaining vascular tone falls away. It relaxes vascular smooth muscle directly. And it venodilates &#8212; which, from Lesson 1, moves stressed volume back into the unstressed reservoir, dropping venous return and therefore preload.</p>
+          <p>So <span class="m">SVR &#8595;</span> and <span class="m">preload &#8595;</span> together. There is also some direct myocardial depression, though in a healthy heart it is the vascular effects that dominate.</p>
+          <p>Now the detail most candidates miss: the heart rate went from 82 to 88. That is barely a response to a 40-point MAP drop. Propofol blunts the baroreflex, so the compensation you would expect does not arrive &#8212; which is <em>why</em> the pressure falls as far as it does.</p>
+          <p><strong>Reasoning to treatment:</strong> the defect is vasodilation and reduced venous return in a patient with a good ventricle. A selective &#945;&#8321; agonist addresses exactly that, and a healthy heart absorbs the added afterload with little loss of stroke volume &#8212; the case from Lesson 3 where phenylephrine is well matched to the lesion. Restoring preload matters just as much: volume, or simply raising the legs.</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- S3 -->
+    <div class="scn">
+      <div class="st"><span class="sno">CASE 3</span><h3>Day two, and nothing is working</h3></div>
+      <p>Septic shock, thirty-two hours in. Norepinephrine has been escalated repeatedly and epinephrine added. Each increase buys less than the last.</p>
+      <div class="vitals">
+        <div class="vh">Current state</div>
+        <div class="vgrid">
+          <div><div class="l">MAP</div><div class="n bad">55</div></div>
+          <div><div class="l">HR</div><div class="n">126</div></div>
+          <div><div class="l">CI</div><div class="n good">4.2</div></div>
+          <div><div class="l">SVR</div><div class="n bad">420</div></div>
+          <div><div class="l">pH</div><div class="n bad">7.21</div></div>
+          <div><div class="l">LACTATE</div><div class="n bad">5.6</div></div>
+        </div>
+        <div class="meds">Norepinephrine 0.5 mcg/kg/min &#8212; about 35 mcg/min at this weight; both conventions are in use and neither is more correct<br>Epinephrine added six hours ago</div>
+      </div>
+      <details class="predict">
+        <summary>Why has escalation stopped working, and what does that imply about the next drug?</summary>
+        <div class="predict-body">
+          <p><strong>The receptor has stopped answering, so more ligand is the wrong lever.</strong></p>
+          <p>Three things from Lesson 4 are happening together. Thirty-two hours of sustained catecholamine exposure has uncoupled &#945;&#8321; receptors from their G-proteins and reduced surface density. The pH of 7.21 independently blunts adrenergic responsiveness. And inflammatory nitric oxide with open ATP-sensitive potassium channels is hyperpolarising vascular smooth muscle, so it resists contraction regardless of which receptor you stimulate.</p>
+          <p>Escalating norepinephrine pushes harder on a degraded mechanism while its costs &#8212; a heart rate of 126, arrhythmia risk, myocardial oxygen demand &#8212; keep accruing at full price.</p>
+          <p><strong>The implication is structural, not pharmacological trivia:</strong> reach for a receptor that is not adrenergic. V&#8321;&#8342; is a separate pool, unaffected by adrenergic saturation, feeding the same Gq cascade. Vasopressin also interferes with the K-ATP and nitric oxide mechanisms producing the vasoplegia in the first place. Angiotensin II via AT&#8321; is a third independent pathway with the same logic.</p>
+          <p>If asked to justify it in one line: <em>"Adding a pathway starts on the steep part of a fresh occupancy curve; escalating starts on the flat part of an exhausted one."</em></p>
+        </div>
+      </details>
+    </div>
+
+    <!-- S4 -->
+    <div class="scn">
+      <div class="st"><span class="sno">CASE 4</span><h3>The number improved. The patient didn't.</h3></div>
+      <p>72-year-old, known ejection fraction 25%, hypotensive post-operatively. Phenylephrine started.</p>
+      <div class="vitals">
+        <div class="vh">Before &#8594; after phenylephrine</div>
+        <div class="vgrid">
+          <div><div class="l">MAP</div><div class="n">58 &#8594; <span class="good">74</span></div></div>
+          <div><div class="l">HR</div><div class="n">92 &#8594; 72</div></div>
+          <div><div class="l">CI</div><div class="n">2.1 &#8594; <span class="bad">1.6</span></div></div>
+          <div><div class="l">SVR</div><div class="n">900 &#8594; 1650</div></div>
+          <div><div class="l">ScvO&#8322;</div><div class="n">61% &#8594; <span class="bad">52%</span></div></div>
+        </div>
+      </div>
+      <details class="predict">
+        <summary>The MAP improved by 16 points. Explain, mechanistically, why this patient is worse.</summary>
+        <div class="predict-body">
+          <p><strong>Both terms of <span class="m">CO = HR &#215; SV</span> fell, for two different reasons.</strong></p>
+          <p><strong>Rate.</strong> &#945;&#8321; stimulation raised SVR and therefore MAP. Rising MAP loaded the baroreceptors, which increased vagal outflow to the SA node &#8212; M&#8322;, Gi, lower cAMP plus GIRK-mediated hyperpolarisation &#8212; and the rate fell from 92 to 72.</p>
+          <p><strong>Stroke volume.</strong> SVR nearly doubled, which is a near-doubling of afterload. Phenylephrine has no &#946;&#8321; activity, so there is no inotropic support to offset it, and a ventricle at EF 25% has essentially no contractile reserve. It ejects less against the higher load.</p>
+          <p>Multiply two falling terms and cardiac index drops from 2.1 to 1.6.</p>
+          <p><strong>The ScvO&#8322; is the tell.</strong> It fell from 61% to 52%. With demand roughly unchanged, a falling central venous saturation means tissues are extracting a larger fraction of a smaller delivery. The monitor shows a better pressure; the patient is receiving less oxygen.</p>
+          <p>This is the case the whole module has been building toward. <em>Pressure is what you can measure. Flow is what delivers oxygen. They are not the same thing, and a drug can improve one while degrading the other.</em></p>
+        </div>
+      </details>
+    </div>
+
+    <!-- S5 -->
+    <div class="scn">
+      <div class="st"><span class="sno">CASE 5</span><h3>Rising lactate, improving patient</h3></div>
+      <p>Epinephrine started four hours ago for septic shock with myocardial depression. The lactate has roughly doubled. A colleague wants to stop the infusion.</p>
+      <div class="vitals">
+        <div class="vh">Four hours of epinephrine</div>
+        <div class="vgrid">
+          <div><div class="l">MAP</div><div class="n">58 &#8594; <span class="good">72</span></div></div>
+          <div><div class="l">CI</div><div class="n">1.9 &#8594; <span class="good">2.8</span></div></div>
+          <div><div class="l">ScvO&#8322;</div><div class="n">52% &#8594; <span class="good">66%</span></div></div>
+          <div><div class="l">LACTATE</div><div class="n bad">2.4 &#8594; 4.8</div></div>
+          <div><div class="l">K&#8314;</div><div class="n bad">3.1</div></div>
+          <div><div class="l">CAP REFILL</div><div class="n good">4s &#8594; 2s</div></div>
+        </div>
+      </div>
+      <details class="predict">
+        <summary>Does the rising lactate mean the shock is worsening? Justify mechanistically.</summary>
+        <div class="predict-body">
+          <p><strong>Almost certainly not &#8212; and the potassium is the corroborating clue.</strong></p>
+          <p>Every marker of perfusion moved the right way. Cardiac index up, ScvO&#8322; up from 52% to 66%, capillary refill halved, MAP restored. If oxygen debt were deepening, ScvO&#8322; would be falling as tissues extracted harder, not rising.</p>
+          <p>The mechanism is &#946;&#8322;. Epinephrine raises cAMP in skeletal muscle, accelerating glycogenolysis and glycolysis and stimulating the Na&#8314;/K&#8314;-ATPase. Pyruvate production outruns mitochondrial capacity, and the excess is converted to lactate <em>with oxygen present</em>. This is aerobic lactate generation, not anaerobic.</p>
+          <p><strong>The potassium of 3.1 is the fingerprint.</strong> The same &#946;&#8322;/cAMP signal driving that Na&#8314;/K&#8314;-ATPase pushes potassium intracellularly. A lactate rise accompanied by a new hypokalaemia points at the &#946;&#8322; metabolic mechanism rather than at tissue hypoxia. Two findings, one cause.</p>
+          <p><strong>Where to stop.</strong> Do not claim epinephrine-associated lactate is <em>never</em> hypoperfusion. In a shocked patient both can be true at once, and the right move is to interpret the number alongside the other perfusion markers rather than in isolation. An examiner is often probing whether you will overclaim in the opposite direction once you have learned the mechanism.</p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <!-- INTERVIEW -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>Could you explain this in an interview?</h2></div>
+    <div class="spine">
+      <p>The same five ideas, now as spoken answers. The gap between the good answer and the elite one is rarely more knowledge &#8212; it is naming the mechanism, then naming its condition.</p>
+    </div>
+
+    <!-- IQ1 -->
+    <div class="iq">
+      <p class="q">"Walk me through norepinephrine from the receptor to the increase in blood pressure."</p>
+      <p class="testing"><strong>Testing:</strong> whether you can produce a complete causal chain without gaps, and whether you stop at the vessel or keep going to the patient.</p>
+      <div class="tier weak"><div class="tl">Weak</div><p>"It's an alpha agonist, so it causes vasoconstriction and raises blood pressure."</p></div>
+      <div class="tier good"><div class="tl">Good &#183; ICU nurse</div><p>"Norepinephrine stimulates &#945;&#8321; receptors on vascular smooth muscle. That causes vasoconstriction, which raises systemic vascular resistance, and since MAP is cardiac output times SVR, the blood pressure rises. It also has some &#946;&#8321; activity that supports contractility."</p></div>
+      <div class="tier elite"><div class="tl">Elite</div><p>"&#945;&#8321; is a Gq-coupled receptor, so binding activates phospholipase C, which cleaves PIP&#8322; into IP&#8323; and DAG. IP&#8323; releases calcium from the sarcoplasmic reticulum; calcium binds calmodulin, and the complex activates myosin light chain kinase, which phosphorylates the regulatory light chain and allows cross-bridge cycling. DAG activates PKC, which inhibits myosin light chain phosphatase &#8212; so you also get calcium sensitisation. That's arterial constriction, so SVR and MAP rise. But &#945;&#8321; is on veins too, so you also recruit unstressed venous volume into stressed volume, raising venous return and preload. Combined with the &#946;&#8321; inotropy, that's why cardiac output is usually preserved rather than sacrificed &#8212; unlike a pure &#945;&#8321; agonist."</p></div>
+      <div class="followup"><span>Likely follow-up</span>"You said cardiac output is usually preserved. When would it not be?"</div>
+    </div>
+
+    <!-- IQ2 -->
+    <div class="iq">
+      <p class="q">"If norepinephrine stimulates &#946;&#8321; receptors, why doesn't every patient become tachycardic?"</p>
+      <p class="testing"><strong>Testing:</strong> whether you can separate a direct receptor effect from a compensatory reflex. Most candidates cannot, and this question exists to find that out.</p>
+      <div class="tier weak"><div class="tl">Weak</div><p>"The beta-1 effect is pretty weak compared to the alpha effect, so it doesn't really show up."</p></div>
+      <div class="tier good"><div class="tl">Good &#183; ICU nurse</div><p>"Because the blood pressure rise triggers the baroreceptor reflex. The baroreceptors sense the higher pressure and increase vagal tone, which slows the heart. That opposes the direct &#946;&#8321; effect, so the net heart rate often doesn't change much."</p></div>
+      <div class="tier elite"><div class="tl">Elite</div><p>"What you see on the monitor is a sum, not a receptor effect. The direct &#946;&#8321; action is real &#8212; Gs, cAMP, PKA phosphorylating HCN channels and steepening phase-4 depolarisation, which is chronotropic. But the rise in MAP stretches the carotid and aortic baroreceptors, afferent traffic increases through cranial nerves IX and X, and vagal outflow to the SA node increases. Acetylcholine at M&#8322; is Gi-coupled: the &#945;-subunit lowers cAMP and the &#946;&#947;-subunit opens GIRK potassium channels, hyperpolarising the node. Those two forces oppose each other, and which wins depends on the patient. Someone with a brisk baroreflex can net-slow; a denervated transplant, an autonomic neuropathy, or a deeply sedated patient can't mount that opposition, so the &#946;&#8321; effect stands alone and they become tachycardic."</p></div>
+      <div class="followup"><span>Likely follow-up</span>"So in a heart transplant recipient, what would you expect phenylephrine to do to the heart rate?"</div>
+    </div>
+
+    <!-- IQ3 -->
+    <div class="iq">
+      <p class="q">"Why might phenylephrine raise the MAP but decrease cardiac output?"</p>
+      <p class="testing"><strong>Testing:</strong> whether you understand that pressure and flow are different quantities, and whether you can derive both terms of CO from one receptor effect.</p>
+      <div class="tier weak"><div class="tl">Weak</div><p>"Because it's a vasoconstrictor, so it clamps everything down and the heart can't pump as well."</p></div>
+      <div class="tier good"><div class="tl">Good &#183; ICU nurse</div><p>"It raises SVR, which raises afterload, so stroke volume falls. And the higher pressure causes reflex bradycardia. Cardiac output is heart rate times stroke volume, so if both drop, output drops even though the MAP is higher."</p></div>
+      <div class="tier elite"><div class="tl">Elite</div><p>"One receptor effect produces two independent hits on cardiac output. &#945;&#8321; through Gq raises SVR, so MAP rises &#8212; that loads the baroreceptors and increases vagal tone, dropping heart rate. Simultaneously the SVR rise is an afterload rise, and phenylephrine has no &#946;&#8321; activity, so there's no inotropic support to offset it. Both terms of CO equals HR times SV fall together. Whether that matters clinically depends on afterload reserve: a healthy ventricle absorbs it and output holds, while a failing ventricle is highly afterload-sensitive and output falls meaningfully. I'd want a flow measure or a ScvO&#8322; rather than trusting the MAP &#8212; pressure is what's easy to measure, but flow is what delivers oxygen."</p></div>
+      <div class="followup"><span>Likely follow-up</span>"Is there a patient in whom phenylephrine would be your first choice?"</div>
+    </div>
+
+    <!-- IQ4 -->
+    <div class="iq">
+      <p class="q">"Explain the difference between norepinephrine and vasopressin at the molecular level."</p>
+      <p class="testing"><strong>Testing:</strong> whether you can hold two mechanisms side by side, and whether you keep vasopressin's two receptors distinct.</p>
+      <div class="tier weak"><div class="tl">Weak</div><p>"Norepinephrine works on adrenergic receptors and vasopressin works on vasopressin receptors. Vasopressin is used when norepinephrine isn't enough."</p></div>
+      <div class="tier good"><div class="tl">Good &#183; ICU nurse</div><p>"Norepinephrine acts on &#945;&#8321; and &#946;&#8321; adrenergic receptors. Vasopressin acts on V&#8321;&#8342; receptors on vascular smooth muscle, which is a completely different receptor family, so it still works when the adrenergic receptors have been downregulated by prolonged catecholamine exposure. It also acts on V&#8322; receptors in the kidney for water reabsorption."</p></div>
+      <div class="tier elite"><div class="tl">Elite</div><p>"The striking thing is how much they share. &#945;&#8321; and V&#8321;&#8342; are unrelated receptors binding unrelated ligands, but both couple to Gq &#8212; phospholipase C, IP&#8323; and DAG, calcium release, MLCK, contraction. The final cascade is identical. What differs is upstream and to the side. Norepinephrine additionally hits &#946;&#8321; through Gs, giving inotropy that vasopressin has no equivalent of &#8212; there's no cardiac V-receptor doing that job, which is why vasopressin carries the same afterload problem as phenylephrine. And vasopressin's V&#8322; receptor is Gs-coupled in the renal collecting duct, driving aquaporin-2 into the apical membrane. That's a completely separate job from the vascular one and shouldn't be mixed into a hemodynamic answer. The reason vasopressin works in refractory vasoplegia isn't that it's stronger &#8212; it's that V&#8321;&#8342; is a separate receptor pool unaffected by adrenergic desensitisation, and it also interferes with the K-ATP channels and nitric oxide signalling driving the vasoplegia itself."</p></div>
+      <div class="followup"><span>Likely follow-up</span>"If they both end at the same cascade, why not just use vasopressin first?"</div>
+    </div>
+
+    <!-- IQ5 -->
+    <div class="iq">
+      <p class="q">"Why can epinephrine increase lactate even when perfusion is improving?"</p>
+      <p class="testing"><strong>Testing:</strong> whether you can resist a reflex interpretation &#8212; and, immediately afterwards, whether you'll overclaim in the other direction.</p>
+      <div class="tier weak"><div class="tl">Weak</div><p>"Lactate isn't always accurate. You have to look at the whole picture rather than one number."</p></div>
+      <div class="tier good"><div class="tl">Good &#183; ICU nurse</div><p>"Epinephrine stimulates &#946;&#8322; receptors, which increases glycolysis and produces lactate through a metabolic mechanism rather than tissue hypoxia. So the lactate can rise even though oxygen delivery is fine. You'd look at the other perfusion markers &#8212; ScvO&#8322;, capillary refill, urine output &#8212; to work out which is happening."</p></div>
+      <div class="tier elite"><div class="tl">Elite</div><p>"&#946;&#8322; is Gs-coupled, so it raises cAMP and activates PKA in skeletal muscle. That accelerates glycogenolysis and glycolysis and stimulates the Na&#8314;/K&#8314;-ATPase, which itself consumes ATP and drives further glycolytic flux. Pyruvate production outruns mitochondrial oxidative capacity, and the excess is converted to lactate with oxygen fully available &#8212; aerobic, not anaerobic. A useful corroborating sign is a falling potassium, because the same &#946;&#8322;/cAMP signal shifts potassium intracellularly; lactate up with a new hypokalaemia points to the metabolic mechanism. That said, I wouldn't claim the lactate is never hypoperfusion &#8212; in a shocked patient both can be operating at once. I'd interpret the trend against ScvO&#8322; and clinical perfusion rather than treat the number as decisive either way."</p></div>
+      <div class="followup"><span>Likely follow-up</span>"How would you tell the difference at the bedside if the ScvO&#8322; weren't available?"</div>
+    </div>
+
+    <div class="callout">
+      <div class="callout-t">What actually separates the tiers</div>
+      <p>Read the elite answers again and notice how few extra facts they contain. What they add is <strong>structure</strong> &#8212; the cascade named in order, the direct effect distinguished from the reflex, and a condition attached to every generalisation. Each one also volunteers its own limit before the examiner has to find it. That last habit is worth more than another twenty pages of pharmacology.</p>
+    </div>
+  </section>
+
+  <!-- QUIZ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>Final check</h2></div>
+    <div class="spine"><p>Six questions across the whole module.</p></div>
+    <div id="quiz"></div>
+    <div class="score" id="score">0 of 6 answered</div>
+  </section>
+
+  <div class="next">
+    <div class="panel-label">Module complete</div>
+    <p style="font-family:var(--display);font-size:22px;font-weight:600;margin:0 0 8px">You can now derive, not recall</p>
+    <p style="color:var(--ink-2);margin:0">Given any vasopressor &#8212; including ones this module never covered &#8212; you can name its receptors, run each cascade, combine them, apply the reflex, and attach the condition. That is the skill the interview is actually testing, and it does not expire the way a memorised chart does.</p>
+  </div>
+
+</div>
+<script>
+(function () {
+  "use strict";
+
+  var QUESTIONS = [
+    {
+      q: "A septic patient has MAP 54, cardiac index 4.6, SVR 480 and ScvO₂ 74%. Which reading of these numbers is correct?",
+      opts: [
+        "Oxygen delivery is inadequate, so the priority is raising cardiac output further",
+        "Flow is adequate and the deficit is in resistance, so the drug should raise SVR",
+        "The high ScvO₂ indicates a measurement error given how low the pressure is",
+        "Preload is the limiting factor, so further fluid should precede any vasopressor"
+      ],
+      a: 1,
+      tested: "Reading a hemodynamic panel against MAP ≈ CO × SVR",
+      why: "A cardiac index of 4.6 with ScvO₂ of 74% shows delivery is adequate and extraction is not elevated. SVR at 480 is roughly half normal. The resistance term has collapsed, not the flow term.",
+      wrong: [
+        "A high-normal ScvO₂ with an above-normal cardiac index argues against inadequate delivery.",
+        null,
+        "A high ScvO₂ is characteristic of distributive shock, where extraction is impaired. It corroborates the picture rather than contradicting it.",
+        "Fluid has already been given and CVP is 6 with a high cardiac index. Preload is not what is limiting MAP here."
+      ]
+    },
+    {
+      q: "After propofol induction the MAP falls from 92 to 52 while the heart rate rises only from 82 to 88. What does that muted rate response indicate?",
+      opts: [
+        "The patient has an underlying conduction abnormality limiting the response",
+        "Cardiac output has been preserved, so no compensatory response was required",
+        "Vagal tone rose in response to the induction agent, offsetting a reflex tachycardia",
+        "Propofol has blunted the baroreflex, so the expected compensation does not occur"
+      ],
+      a: 3,
+      tested: "Noticing an absent reflex as diagnostic information in itself",
+      why: "A 40-point MAP fall should provoke a brisk reflex tachycardia. Propofol depresses the baroreflex, so that compensation is blunted — which is part of why the pressure falls as far as it does.",
+      wrong: [
+        "Nothing in the case suggests conduction disease, and blunted baroreflex is the expected pharmacology of the drug given.",
+        "A MAP of 52 after induction indicates output and tone have not been preserved.",
+        "Propofol reduces sympathetic outflow rather than raising vagal tone, and that would not explain the degree of hypotension.",
+        null
+      ]
+    },
+    {
+      q: "A patient given phenylephrine shows MAP rising 58 to 74 while ScvO₂ falls from 61% to 52%. What does the ScvO₂ change tell you?",
+      opts: [
+        "Tissues are extracting a greater fraction of a reduced oxygen delivery",
+        "Oxygen consumption has risen sharply because of increased cardiac work",
+        "The improved perfusion pressure has recruited previously underperfused beds",
+        "Arterial oxygen content has fallen due to ventilation–perfusion mismatch"
+      ],
+      a: 0,
+      tested: "Using a venous saturation to detect falling flow behind a rising pressure",
+      why: "With consumption roughly unchanged, a falling ScvO₂ means extraction has increased because delivery has fallen. It is the objective signal that the improved MAP was bought at the cost of flow.",
+      wrong: [
+        null,
+        "Consumption has not risen meaningfully; the heart rate actually fell. The change reflects reduced delivery.",
+        "Recruiting underperfused beds would tend to raise venous saturation, not lower it.",
+        "Nothing indicates a change in arterial oxygenation, and the cardiac index fell in parallel."
+      ]
+    },
+    {
+      q: "On epinephrine, a patient's lactate doubles while ScvO₂ rises, capillary refill improves and potassium falls to 3.1. Which single mechanism best accounts for the lactate and the potassium together?",
+      opts: [
+        "Worsening tissue hypoxia with a coincidental intracellular potassium shift",
+        "β2-driven glycolysis and Na⁺/K⁺-ATPase stimulation through raised cAMP",
+        "Hepatic hypoperfusion reducing clearance of both lactate and potassium",
+        "α1-mediated regional vasoconstriction producing localised anaerobic metabolism"
+      ],
+      a: 1,
+      tested: "Finding one mechanism that explains two findings rather than two explanations",
+      why: "β2 stimulation raises cAMP, accelerating glycogenolysis and glycolysis so pyruvate outruns mitochondrial capacity and becomes lactate aerobically. The same signal stimulates the Na⁺/K⁺-ATPase, driving potassium intracellularly. One mechanism, both findings.",
+      wrong: [
+        "Rising ScvO₂ and improving capillary refill argue against worsening hypoxia, and treating the potassium as coincidental misses the shared cause.",
+        null,
+        "Impaired hepatic clearance does not lower serum potassium, so it cannot account for both findings.",
+        "Regional α1 constriction would not produce hypokalaemia, and the global perfusion markers are improving."
+      ]
+    },
+    {
+      q: "After thirty-two hours of escalating catecholamines with pH 7.21, each further increase produces less effect. Which combination best explains the loss of response?",
+      opts: [
+        "Drug tolerance at the hepatic enzyme level combined with increased protein binding",
+        "Progressive hypovolaemia from capillary leak leaving inadequate preload to act on",
+        "Receptor downregulation, acidosis blunting responsiveness, and K-ATP hyperpolarisation",
+        "Depletion of endogenous catecholamine stores reducing the drug's indirect component"
+      ],
+      a: 2,
+      tested: "Explaining catecholamine refractoriness with mechanisms rather than dose",
+      why: "Sustained exposure uncouples receptors and reduces surface density; acidosis independently blunts adrenergic responsiveness; and inflammatory NO with open K-ATP channels hyperpolarises smooth muscle so it resists contraction whichever receptor is stimulated.",
+      wrong: [
+        "Refractoriness here is a receptor and effector problem, not altered hepatic metabolism or binding.",
+        "Hypovolaemia would lower cardiac index; this patient's index is 4.2, so flow is not the limitation.",
+        null,
+        "Norepinephrine and epinephrine act directly. Store depletion is relevant to dopamine's indirect mechanism, not to these."
+      ]
+    },
+    {
+      q: "Which habit most reliably distinguishes an elite interview answer from a merely correct one?",
+      opts: [
+        "Attaching the conditions under which the generalisation would not hold",
+        "Providing a greater volume of pharmacological detail in the initial answer",
+        "Citing the specific trials that established the drug's role in practice",
+        "Answering more concisely so the examiner can ask additional questions"
+      ],
+      a: 0,
+      tested: "Recognising that structure and calibration outrank additional facts",
+      why: "The elite answers throughout this lesson contain few extra facts. What they add is order — cascade named in sequence, direct effect separated from reflex — and a condition attached to every generalisation, volunteering the limit before the examiner has to find it.",
+      wrong: [
+        null,
+        "Volume alone does not help, and a long answer that never reaches the mechanism reads as buzzword dumping.",
+        "Trial citation has its place but does not demonstrate the physiological reasoning being tested here.",
+        "Brevity is a virtue, but an answer stripped of mechanism gives the examiner nothing to follow up on."
+      ]
+    }
+  ];
+
+  var LETTERS = ["A", "B", "C", "D"];
+  var answered = 0, correct = 0;
+  var quizEl = document.getElementById("quiz");
+  var scoreEl = document.getElementById("score");
+
+  QUESTIONS.forEach(function (item, qi) {
+    var card = document.createElement("div");
+    card.className = "quiz-q";
+    var num = document.createElement("div");
+    num.className = "qnum";
+    num.textContent = "QUESTION " + (qi + 1) + " OF " + QUESTIONS.length;
+    card.appendChild(num);
+    var qt = document.createElement("div");
+    qt.className = "qtext";
+    qt.innerHTML = item.q;
+    card.appendChild(qt);
+
+    var opts = document.createElement("div");
+    opts.className = "opts";
+    var explain = document.createElement("div");
+    explain.className = "explain";
+    explain.hidden = true;
+
+    item.opts.forEach(function (text, oi) {
+      var b = document.createElement("button");
+      b.className = "opt";
+      b.type = "button";
+      b.innerHTML = '<span class="ltr">' + LETTERS[oi] + '</span><span>' + text + '</span>';
+      b.addEventListener("click", function () {
+        if (card.dataset.done) return;
+        card.dataset.done = "1";
+        answered++;
+        if (oi === item.a) correct++;
+        Array.prototype.forEach.call(opts.children, function (el, i) {
+          el.disabled = true;
+          if (i === item.a) el.dataset.state = "correct";
+          else if (i === oi) el.dataset.state = "wrong";
+        });
+        var html = '<div class="tested">Testing &#183; ' + item.tested + '</div>';
+        html += '<p><strong>' + LETTERS[item.a] + ' is correct.</strong> ' + item.why + '</p><ul>';
+        item.wrong.forEach(function (w, i) {
+          if (w) html += '<li><strong>' + LETTERS[i] + '</strong> &#8212; ' + w + '</li>';
+        });
+        html += '</ul>';
+        explain.innerHTML = html;
+        explain.hidden = false;
+        scoreEl.innerHTML = answered + " of " + QUESTIONS.length +
+          " answered &#183; <strong>" + correct + " correct</strong>";
+      });
+      opts.appendChild(b);
+    });
+
+    card.appendChild(opts);
+    card.appendChild(explain);
+    quizEl.appendChild(card);
+  });
+})();
+</script>

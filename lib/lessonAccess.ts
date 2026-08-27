@@ -42,6 +42,12 @@ export const DRAFT_LESSONS = [
     title: 'Predicting Instead of Remembering',
     blurb: 'All six drugs — the four-step method, a derivation drill, then the table.',
   },
+  {
+    slug: 'vasopressors-6',
+    number: 6,
+    title: 'Think Like a CRNA',
+    blurb: 'Five ICU scenarios with real numbers, then the interview questions and how to answer them.',
+  },
 ] as const
 
 export function isDraftSlug(slug: string): boolean {
