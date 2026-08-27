@@ -405,7 +405,7 @@ export default function InterviewPrep() {
                 <h3 className="text-xl sm:text-2xl font-bold text-white mb-2">Unlock All {schools.length} Schools</h3>
                 <p className="text-sm sm:text-base text-white/80 mb-4 sm:mb-6">Get insider interview info for every CRNA program</p>
                 <Link href="/pricing" className="inline-block bg-white text-purple-600 px-6 sm:px-8 py-3 sm:py-4 rounded-xl font-semibold hover:bg-gray-100 transition text-sm sm:text-base">
-                  Upgrade to Ultimate - $49.99
+                  Upgrade to Ultimate - $39.99
                 </Link>
               </div>
             </div>

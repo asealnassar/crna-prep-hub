@@ -76,7 +76,7 @@ export async function POST(request: Request) {
         code: promoCode,
         user_email: userEmail,
         plan_purchased: plan,
-        amount_paid: plan === 'premium' ? 2999 - discountAmount : 4999 - discountAmount,
+        amount_paid: plan === 'premium' ? 2999 - discountAmount : 3999 - discountAmount,
         promoter_name: promoData.promoter_name
       })
     }

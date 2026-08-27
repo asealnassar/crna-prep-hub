@@ -103,7 +103,7 @@ export default function ResumeBuilder() {
               </div>
 
               <Link href="/pricing" className="inline-block px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-500 text-white text-lg font-semibold rounded-xl hover:opacity-90 transition">
-                Upgrade to Ultimate - $49.99
+                Upgrade to Ultimate - $39.99
               </Link>
               
 <div className="mt-6">

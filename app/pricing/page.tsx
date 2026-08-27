@@ -160,7 +160,7 @@ export default function Pricing() {
 
 const discountAmount = promoData?.discount_amount ? promoData.discount_amount / 100 : 0
 const premiumPrice = promoValid ? (14.99 - discountAmount).toFixed(2) : '14.99'
-const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
+const ultimatePrice = promoValid ? (39.99 - discountAmount).toFixed(2) : '39.99'
 
   const renderBannerText = (text: string, code: string) => {
     return text.split('{CODE}').map((part, idx, arr) => (
@@ -370,11 +370,11 @@ const ultimatePrice = promoValid ? (49.99 - discountAmount).toFixed(2) : '49.99'
               <div className="mb-3 sm:mb-4">
                 {promoValid ? (
                   <>
-                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'49.99'}</span>
+                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'39.99'}</span>
                     <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">${ultimatePrice}</span>
                   </>
                 ) : (
-                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$49.99</span>
+                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$39.99</span>
                 )}
               </div>
               <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Unlimited Access on Everything </p>
