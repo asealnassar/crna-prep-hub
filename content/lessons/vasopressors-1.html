@@ -1,0 +1,1055 @@
+<title>The Pressure Machine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground: #F5F6F8;
+    --surface: #FFFFFF;
+    --surface-2: #EDEFF3;
+    --ink: #14181F;
+    --ink-2: #454C59;
+    --ink-3: #6D7585;
+    --rule: #DCE0E7;
+    --rule-2: #C6CCD6;
+
+    /* Color encodes physiology, not decoration:
+       constrict = arterial crimson, dilate = teal, signal/calcium = amber. */
+    --constrict: #B62D46;
+    --constrict-soft: #FBEAED;
+    --dilate: #17706E;
+    --dilate-soft: #E3F1F0;
+    --signal: #A96322;
+    --signal-soft: #FBEFE1;
+
+    --shadow: 0 1px 2px rgba(20,24,31,.05), 0 8px 24px rgba(20,24,31,.05);
+
+    --display: "Fraunces", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --measure: 66ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0E1116;
+      --surface: #161B22;
+      --surface-2: #1D242D;
+      --ink: #E9ECF1;
+      --ink-2: #B2BAC7;
+      --ink-3: #838D9C;
+      --rule: #2A323C;
+      --rule-2: #3B4552;
+      --constrict: #F2758C;
+      --constrict-soft: #33161C;
+      --dilate: #57C4BF;
+      --dilate-soft: #102A29;
+      --signal: #E0A05E;
+      --signal-soft: #2C1F11;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0E1116;
+    --surface: #161B22;
+    --surface-2: #1D242D;
+    --ink: #E9ECF1;
+    --ink-2: #B2BAC7;
+    --ink-3: #838D9C;
+    --rule: #2A323C;
+    --rule-2: #3B4552;
+    --constrict: #F2758C;
+    --constrict-soft: #33161C;
+    --dilate: #57C4BF;
+    --dilate-soft: #102A29;
+    --signal: #E0A05E;
+    --signal-soft: #2C1F11;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px 96px; }
+  .spine { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 48px;
+    padding: 40px 0 28px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .crumb {
+    font-family: var(--mono);
+    font-size: 11.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  }
+  .crumb .sep { color: var(--rule-2); }
+  .crumb .here { color: var(--constrict); }
+  h1 {
+    font-family: var(--display);
+    font-optical-sizing: auto;
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.06;
+    letter-spacing: -.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 19px; color: var(--ink-2); margin: 0; max-width: 58ch;
+  }
+  .pips { display: flex; gap: 5px; align-items: center; }
+  .pip { width: 30px; height: 4px; border-radius: 2px; background: var(--rule-2); }
+  .pip.on { background: var(--constrict); }
+  .pip-label { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-left: 8px; letter-spacing: .06em; }
+
+  /* ---------- structure ---------- */
+  section { margin: 0 0 56px; }
+  .sec-head { display: flex; gap: 14px; align-items: baseline; margin-bottom: 18px; }
+  .sec-num {
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    color: var(--constrict); letter-spacing: .1em; padding-top: 6px;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 600;
+    font-size: clamp(24px, 3.4vw, 31px); line-height: 1.18; letter-spacing: -.015em;
+    margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--body); font-weight: 700; font-size: 17.5px;
+    letter-spacing: .005em; margin: 32px 0 8px;
+  }
+  p { margin: 0 0 16px; }
+  .spine p, .spine ul, .spine ol { max-width: var(--measure); }
+  strong { font-weight: 700; }
+  em.term { font-style: normal; font-weight: 700; color: var(--constrict); }
+  ul, ol { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 7px; }
+
+  code, .m { font-family: var(--mono); font-size: .88em; }
+  .m { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+
+  /* ---------- panels ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 26px;
+    margin: 26px 0;
+    box-shadow: var(--shadow);
+  }
+  .panel-label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px;
+  }
+
+  .callout {
+    border-left: 3px solid var(--signal);
+    background: var(--signal-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .callout .callout-t {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--signal); font-weight: 600; margin-bottom: 6px;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .myth {
+    border-left: 3px solid var(--constrict);
+    background: var(--constrict-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;
+  }
+  .myth .callout-t { color: var(--constrict); }
+  .myth p:last-child { margin-bottom: 0; }
+
+  /* ---------- figures ---------- */
+  figure { margin: 28px 0; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; }
+  figcaption {
+    font-size: 14.5px; color: var(--ink-2); margin-top: 12px;
+    max-width: 62ch; line-height: 1.55;
+  }
+  .scroller { overflow-x: auto; }
+
+  /* ---------- predict ---------- */
+  details.predict {
+    border: 1px solid var(--rule); border-radius: 10px;
+    background: var(--surface); margin: 24px 0; overflow: hidden;
+  }
+  details.predict > summary {
+    cursor: pointer; padding: 16px 20px; list-style: none;
+    font-weight: 600; display: flex; gap: 12px; align-items: flex-start;
+  }
+  details.predict > summary::-webkit-details-marker { display: none; }
+  details.predict > summary::before {
+    content: "PREDICT"; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .12em; color: var(--dilate); border: 1px solid var(--dilate);
+    padding: 3px 7px; border-radius: 4px; flex-shrink: 0; margin-top: 2px;
+  }
+  details.predict[open] > summary::before { content: "REVEALED"; color: var(--ink-3); border-color: var(--rule-2); }
+  details.predict > summary:hover { background: var(--surface-2); }
+  details.predict > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: -2px; }
+  .predict-body { padding: 0 20px 18px 20px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  .predict-body p:last-child { margin-bottom: 0; }
+
+  details.deeper {
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    margin: 26px 0; padding: 0;
+  }
+  details.deeper > summary {
+    cursor: pointer; padding: 14px 0; list-style: none;
+    font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--dilate); display: flex; gap: 10px; align-items: center;
+  }
+  details.deeper > summary::-webkit-details-marker { display: none; }
+  details.deeper > summary::after { content: "+"; margin-left: auto; font-size: 16px; }
+  details.deeper[open] > summary::after { content: "\2212"; }
+  details.deeper > summary:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .deeper-body { padding-bottom: 18px; }
+  .deeper-body p:last-child { margin-bottom: 0; }
+
+  /* ---------- interactive: MAP explorer ---------- */
+  .sim { display: grid; grid-template-columns: 1fr 200px; gap: 26px; align-items: start; }
+  @media (max-width: 720px) { .sim { grid-template-columns: 1fr; } }
+  .ctl { margin-bottom: 20px; }
+  .ctl-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-2); margin-bottom: 7px;
+  }
+  .ctl-top b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--constrict); height: 22px; }
+  input[type=range]:focus-visible { outline: 2px solid var(--constrict); outline-offset: 4px; }
+  .readout {
+    background: var(--surface-2); border-radius: 8px; padding: 18px; text-align: center;
+  }
+  .readout .big {
+    font-family: var(--mono); font-weight: 600; font-size: 42px; line-height: 1;
+    font-variant-numeric: tabular-nums; color: var(--constrict);
+  }
+  .readout .unit { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .1em; margin-top: 6px; }
+  .verdict { font-size: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rule); color: var(--ink-2); min-height: 3.2em; }
+
+  /* ---------- interactive: pathway switcher ---------- */
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tab {
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: .04em;
+    padding: 8px 15px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--rule-2); background: transparent; color: var(--ink-2);
+  }
+  .tab:hover { border-color: var(--ink-3); color: var(--ink); }
+  .tab:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+  .pathway[hidden] { display: none; }
+  .pathway h4 { font-family: var(--body); font-size: 16px; font-weight: 700; margin: 0 0 8px; }
+  .pathway p { font-size: 15.5px; color: var(--ink-2); }
+
+  /* ---------- table ---------- */
+  .tbl-wrap { overflow-x: auto; margin: 24px 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 15px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+    border-bottom: 1px solid var(--rule-2);
+  }
+  td.k { font-family: var(--mono); font-size: 13px; color: var(--ink); white-space: nowrap; }
+
+  /* ---------- quiz ---------- */
+  .quiz-q { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); padding: 24px; margin-bottom: 18px; }
+  .qnum { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; color: var(--ink-3); margin-bottom: 10px; }
+  .qtext { font-weight: 600; margin-bottom: 16px; }
+  .opts { display: flex; flex-direction: column; gap: 8px; }
+  .opt {
+    display: flex; gap: 11px; align-items: flex-start; width: 100%; text-align: left;
+    padding: 12px 14px; border: 1px solid var(--rule-2); border-radius: 7px;
+    background: transparent; color: var(--ink); font: inherit; font-size: 15.5px;
+    cursor: pointer; line-height: 1.5;
+  }
+  .opt:hover:not([disabled]) { border-color: var(--ink-3); background: var(--surface-2); }
+  .opt:focus-visible { outline: 2px solid var(--constrict); outline-offset: 2px; }
+  .opt .ltr { font-family: var(--mono); font-size: 12px; color: var(--ink-3); flex-shrink: 0; padding-top: 2px; }
+  .opt[data-state="correct"] { border-color: var(--dilate); background: var(--dilate-soft); }
+  .opt[data-state="correct"] .ltr { color: var(--dilate); }
+  .opt[data-state="wrong"] { border-color: var(--constrict); background: var(--constrict-soft); }
+  .opt[data-state="wrong"] .ltr { color: var(--constrict); }
+  .opt[disabled] { cursor: default; }
+  .explain { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 15px; }
+  .explain[hidden] { display: none; }
+  .explain .tested {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); margin-bottom: 10px;
+  }
+  .explain ul { margin: 10px 0 0; }
+  .explain li { font-size: 14.5px; color: var(--ink-2); }
+  .score {
+    font-family: var(--mono); font-size: 13px; color: var(--ink-2);
+    padding: 14px 0 0; border-top: 1px solid var(--rule); margin-top: 8px;
+  }
+
+  .next {
+    border: 1px solid var(--rule-2); border-radius: 10px; padding: 24px;
+    background: var(--surface-2); margin-top: 40px;
+  }
+  .next .panel-label { color: var(--constrict); }
+  .next p:last-child { margin-bottom: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="crumb">
+      <span>Vasopressors</span>
+      <span class="sep">/</span>
+      <span class="here">Lesson 1 of 6</span>
+      <span class="sep">/</span>
+      <span>Foundations</span>
+    </div>
+    <h1>The Pressure Machine</h1>
+    <p class="standfirst">Before a single drug makes sense, you need the machine it acts on: how pressure is actually generated, how smooth muscle actually contracts, and the three signalling pathways every vasopressor in this module runs through.</p>
+    <div class="pips" aria-label="Lesson 1 of 6">
+      <span class="pip on"></span><span class="pip"></span><span class="pip"></span>
+      <span class="pip"></span><span class="pip"></span><span class="pip"></span>
+      <span class="pip-label">FOUNDATIONS</span>
+    </div>
+  </header>
+
+  <div class="spine">
+    <p>You already know norepinephrine raises blood pressure. That is not what this module is about.</p>
+    <p>In a CRNA interview, the follow-up is the question. <em class="term">Why</em> does it raise blood pressure? Which receptor? What happens inside the cell? And why does the same drug do something different to the heart than it does to a blood vessel?</p>
+    <p>Every one of those answers runs through the material in this lesson. Get this right and the next five lessons are mostly bookkeeping — you will be able to derive a drug's effects instead of memorising them.</p>
+  </div>
+
+  <!-- ==================== 01 ==================== -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2>Pressure is a product, not a thing</h2>
+    </div>
+    <div class="spine">
+      <p>Arterial pressure is not something the body stores. It is the result of two variables multiplied together:</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">The equation everything hangs on</div>
+      <div class="scroller">
+        <figure>
+          <svg viewBox="0 0 640 150" role="img" aria-label="MAP approximately equals cardiac output times systemic vascular resistance, plus central venous pressure. Cardiac output itself is heart rate times stroke volume.">
+            <g font-family="IBM Plex Mono, monospace" fill="currentColor">
+              <text x="20" y="46" font-size="21" font-weight="600">MAP</text>
+              <text x="76" y="46" font-size="19" opacity=".55">&#8776;</text>
+              <text x="106" y="46" font-size="21" font-weight="600" fill="var(--constrict)">CO</text>
+              <text x="146" y="46" font-size="19" opacity=".55">&#215;</text>
+              <text x="172" y="46" font-size="21" font-weight="600" fill="var(--constrict)">SVR</text>
+              <text x="228" y="46" font-size="19" opacity=".55">+</text>
+              <text x="252" y="46" font-size="21" font-weight="600" opacity=".62">CVP</text>
+
+              <text x="20" y="70" font-size="10.5" opacity=".55" letter-spacing="1">MEAN ARTERIAL</text>
+              <text x="106" y="70" font-size="10.5" opacity=".55" letter-spacing="1">FLOW</text>
+              <text x="172" y="70" font-size="10.5" opacity=".55" letter-spacing="1">RESISTANCE</text>
+              <text x="252" y="70" font-size="10.5" opacity=".55" letter-spacing="1">SMALL</text>
+
+              <line x1="118" y1="84" x2="118" y2="106" stroke="currentColor" stroke-width="1.4" opacity=".4"/>
+              <text x="106" y="128" font-size="19" font-weight="600" fill="var(--constrict)">CO</text>
+              <text x="146" y="128" font-size="17" opacity=".55">=</text>
+              <text x="170" y="128" font-size="19" font-weight="600">HR</text>
+              <text x="210" y="128" font-size="17" opacity=".55">&#215;</text>
+              <text x="234" y="128" font-size="19" font-weight="600">SV</text>
+              <text x="286" y="128" font-size="13" opacity=".6">stroke volume is where the drugs get interesting</text>
+            </g>
+          </svg>
+          <figcaption>Two levers, and only two. A vasopressor can raise MAP by increasing resistance, by increasing flow, or by doing both at once — and the mix is what separates one drug from another.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="spine">
+      <p>CVP sits in the equation but rarely drives it — it is a small number relative to MAP. The action is in <span class="m">CO &#215; SVR</span>.</p>
+      <p>Here is the part that matters clinically: <strong>those two variables are not independent.</strong> Push one hard enough and the other moves — usually in the wrong direction. Try it.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">Interactive &#183; Drive the two levers</div>
+      <div class="sim">
+        <div>
+          <div class="ctl">
+            <div class="ctl-top"><span>Cardiac output</span><b><span id="coVal">5.0</span> L/min</b></div>
+            <input type="range" id="co" min="2" max="9" step="0.1" value="5" aria-label="Cardiac output in litres per minute">
+          </div>
+          <div class="ctl">
+            <div class="ctl-top"><span>Systemic vascular resistance</span><b><span id="svrVal">1100</span> dyn&#183;s&#183;cm&#8315;&#8309;</b></div>
+            <input type="range" id="svr" min="300" max="2400" step="25" value="1100" aria-label="Systemic vascular resistance">
+          </div>
+          <div class="ctl">
+            <div class="ctl-top"><span>Ventricle</span><b id="ventLabel">Healthy</b></div>
+            <input type="range" id="vent" min="0" max="1" step="1" value="0" aria-label="Ventricular function: healthy or failing">
+          </div>
+          <p style="font-size:14px;color:var(--ink-3);margin:0">Set SVR to 2000+ and switch the ventricle to failing. Watch what happens to the MAP you thought you were buying.</p>
+        </div>
+        <div class="readout">
+          <div class="big" id="mapOut">73</div>
+          <div class="unit">MAP &#183; mmHg</div>
+          <div class="verdict" id="verdict">A normal starting point.</div>
+        </div>
+      </div>
+    </div>
+
+    <details class="predict">
+      <summary>You crank SVR from 800 to 2000 in a patient with a failing ventricle. Does MAP rise by the amount the equation predicts?</summary>
+      <div class="predict-body">
+        <p><strong>No — and this is the single most useful idea in the lesson.</strong></p>
+        <p>The equation is honest, but it hides a feedback loop. SVR is not just resistance the blood flows against; it is <em class="term">afterload</em>, the pressure the ventricle has to generate before the aortic valve will open at all.</p>
+        <p>A healthy ventricle absorbs that. It has contractile reserve, so stroke volume barely moves and MAP climbs roughly as predicted. A failing ventricle does not. Raise its afterload and stroke volume falls, which drops CO, which claws back part of the MAP you just bought — sometimes most of it.</p>
+        <p>You end up with a higher number on the monitor and less blood actually moving. Lesson 3 turns this into a bedside scenario with phenylephrine.</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ==================== 02 ==================== -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2>The half of the circulation nobody watches</h2>
+    </div>
+    <div class="spine">
+      <p>Ask most nurses what a vasopressor constricts and they will say arteries. Arteries are only half the story, and arguably the less interesting half.</p>
+      <p>Roughly <strong>70% of your blood volume sits in the venous system</strong> at any moment. Veins are thin-walled and compliant — they are a reservoir, not a pipe. That reservoir splits into two pools:</p>
+      <ul>
+        <li><strong>Unstressed volume</strong> — blood that fills the veins without stretching them. It generates no pressure. It is parked.</li>
+        <li><strong>Stressed volume</strong> — blood that actually distends the vessel wall. This is what generates <em class="term">mean systemic filling pressure</em>, the upstream pressure that drives blood back to the right atrium.</li>
+      </ul>
+      <p>Venoconstriction squeezes the reservoir and converts parked blood into pressurised blood. Nothing is added, but the effective circulating volume rises, venous return rises, preload rises, and by Frank–Starling, stroke volume rises.</p>
+    </div>
+
+    <div class="callout">
+      <div class="callout-t">Why this matters for drug selection</div>
+      <p>A pure arterial constrictor raises afterload and gives the ventricle nothing back. A drug that also constricts veins raises afterload <em>and</em> hands the ventricle extra preload to work with — partially paying for its own afterload cost. That difference is a large part of why norepinephrine behaves better than phenylephrine in a shocked patient, and it has nothing to do with which is the "stronger" pressor.</p>
+    </div>
+  </section>
+
+  <!-- ==================== 03 ==================== -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2>How a blood vessel actually squeezes</h2>
+    </div>
+    <div class="spine">
+      <p>"&#945;&#8321; causes vasoconstriction" is where nursing school stops. It is the beginning of the answer an interviewer wants, not the end.</p>
+      <p>Vascular smooth muscle has no troponin. The switch that turns contraction on is a different one entirely, and every Gq-linked vasopressor in this module — norepinephrine, phenylephrine, vasopressin, angiotensin II — converges on it.</p>
+    </div>
+
+    <div class="scroller">
+      <figure>
+        <svg viewBox="0 0 660 300" role="img" aria-label="Calcium binds calmodulin, forming a complex that activates myosin light chain kinase, which phosphorylates the myosin regulatory light chain, allowing cross-bridge cycling and contraction. Myosin light chain phosphatase reverses this step, and protein kinase A inhibits the kinase to promote relaxation.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"/>
+            </marker>
+            <marker id="arC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--constrict)"/>
+            </marker>
+            <marker id="arD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--dilate)"/>
+            </marker>
+          </defs>
+          <g font-family="IBM Plex Mono, monospace" font-size="12.5" fill="currentColor">
+
+            <rect x="18" y="16" width="120" height="40" rx="6" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.3"/>
+            <text x="78" y="34" text-anchor="middle" fill="var(--signal)" font-weight="600">&#8593; Ca&#178;&#8314;</text>
+            <text x="78" y="48" text-anchor="middle" font-size="10" opacity=".7">cytosolic</text>
+
+            <line x1="138" y1="36" x2="186" y2="36" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+            <text x="162" y="27" text-anchor="middle" font-size="10" opacity=".65">binds</text>
+
+            <rect x="188" y="16" width="118" height="40" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".55"/>
+            <text x="247" y="41" text-anchor="middle">calmodulin</text>
+
+            <line x1="247" y1="56" x2="247" y2="88" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+
+            <rect x="170" y="90" width="154" height="40" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".55"/>
+            <text x="247" y="115" text-anchor="middle">Ca&#178;&#8314;&#8211;CaM complex</text>
+
+            <line x1="247" y1="130" x2="247" y2="162" stroke="var(--constrict)" stroke-width="1.8" marker-end="url(#arC)"/>
+            <text x="257" y="150" font-size="10" fill="var(--constrict)">activates</text>
+
+            <rect x="182" y="164" width="130" height="40" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.4"/>
+            <text x="247" y="189" text-anchor="middle" fill="var(--constrict)" font-weight="600">MLCK</text>
+
+            <line x1="247" y1="204" x2="247" y2="236" stroke="var(--constrict)" stroke-width="1.8" marker-end="url(#arC)"/>
+            <text x="257" y="224" font-size="10" fill="var(--constrict)">phosphorylates</text>
+
+            <rect x="150" y="238" width="194" height="42" rx="6" fill="none" stroke="var(--constrict)" stroke-width="1.4"/>
+            <text x="247" y="258" text-anchor="middle" font-weight="600">myosin light chain</text>
+            <text x="247" y="272" text-anchor="middle" font-size="10" opacity=".75">cross-bridge cycling &#8594; CONTRACTION</text>
+
+            <line x1="344" y1="259" x2="404" y2="259" stroke="var(--dilate)" stroke-width="1.6" marker-end="url(#arD)"/>
+            <text x="374" y="250" text-anchor="middle" font-size="10" fill="var(--dilate)">reversed by</text>
+            <rect x="406" y="238" width="112" height="42" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.4"/>
+            <text x="462" y="264" text-anchor="middle" fill="var(--dilate)" font-weight="600">MLCP</text>
+
+            <line x1="462" y1="238" x2="462" y2="196" stroke="var(--dilate)" stroke-width="1.4" opacity=".6"/>
+            <line x1="462" y1="196" x2="316" y2="196" stroke="var(--dilate)" stroke-width="1.4" opacity=".6"/>
+            <line x1="316" y1="196" x2="316" y2="184" stroke="var(--dilate)" stroke-width="1.6" marker-end="url(#arD)"/>
+
+            <rect x="406" y="90" width="176" height="52" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+            <text x="494" y="110" text-anchor="middle" fill="var(--dilate)" font-weight="600">PKA (&#8593; cAMP)</text>
+            <text x="494" y="127" text-anchor="middle" font-size="10" opacity=".8">inhibits MLCK &#8594; relaxation</text>
+
+            <line x1="406" y1="122" x2="330" y2="176" stroke="var(--dilate)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#arD)"/>
+          </g>
+        </svg>
+        <figcaption><strong>The switch.</strong> Calcium does not contract the vessel directly — it enables a kinase. Everything that constricts converges on activating MLCK; everything that dilates converges on shutting it down or reversing it. Note the teal path on the right: that is where cAMP enters the story, and it is the reason &#946;&#8322; agonism <em>dilates</em>.</figcaption>
+      </figure>
+    </div>
+
+    <details class="deeper">
+      <summary>Go deeper &#183; Calcium sensitisation</summary>
+      <div class="deeper-body">
+        <p>The diagram implies contraction is purely a function of how much calcium arrives. It is not, quite. Gq-linked receptors also produce <span class="m">DAG</span>, which activates protein kinase C — and PKC, along with the RhoA/Rho-kinase pathway, <em>inhibits MLCP</em>.</p>
+        <p>The consequence is elegant: the vessel can contract harder at the same calcium concentration, because the off-switch has been disabled. This is called calcium sensitisation, and it is why the IP&#8323; arm of Gq is only half of what these receptors do. If an interviewer asks what DAG contributes, this is the answer they are hoping for.</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ==================== 04 ==================== -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2>Three pathways, and only three</h2>
+    </div>
+    <div class="spine">
+      <p>Every receptor in this module — &#945;&#8321;, &#945;&#8322;, &#946;&#8321;, &#946;&#8322;, D&#8321;, V&#8321;&#8342;, V&#8322;, AT&#8321; — is a G-protein-coupled receptor, and each one couples to one of three G-proteins. Learn the three pathways and you have learned the mechanism of every drug in this module.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">Interactive &#183; Pick a pathway</div>
+      <div class="tabs" role="tablist" aria-label="G-protein pathways">
+        <button class="tab" role="tab" id="tab-gq" aria-controls="p-gq" aria-selected="true">Gq &#183; constrict</button>
+        <button class="tab" role="tab" id="tab-gs" aria-controls="p-gs" aria-selected="false">Gs &#183; it depends</button>
+        <button class="tab" role="tab" id="tab-gi" aria-controls="p-gi" aria-selected="false">Gi &#183; damp down</button>
+      </div>
+
+      <div class="pathway" id="p-gq" role="tabpanel" aria-labelledby="tab-gq">
+        <div class="scroller">
+          <figure>
+            <svg viewBox="0 0 620 250" role="img" aria-label="Gq pathway: receptor activates Gq, which activates phospholipase C beta, which cleaves PIP2 into IP3 and DAG. IP3 releases calcium from the sarcoplasmic reticulum; DAG activates protein kinase C. Both converge on contraction.">
+              <g font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">
+                <rect x="230" y="10" width="160" height="34" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.3"/>
+                <text x="310" y="32" text-anchor="middle" fill="var(--constrict)" font-weight="600">&#945;&#8321; &#183; V&#8321;&#8342; &#183; AT&#8321;</text>
+                <line x1="310" y1="44" x2="310" y2="68" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+                <rect x="262" y="70" width="96" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+                <text x="310" y="90" text-anchor="middle" font-weight="600">Gq</text>
+                <line x1="310" y1="100" x2="310" y2="124" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+                <rect x="252" y="126" width="116" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+                <text x="310" y="146" text-anchor="middle">PLC&#946;</text>
+                <line x1="310" y1="156" x2="310" y2="176" stroke="currentColor" stroke-width="1.5"/>
+                <text x="310" y="172" text-anchor="middle" font-size="10" opacity=".6" dy="-2">cleaves PIP&#8322;</text>
+                <line x1="310" y1="176" x2="180" y2="176" stroke="currentColor" stroke-width="1.5"/>
+                <line x1="310" y1="176" x2="440" y2="176" stroke="currentColor" stroke-width="1.5"/>
+                <line x1="180" y1="176" x2="180" y2="196" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+                <line x1="440" y1="176" x2="440" y2="196" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+
+                <rect x="112" y="198" width="136" height="42" rx="6" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.3"/>
+                <text x="180" y="216" text-anchor="middle" fill="var(--signal)" font-weight="600">IP&#8323;</text>
+                <text x="180" y="231" text-anchor="middle" font-size="10" opacity=".8">&#8593; Ca&#178;&#8314; from SR</text>
+
+                <rect x="372" y="198" width="136" height="42" rx="6" fill="var(--signal-soft)" stroke="var(--signal)" stroke-width="1.3"/>
+                <text x="440" y="216" text-anchor="middle" fill="var(--signal)" font-weight="600">DAG</text>
+                <text x="440" y="231" text-anchor="middle" font-size="10" opacity=".8">PKC &#8594; sensitisation</text>
+              </g>
+            </svg>
+            <figcaption>One receptor, one enzyme, one lipid — split into two messengers that do complementary jobs. IP&#8323; supplies the calcium; DAG makes the cell more responsive to it.</figcaption>
+          </figure>
+        </div>
+        <h4>What it does</h4>
+        <p>Gq is the constriction pathway, full stop. Feed the calcium into the MLCK switch from the previous section and you have the complete mechanism for &#945;&#8321;, V&#8321;&#8342; and AT&#8321; — three receptors, three different drugs, one shared ending.</p>
+      </div>
+
+      <div class="pathway" id="p-gs" role="tabpanel" aria-labelledby="tab-gs" hidden>
+        <div class="scroller">
+          <figure>
+            <svg viewBox="0 0 620 250" role="img" aria-label="Gs pathway: receptor activates Gs, which activates adenylyl cyclase, raising cyclic AMP and activating protein kinase A. In cardiac muscle PKA increases contractility and rate; in vascular smooth muscle PKA causes relaxation.">
+              <g font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">
+                <rect x="228" y="10" width="164" height="34" rx="6" fill="var(--surface-2)" stroke="currentColor" stroke-width="1.3" opacity=".9"/>
+                <text x="310" y="32" text-anchor="middle" font-weight="600">&#946;&#8321; &#183; &#946;&#8322; &#183; D&#8321; &#183; V&#8322;</text>
+                <line x1="310" y1="44" x2="310" y2="68" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+                <rect x="262" y="70" width="96" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+                <text x="310" y="90" text-anchor="middle" font-weight="600">Gs</text>
+                <line x1="310" y1="100" x2="310" y2="124" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+                <rect x="234" y="126" width="152" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+                <text x="310" y="146" text-anchor="middle">adenylyl cyclase</text>
+                <line x1="310" y1="156" x2="310" y2="176" stroke="var(--signal)" stroke-width="1.6"/>
+                <line x1="310" y1="176" x2="176" y2="176" stroke="var(--signal)" stroke-width="1.6"/>
+                <line x1="310" y1="176" x2="444" y2="176" stroke="var(--signal)" stroke-width="1.6"/>
+                <text x="310" y="170" text-anchor="middle" font-size="10.5" fill="var(--signal)" font-weight="600">&#8593; cAMP &#8594; PKA</text>
+                <line x1="176" y1="176" x2="176" y2="196" stroke="var(--signal)" stroke-width="1.6" marker-end="url(#ar)"/>
+                <line x1="444" y1="176" x2="444" y2="196" stroke="var(--signal)" stroke-width="1.6" marker-end="url(#ar)"/>
+
+                <rect x="94" y="198" width="164" height="44" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.3"/>
+                <text x="176" y="216" text-anchor="middle" fill="var(--constrict)" font-weight="600">CARDIAC MYOCYTE</text>
+                <text x="176" y="232" text-anchor="middle" font-size="10" opacity=".8">&#8593; contractility, &#8593; rate</text>
+
+                <rect x="362" y="198" width="164" height="44" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+                <text x="444" y="216" text-anchor="middle" fill="var(--dilate)" font-weight="600">SMOOTH MUSCLE</text>
+                <text x="444" y="232" text-anchor="middle" font-size="10" opacity=".8">relaxation, vasodilation</text>
+              </g>
+            </svg>
+            <figcaption><strong>The same second messenger, opposite outcomes.</strong> This is not a quirk to memorise — it is the most quotable idea in the lesson, and it is unpacked below.</figcaption>
+          </figure>
+        </div>
+        <h4>What it does</h4>
+        <p>Gs raises cAMP and activates PKA. What PKA <em>does</em> then depends entirely on which proteins that cell has available to phosphorylate. Section 05 is devoted to this.</p>
+      </div>
+
+      <div class="pathway" id="p-gi" role="tabpanel" aria-labelledby="tab-gi" hidden>
+        <div class="scroller">
+          <figure>
+            <svg viewBox="0 0 620 250" role="img" aria-label="Gi pathway: receptor activates Gi, which inhibits adenylyl cyclase and lowers cyclic AMP. The beta-gamma subunit separately opens GIRK potassium channels in the sinoatrial node, hyperpolarising the cell and slowing heart rate.">
+              <g font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">
+                <rect x="238" y="10" width="144" height="34" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+                <text x="310" y="32" text-anchor="middle" fill="var(--dilate)" font-weight="600">&#945;&#8322; &#183; M&#8322;</text>
+                <line x1="310" y1="44" x2="310" y2="68" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+                <rect x="262" y="70" width="96" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+                <text x="310" y="90" text-anchor="middle" font-weight="600">Gi</text>
+                <line x1="310" y1="100" x2="200" y2="100" stroke="currentColor" stroke-width="1.4"/>
+                <line x1="310" y1="100" x2="424" y2="100" stroke="currentColor" stroke-width="1.4"/>
+                <line x1="200" y1="100" x2="200" y2="128" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+                <line x1="424" y1="100" x2="424" y2="128" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+                <text x="200" y="120" text-anchor="middle" font-size="10" opacity=".6">&#945;-subunit</text>
+                <text x="424" y="120" text-anchor="middle" font-size="10" opacity=".6">&#946;&#947;-subunit</text>
+
+                <rect x="112" y="130" width="176" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+                <text x="200" y="148" text-anchor="middle">inhibits adenylyl cyclase</text>
+                <text x="200" y="164" text-anchor="middle" font-size="10.5" fill="var(--dilate)" font-weight="600">&#8595; cAMP</text>
+
+                <rect x="336" y="130" width="176" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+                <text x="424" y="148" text-anchor="middle">opens GIRK K&#8314; channels</text>
+                <text x="424" y="164" text-anchor="middle" font-size="10.5" fill="var(--dilate)" font-weight="600">hyperpolarises</text>
+
+                <line x1="200" y1="174" x2="290" y2="204" stroke="var(--dilate)" stroke-width="1.5" marker-end="url(#arD)"/>
+                <line x1="424" y1="174" x2="334" y2="204" stroke="var(--dilate)" stroke-width="1.5" marker-end="url(#arD)"/>
+                <rect x="222" y="206" width="180" height="36" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+                <text x="312" y="229" text-anchor="middle" fill="var(--dilate)" font-weight="600">SA node slows</text>
+              </g>
+            </svg>
+            <figcaption>Gi has two arms. The &#945;-subunit lowers cAMP; the &#946;&#947;-subunit opens potassium channels directly. In the SA node they work together to flatten the pacemaker slope — this is the machinery behind reflex bradycardia.</figcaption>
+          </figure>
+        </div>
+        <h4>What it does</h4>
+        <p>Gi is the brake. Note where the M&#8322; receptor sits — this is vagal, and it is exactly what the baroreflex reaches for when a pressor drives the pressure up. Section 06.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 05 ==================== -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2>Why cAMP contracts the heart and relaxes the vessel</h2>
+    </div>
+    <div class="spine">
+      <p>This is the concept that separates a good answer from an elite one, because on its face it looks like a contradiction. &#946;&#8321; and &#946;&#8322; both couple to Gs. Both raise cAMP. Both activate PKA. Yet &#946;&#8321; stimulation makes the heart squeeze harder and &#946;&#8322; stimulation makes vessels go slack.</p>
+      <p>The resolution: <strong>PKA is not an effect. It is an enzyme looking for substrates.</strong> What happens next depends on which proteins are sitting in that particular cell.</p>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>PKA phosphorylates</th><th>In the cardiac myocyte</th><th>In vascular smooth muscle</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">L-type Ca&#178;&#8314; channel</td>
+            <td>More Ca&#178;&#8314; entry per beat, triggering larger SR release &#8594; stronger contraction</td>
+            <td>&#8212;</td>
+          </tr>
+          <tr>
+            <td class="k">phospholamban</td>
+            <td>Releases its brake on SERCA2a &#8594; faster Ca&#178;&#8314; reuptake, faster relaxation, fuller SR for the next beat</td>
+            <td>&#8212;</td>
+          </tr>
+          <tr>
+            <td class="k">HCN / funny current</td>
+            <td>Steeper phase-4 depolarisation in the SA node &#8594; faster rate</td>
+            <td>&#8212;</td>
+          </tr>
+          <tr>
+            <td class="k">MLCK</td>
+            <td>&#8212;</td>
+            <td>Inhibits it. The contraction switch is turned down &#8594; relaxation</td>
+          </tr>
+          <tr>
+            <td class="k">Ca&#178;&#8314; handling</td>
+            <td>Raises available Ca&#178;&#8314;</td>
+            <td>Lowers cytosolic Ca&#178;&#8314; and promotes reuptake &#8594; relaxation</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="spine">
+      <p>Same signal, different toolbox. The cardiac myocyte's PKA targets all amplify calcium; the smooth muscle cell's targets all suppress it or disable the kinase that uses it.</p>
+    </div>
+
+    <div class="callout">
+      <div class="callout-t">Say it this way in an interview</div>
+      <p>"cAMP isn't an instruction to contract or relax — it's an amplifier. PKA phosphorylates whatever substrates that cell type expresses. In the myocyte those substrates increase calcium availability, so you get inotropy and chronotropy. In vascular smooth muscle they inhibit myosin light chain kinase and lower cytosolic calcium, so you get relaxation. Same messenger, different downstream targets."</p>
+    </div>
+
+    <details class="predict">
+      <summary>A drug is a pure &#946;-agonist with roughly equal &#946;&#8321; and &#946;&#8322; activity. Predict what happens to MAP.</summary>
+      <div class="predict-body">
+        <p><strong>It may not move much — and it can fall.</strong></p>
+        <p>&#946;&#8321; raises CO through inotropy and chronotropy, which pushes MAP up. But &#946;&#8322; simultaneously dilates the vasculature, dropping SVR. Return to <span class="m">MAP &#8776; CO &#215; SVR</span>: you are raising one term while lowering the other, and the product can land anywhere.</p>
+        <p>This is the reason a &#946;-agonist is an inotrope rather than a vasopressor. Hold onto it — it is exactly why epinephrine's hemodynamic profile is more complicated than "raises everything," which is Lesson 3.</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ==================== 06 ==================== -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2>The reflex that fights your drug</h2>
+    </div>
+    <div class="spine">
+      <p>You give a pressor. Pressure rises. The body does not simply accept this — it has a fast negative-feedback loop whose entire job is to hold arterial pressure constant, and it will actively oppose you.</p>
+      <p>Stretch receptors in the carotid sinus and aortic arch fire faster as pressure rises. That traffic runs up the glossopharyngeal and vagus nerves to the brainstem, and the response is two-part: <strong>parasympathetic outflow increases</strong> and <strong>sympathetic outflow decreases</strong>.</p>
+    </div>
+
+    <div class="scroller">
+      <figure>
+        <svg viewBox="0 0 660 200" role="img" aria-label="Rising arterial pressure stretches baroreceptors, which increases afferent firing to the brainstem. The brainstem increases vagal output and decreases sympathetic output, acting on the M2 receptor via Gi to slow the sinoatrial node, which lowers heart rate and partially opposes the rise in pressure.">
+          <g font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">
+            <rect x="8" y="60" width="104" height="44" rx="6" fill="var(--constrict-soft)" stroke="var(--constrict)" stroke-width="1.3"/>
+            <text x="60" y="79" text-anchor="middle" fill="var(--constrict)" font-weight="600">&#8593; MAP</text>
+            <text x="60" y="94" text-anchor="middle" font-size="9.5" opacity=".75">your drug</text>
+
+            <line x1="112" y1="82" x2="152" y2="82" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+
+            <rect x="154" y="60" width="112" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+            <text x="210" y="79" text-anchor="middle">baroreceptors</text>
+            <text x="210" y="94" text-anchor="middle" font-size="9.5" opacity=".75">stretch &#8594; fire</text>
+
+            <line x1="266" y1="82" x2="306" y2="82" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+            <text x="286" y="74" text-anchor="middle" font-size="9" opacity=".6">CN IX / X</text>
+
+            <rect x="308" y="60" width="104" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/>
+            <text x="360" y="79" text-anchor="middle">brainstem</text>
+            <text x="360" y="94" text-anchor="middle" font-size="9.5" opacity=".75">NTS</text>
+
+            <line x1="412" y1="72" x2="452" y2="48" stroke="var(--dilate)" stroke-width="1.5" marker-end="url(#arD)"/>
+            <line x1="412" y1="92" x2="452" y2="116" stroke="var(--dilate)" stroke-width="1.5" marker-end="url(#arD)"/>
+
+            <rect x="454" y="24" width="196" height="42" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+            <text x="552" y="41" text-anchor="middle" fill="var(--dilate)" font-weight="600">&#8593; vagal &#8594; M&#8322; &#8594; Gi</text>
+            <text x="552" y="57" text-anchor="middle" font-size="9.5" opacity=".8">SA node slows &#8594; &#8595; HR</text>
+
+            <rect x="454" y="98" width="196" height="42" rx="6" fill="var(--dilate-soft)" stroke="var(--dilate)" stroke-width="1.3"/>
+            <text x="552" y="115" text-anchor="middle" fill="var(--dilate)" font-weight="600">&#8595; sympathetic</text>
+            <text x="552" y="131" text-anchor="middle" font-size="9.5" opacity=".8">&#8595; contractility, &#8595; tone</text>
+
+            <path d="M 552 140 L 552 172 L 60 172 L 60 104" fill="none" stroke="var(--dilate)" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arD)"/>
+            <text x="306" y="186" text-anchor="middle" font-size="10" fill="var(--dilate)">negative feedback &#8212; opposes the pressure you just created</text>
+          </g>
+        </svg>
+        <figcaption>The loop closes back on the thing that started it. Whenever a drug's measured heart-rate effect disagrees with its receptor profile, this reflex is usually why.</figcaption>
+      </figure>
+    </div>
+
+    <div class="myth">
+      <div class="callout-t">Separate the drug from the reflex</div>
+      <p>Norepinephrine has real &#946;&#8321; activity, so on receptors alone you would predict tachycardia. Most patients do not become tachycardic — some slow down. That is not the drug failing to hit &#946;&#8321;. It is the direct &#946;&#8321; effect and the baroreflex pulling in opposite directions, with the reflex often winning.</p>
+      <p>An interviewer asking "if norepinephrine hits &#946;&#8321;, why isn't everyone tachycardic?" is testing exactly one thing: whether you can distinguish a <strong>direct receptor effect</strong> from a <strong>compensatory reflex</strong>. Most candidates cannot.</p>
+    </div>
+  </section>
+
+  <!-- ==================== QUIZ ==================== -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">07</span>
+      <h2>Check yourself</h2>
+    </div>
+    <div class="spine">
+      <p>Six questions. None of them ask you to recall a fact — each one asks you to reason from a mechanism to a consequence. Answer before you read the explanation.</p>
+    </div>
+
+    <div id="quiz"></div>
+    <div class="score" id="score">0 of 6 answered</div>
+  </section>
+
+  <div class="next">
+    <div class="panel-label">Next &#183; Lesson 2</div>
+    <p style="font-family:var(--display);font-size:22px;font-weight:600;margin:0 0 8px">Norepinephrine, end to end</p>
+    <p style="color:var(--ink-2);margin:0">One drug, two receptors, and a complete trace from the &#945;&#8321; binding site to the number on the monitor — including why it raises preload while it raises afterload, and why that combination suits vasodilatory shock better than a pure constrictor does.</p>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- MAP explorer ---------- */
+  var co = document.getElementById("co"),
+      svr = document.getElementById("svr"),
+      vent = document.getElementById("vent"),
+      coVal = document.getElementById("coVal"),
+      svrVal = document.getElementById("svrVal"),
+      ventLabel = document.getElementById("ventLabel"),
+      mapOut = document.getElementById("mapOut"),
+      verdict = document.getElementById("verdict");
+
+  function recompute() {
+    var CO = parseFloat(co.value);
+    var SVR = parseFloat(svr.value);
+    var failing = vent.value === "1";
+
+    // A failing ventricle sheds stroke volume as afterload climbs; a healthy one
+    // absorbs it. Illustrative coupling, not a validated clinical model.
+    var effectiveCO = CO;
+    if (failing && SVR > 1000) {
+      var penalty = (SVR - 1000) / 1000 * 0.42;
+      effectiveCO = CO * Math.max(0.35, 1 - penalty);
+    }
+
+    var map = Math.round((effectiveCO * SVR) / 80 + 6);
+
+    coVal.textContent = CO.toFixed(1);
+    svrVal.textContent = SVR;
+    ventLabel.textContent = failing ? "Failing" : "Healthy";
+    mapOut.textContent = map;
+
+    var msg;
+    if (failing && SVR > 1600) {
+      msg = "Afterload is now costing you flow. Effective CO has fallen to " +
+            effectiveCO.toFixed(1) + " L/min — you are squeezing a ventricle that cannot answer.";
+    } else if (map < 60) {
+      msg = "Below the usual perfusion threshold. Note how little SVR alone rescues this when CO is low.";
+    } else if (map > 110) {
+      msg = "Supranormal pressure. Ask what it is costing in myocardial oxygen demand.";
+    } else if (failing) {
+      msg = "Holding — but the ventricle has no reserve. Push SVR further and watch flow fall.";
+    } else {
+      msg = "A healthy ventricle absorbs the added afterload, so MAP tracks the equation closely.";
+    }
+    verdict.textContent = msg;
+  }
+  [co, svr, vent].forEach(function (el) { el.addEventListener("input", recompute); });
+  recompute();
+
+  /* ---------- pathway tabs ---------- */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+  function selectTab(tab) {
+    tabs.forEach(function (t) {
+      var sel = t === tab;
+      t.setAttribute("aria-selected", sel ? "true" : "false");
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !sel;
+    });
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener("click", function () { selectTab(t); });
+    t.addEventListener("keydown", function (e) {
+      var i = tabs.indexOf(t);
+      if (e.key === "ArrowRight") { e.preventDefault(); tabs[(i + 1) % tabs.length].focus(); tabs[(i + 1) % tabs.length].click(); }
+      if (e.key === "ArrowLeft")  { e.preventDefault(); tabs[(i - 1 + tabs.length) % tabs.length].focus(); tabs[(i - 1 + tabs.length) % tabs.length].click(); }
+    });
+  });
+
+  /* ---------- quiz ----------
+     Options are held to similar length and every distractor is a real
+     physiological claim, so nothing can be won on shape alone. */
+  var QUESTIONS = [
+    {
+      q: "A patient's MAP rises from 58 to 74 after a pure arterial constrictor, but the stroke volume on the monitor falls. Which mechanism best explains the drop in stroke volume?",
+      opts: [
+        "Increased venous capacitance has reduced the volume returning to the right atrium each cycle",
+        "Increased afterload has raised the pressure the ventricle must exceed before it can eject",
+        "Direct negative inotropy from the drug has reduced the force generated by each contraction",
+        "Reduced coronary filling time has produced ischaemia that lowers contractile performance"
+      ],
+      a: 1,
+      tested: "Distinguishing an afterload effect from an inotropic or preload effect",
+      why: "Raising SVR raises the pressure the ventricle has to develop before the aortic valve opens. Ejection against that higher load leaves more blood behind, so stroke volume falls even though nothing has changed about contractility.",
+      wrong: [
+        "A pure &#945;&#8321; agonist constricts veins rather than relaxing them, so capacitance would fall, not rise — that would raise preload if anything.",
+        null,
+        "&#945;&#8321; receptors do not mediate negative inotropy. The contractile apparatus is unchanged; only the load it works against has moved.",
+        "Coronary filling occurs in diastole, and a higher diastolic pressure generally improves rather than impairs it. Ischaemia is possible over time but is not the immediate mechanism."
+      ]
+    },
+    {
+      q: "Both &#946;&#8321; and &#946;&#8322; receptors couple to Gs and raise cAMP, yet &#946;&#8321; stimulation strengthens cardiac contraction while &#946;&#8322; stimulation relaxes vascular smooth muscle. What accounts for the difference?",
+      opts: [
+        "&#946;&#8322; receptors couple to Gs less efficiently, so the cAMP rise is too small to trigger contraction",
+        "Vascular smooth muscle degrades cAMP so rapidly that the signal is terminated before it acts",
+        "&#946;&#8322; stimulation recruits a Gi-coupled pathway that overrides the initial rise in cAMP",
+        "PKA phosphorylates different substrate proteins in the two cell types, with opposite consequences"
+      ],
+      a: 3,
+      tested: "Whether a second messenger has a fixed effect or a context-dependent one",
+      why: "cAMP is an amplifier, not an instruction. PKA phosphorylates whatever substrates the cell expresses — calcium-amplifying targets in the myocyte, MLCK inhibition and calcium reduction in smooth muscle.",
+      wrong: [
+        "Coupling efficiency changes the magnitude of a response, not its direction. A weaker contraction signal would still be a contraction signal.",
+        "Phosphodiesterase activity does shape cAMP duration, but smooth muscle relaxation is an active PKA-mediated event, not a failure of signalling.",
+        "&#946;&#8322; is Gs-coupled. Some Gi coupling has been described in cardiac tissue, but it is not the explanation for vasodilation.",
+        null
+      ]
+    },
+    {
+      q: "A drug with meaningful &#946;&#8321; activity is started and the heart rate does not change. Which explanation is most consistent with the physiology?",
+      opts: [
+        "The direct chronotropic effect is being offset by baroreflex-mediated vagal activity",
+        "&#946;&#8321; receptors in the SA node desensitise almost immediately after the first exposure",
+        "The drug is not reaching a plasma concentration sufficient to occupy &#946;&#8321; receptors",
+        "&#946;&#8321; receptors mediate contractility only, with rate controlled by &#946;&#8322; receptors"
+      ],
+      a: 0,
+      tested: "Separating a direct receptor effect from a compensatory reflex response",
+      why: "The observed heart rate is the sum of the drug's direct &#946;&#8321; effect and the reflex response to the pressure it created. Rising MAP increases baroreceptor firing, raising vagal output to the SA node, which can cancel or exceed the direct effect.",
+      wrong: [
+        null,
+        "Receptor desensitisation occurs over hours of sustained exposure, not immediately, and would not be the explanation minutes into an infusion.",
+        "If the concentration were subtherapeutic the pressure would not have risen either. The blood pressure response confirms receptor occupancy.",
+        "&#946;&#8321; stimulation increases both rate and contractility. The SA node is richly supplied with &#946;&#8321; receptors."
+      ]
+    },
+    {
+      q: "Gq-linked receptor activation produces both IP&#8323; and DAG. What does the DAG arm contribute that the IP&#8323; arm does not?",
+      opts: [
+        "It opens store-operated calcium channels that sustain the influx after stores are depleted",
+        "It activates PKC, which inhibits myosin light chain phosphatase and sensitises the cell to calcium",
+        "It stimulates ryanodine receptors to amplify calcium release beyond the initial IP&#8323; signal",
+        "It converts cytosolic calcium into a form that binds calmodulin with higher affinity"
+      ],
+      a: 1,
+      tested: "Whether Gq is understood as two complementary arms rather than one calcium pathway",
+      why: "IP&#8323; supplies calcium; DAG changes how much contraction that calcium buys. PKC (with RhoA/Rho-kinase) inhibits MLCP, so the phosphorylated myosin light chain is not reversed as quickly — more force at the same calcium concentration.",
+      wrong: [
+        "Store-operated entry is a real phenomenon in smooth muscle, but it is not the recognised action of DAG in this cascade.",
+        null,
+        "Ryanodine receptors are central to cardiac calcium-induced calcium release. IP&#8323; receptors, not DAG acting on RyR, drive the smooth muscle response here.",
+        "Calcium is an ion; it is not chemically modified. Its affinity for calmodulin is a fixed property of the proteins involved."
+      ]
+    },
+    {
+      q: "Why can venoconstriction increase cardiac output even though it does not change total blood volume?",
+      opts: [
+        "It raises the pressure gradient for coronary perfusion, which improves contractile efficiency",
+        "It slows venous transit time, allowing more complete oxygen offloading in the tissues",
+        "It shifts unstressed venous volume into stressed volume, raising venous return and preload",
+        "It reduces the compliance of the arterial tree, allowing more forward flow during systole"
+      ],
+      a: 2,
+      tested: "Understanding the venous system as a recruitable reservoir, not a passive conduit",
+      why: "Around 70% of blood volume sits in compliant veins. Much of it is unstressed — present but generating no pressure. Constricting the reservoir converts it to stressed volume, raising mean systemic filling pressure, venous return, preload and therefore stroke volume.",
+      wrong: [
+        "Coronary perfusion depends chiefly on aortic diastolic pressure and diastolic duration, and improved perfusion is not the mechanism by which preload rises.",
+        "Oxygen extraction affects venous saturation, not the volume of blood delivered back to the heart each minute.",
+        null,
+        "Arterial compliance influences pulse pressure and afterload. It is not the route by which venoconstriction augments preload."
+      ]
+    },
+    {
+      q: "In a patient with a severely failing ventricle, escalating a pure vasoconstrictor raises MAP far less than the equation predicts. What is happening?",
+      opts: [
+        "The rise in SVR is provoking a fall in stroke volume, so CO falls as resistance climbs",
+        "Receptor downregulation in chronic heart failure prevents the vasculature from responding",
+        "The elevated CVP in heart failure subtracts directly from the achievable arterial pressure",
+        "Pulmonary vascular resistance rises in parallel and diverts flow away from the systemic bed"
+      ],
+      a: 0,
+      tested: "Recognising that CO and SVR are coupled, not independent inputs",
+      why: "MAP is a product. A failing ventricle is highly afterload-sensitive, so raising SVR lowers stroke volume and therefore CO. You are raising one term while lowering the other, and the product moves far less than expected.",
+      wrong: [
+        null,
+        "Adrenergic downregulation is well described in chronic heart failure, but the MAP here is limited by falling flow rather than by an unresponsive vasculature.",
+        "CVP appears in the equation but is a small term, and it does not scale enough to explain a blunted response of this size.",
+        "Pulmonary and systemic circulations are in series, not competing for flow. A rise in PVR does not divert blood away from the systemic bed."
+      ]
+    }
+  ];
+
+  var LETTERS = ["A", "B", "C", "D"];
+  var answered = 0, correct = 0;
+  var quizEl = document.getElementById("quiz");
+  var scoreEl = document.getElementById("score");
+
+  QUESTIONS.forEach(function (item, qi) {
+    var card = document.createElement("div");
+    card.className = "quiz-q";
+
+    var num = document.createElement("div");
+    num.className = "qnum";
+    num.textContent = "QUESTION " + (qi + 1) + " OF " + QUESTIONS.length;
+    card.appendChild(num);
+
+    var qt = document.createElement("div");
+    qt.className = "qtext";
+    qt.innerHTML = item.q;
+    card.appendChild(qt);
+
+    var opts = document.createElement("div");
+    opts.className = "opts";
+
+    var explain = document.createElement("div");
+    explain.className = "explain";
+    explain.hidden = true;
+
+    item.opts.forEach(function (text, oi) {
+      var b = document.createElement("button");
+      b.className = "opt";
+      b.type = "button";
+      b.innerHTML = '<span class="ltr">' + LETTERS[oi] + '</span><span>' + text + '</span>';
+      b.addEventListener("click", function () {
+        if (card.dataset.done) return;
+        card.dataset.done = "1";
+        answered++;
+        if (oi === item.a) correct++;
+
+        Array.prototype.forEach.call(opts.children, function (el, i) {
+          el.disabled = true;
+          if (i === item.a) el.dataset.state = "correct";
+          else if (i === oi) el.dataset.state = "wrong";
+        });
+
+        var html = '<div class="tested">Testing &#183; ' + item.tested + '</div>';
+        html += '<p><strong>' + LETTERS[item.a] + ' is correct.</strong> ' + item.why + '</p>';
+        html += '<ul>';
+        item.wrong.forEach(function (w, i) {
+          if (w) html += '<li><strong>' + LETTERS[i] + '</strong> &#8212; ' + w + '</li>';
+        });
+        html += '</ul>';
+        explain.innerHTML = html;
+        explain.hidden = false;
+
+        scoreEl.textContent = answered + " of " + QUESTIONS.length + " answered &#183; " + correct + " correct";
+        scoreEl.innerHTML = answered + " of " + QUESTIONS.length + " answered &#183; <strong>" + correct + " correct</strong>";
+      });
+      opts.appendChild(b);
+    });
+
+    card.appendChild(opts);
+    card.appendChild(explain);
+    quizEl.appendChild(card);
+  });
+})();
+</script>
