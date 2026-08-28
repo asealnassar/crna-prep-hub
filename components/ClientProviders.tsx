@@ -39,19 +39,20 @@ function ClientProvidersInner({ children }: { children: React.ReactNode }) {
   const isAdmin = user?.email === 'asealnassar@gmail.com'
   const { setSidebarCollapsed } = useSidebarCollapsed()
 
-  console.log('ClientProviders render - user:', user?.email, 'isAdmin:', isAdmin)
-
-  if (loading) return <>{children}</>
-
   const showSidebar = pathname && !HIDDEN_SIDEBAR_PATHS.includes(pathname) && !pathname.startsWith('/admin')
 
+  // The sidebar renders immediately in its logged-out state rather than waiting
+  // on the auth check. That puts the public nav links into the server-rendered
+  // HTML, where crawlers can follow them — previously the whole nav only
+  // appeared after JavaScript ran, so those internal links carried no SEO
+  // weight. Auth-only items appear once `user` resolves.
   return (
     <>
       {showSidebar && (
         <Sidebar isLoggedIn={!!user} userEmail={user?.email || ''} isAdmin={isAdmin} onCollapsedChange={setSidebarCollapsed} />
       )}
       {children}
-      {user && <MessagesModal userEmail={user.email || ''} isAdmin={isAdmin} />}
+      {!loading && user && <MessagesModal userEmail={user.email || ''} isAdmin={isAdmin} />}
     </>
   )
 }
