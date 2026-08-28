@@ -19,6 +19,7 @@ import {
   Mail,
   Megaphone,
   MessagesSquare,
+  Newspaper,
   Mic,
   School,
   Settings,
@@ -234,15 +235,28 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
             ))}
           </div>
 
-          {/* Messages and Updates - Separated at bottom */}
-          {isLoggedIn && (
-            <div className="mt-6 border-t border-white/10 pt-4">
-              {!isCollapsed && (
-                <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                  Community
-                </p>
-              )}
+          {/* Community. Guides is public — it's the SEO surface, so search traffic
+              arriving logged out has to be able to see it. The rest needs an account. */}
+          <div className="mt-6 border-t border-white/10 pt-4">
+            {!isCollapsed && (
+              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Community
+              </p>
+            )}
 
+            {/* Guides / blog */}
+            <Link
+              href="/blog"
+              title={isCollapsed ? 'Guides' : undefined}
+              className={linkClass(!!pathname?.startsWith('/blog'))}
+            >
+              <ActiveEdge active={!!pathname?.startsWith('/blog')} />
+              <Newspaper className={`h-[18px] w-[18px] shrink-0 ${pathname?.startsWith('/blog') ? 'text-violet-300' : ''}`} />
+              {!isCollapsed && <span className="truncate">Guides</span>}
+            </Link>
+
+            {isLoggedIn && (
+              <>
               {/* Forum */}
               <Link
                 href="/forum"
@@ -301,8 +315,9 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
                   </span>
                 )}
               </Link>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </nav>
       </div>
     </>
