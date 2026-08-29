@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import Sidebar from '@/components/Sidebar'
+import { slugifySchoolName } from '@/lib/schools'
 
 export default function SchoolsClient({ initialSchools }: { initialSchools: any[] }) {
   // Seeded from the server render, so the school list and counts are already in
@@ -400,7 +401,11 @@ export default function SchoolsClient({ initialSchools }: { initialSchools: any[
                     {school.name.charAt(0)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-base sm:text-lg lg:text-xl font-bold text-gray-800 mb-1 pr-8 sm:pr-0">{school.name}</h3>
+                    <h3 className="text-base sm:text-lg lg:text-xl font-bold text-gray-800 mb-1 pr-8 sm:pr-0">
+                      <Link href={`/schools/${slugifySchoolName(school.name)}`} className="hover:text-purple-600 hover:underline">
+                        {school.name}
+                      </Link>
+                    </h3>
                     <p className="text-sm sm:text-base text-gray-500">{school.location_city}, {school.location_state}</p>
                   </div>
                 </div>
