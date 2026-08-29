@@ -20,8 +20,8 @@ import {
 import {
   checkGrant,
   completeGrant,
-  consumeTurn,
   createGrant,
+  reserveTurn,
 } from '@/lib/interviewSession'
 import type { InterviewState, ModelTurn, QuestionFormat, TurnAction, TurnRender } from '@/lib/interview/types'
 
@@ -131,6 +131,20 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: check.error }, { status: check.status })
       }
       grantId = check.grant?.id ?? null
+
+      // Reserve the turn before the model is called, so a refusal costs
+      // nothing. The database enforces the cap inside the UPDATE, which is
+      // what makes two concurrent turns unable to exceed it — the check above
+      // is only a fast path.
+      if (grantId) {
+        const reservation = await reserveTurn(admin, grantId)
+        if (!reservation.ok) {
+          return NextResponse.json(
+            { error: reservation.error },
+            { status: reservation.status }
+          )
+        }
+      }
     }
 
     const systemPrompt = buildSystemPrompt(state, { recentQuestions, seed })
@@ -174,8 +188,6 @@ export async function POST(request: Request) {
         usageCount = await chargeInterview(admin, auth.userId)
       }
       grantId = await createGrant(admin, auth.userId, nextState.mode, nextState.type)
-    } else if (grantId) {
-      await consumeTurn(admin, grantId)
     }
 
     // A finished interview cannot be reopened for further model calls.

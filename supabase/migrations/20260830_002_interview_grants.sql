@@ -19,6 +19,10 @@
 -- Safe to run at any time. The application already treats a missing table as
 -- "checks inactive" and keeps working, so there is no ordering requirement in
 -- either direction.
+--
+-- PRE-FLIGHT (read-only). Expect zero rows: the table should not exist yet.
+--   select tablename from pg_tables
+--   where schemaname = 'public' and tablename = 'interview_grants';
 -- ============================================================================
 begin;
 
@@ -42,10 +46,41 @@ alter table public.interview_grants enable row level security;
 revoke all privileges on table public.interview_grants from anon;
 revoke all privileges on table public.interview_grants from authenticated;
 
--- Atomic turn counter, so two concurrent turns on one grant cannot both read
--- the same value and write the same +1. Same hardening as
--- increment_interview_count: one uuid parameter, single statement, empty
--- search_path, execute restricted to service_role.
+-- Supabase's default privileges usually grant ALL on new public tables to
+-- postgres, anon, authenticated and service_role -- which is why the revokes
+-- above are needed. Do not rely on that for service_role: bypassing RLS is not
+-- the same as holding SQL table privileges, and a project whose default
+-- privileges have been altered would leave the server unable to read or write
+-- this table. Granted explicitly, and only what the server actually uses:
+--   INSERT  createGrant()   -- issuing a grant when an interview starts
+--   SELECT  checkGrant()    -- ownership, completion and cap checks
+--   UPDATE  completeGrant() -- marking an interview finished
+-- No DELETE: nothing in the application removes grants.
+grant select, insert, update on table public.interview_grants to service_role;
+
+-- Atomic turn RESERVATION, not merely an atomic increment.
+--
+-- The cap lives in the WHERE clause rather than in the application. Checking
+-- turns_used in TypeScript and then incrementing is a time-of-check /
+-- time-of-use race: two continuations arriving at turns_used = 23 could both
+-- pass the check and drive the counter to 25, buying an extra model call. A
+-- conditional UPDATE takes a row lock, so the second statement re-evaluates
+-- against the committed value and matches no row.
+--
+-- No row returned means: grant missing, already completed, or at the cap. The
+-- API treats a null result as a refusal and returns 403 BEFORE calling OpenAI,
+-- so a refused turn costs nothing.
+--
+-- COUPLING: 24 is duplicated from MAX_TURNS_PER_INTERVIEW in
+-- lib/interviewSession.ts (MAX_PRIMARY_QUESTIONS 10 + FOLLOW_UP_BUDGET 8 + 6
+-- margin). It is a literal here on purpose -- SQL cannot import the TypeScript
+-- constant, and accepting a maximum as a parameter would hand the caller the
+-- one value worth attacking. The database is the authority; the TypeScript
+-- constant only mirrors it. Changing either REQUIRES changing both.
+--
+-- Same hardening as increment_interview_count: one uuid parameter, single
+-- statement, empty search_path, table schema-qualified, execute restricted to
+-- service_role.
 create or replace function public.consume_interview_turn(p_grant_id uuid)
 returns integer
 language sql
@@ -55,6 +90,8 @@ as $$
   update public.interview_grants
      set turns_used = coalesce(turns_used, 0) + 1
    where id = p_grant_id
+     and completed = false
+     and coalesce(turns_used, 0) < 24
   returning turns_used;
 $$;
 
@@ -62,6 +99,11 @@ revoke all on function public.consume_interview_turn(uuid) from public;
 revoke all on function public.consume_interview_turn(uuid) from anon;
 revoke all on function public.consume_interview_turn(uuid) from authenticated;
 grant execute on function public.consume_interview_turn(uuid) to service_role;
+
+-- SECURITY DEFINER runs as the function's owner. create-or-replace assigns
+-- ownership to whoever executes this file (postgres in the Supabase SQL
+-- Editor); pinned explicitly so it cannot drift if replaced by another role.
+alter function public.consume_interview_turn(uuid) owner to postgres;
 
 commit;
 
@@ -80,6 +122,14 @@ from   information_schema.role_table_grants
 where  table_schema = 'public' and table_name = 'interview_grants'
   and  grantee in ('anon','authenticated');
 
+-- Expect: exactly INSERT, SELECT, UPDATE for service_role. If DELETE also
+-- appears it came from default privileges; harmless, but not required.
+select grantee, privilege_type
+from   information_schema.role_table_grants
+where  table_schema = 'public' and table_name = 'interview_grants'
+  and  grantee = 'service_role'
+order  by privilege_type;
+
 -- Expect: zero rows. No policies is intentional, not an oversight.
 select policyname from pg_policies
 where  schemaname = 'public' and tablename = 'interview_grants';
@@ -88,3 +138,28 @@ where  schemaname = 'public' and tablename = 'interview_grants';
 select grantee, privilege_type
 from   information_schema.routine_privileges
 where  routine_schema = 'public' and routine_name = 'consume_interview_turn';
+
+-- Expect: prosecdef = true and proconfig containing search_path=.
+select proname, prosecdef, proconfig, pg_get_userbyid(proowner) as owner
+from   pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where  n.nspname = 'public' and p.proname = 'consume_interview_turn';
+
+-- Cap behaviour, non-destructive: creates a throwaway grant already at the
+-- limit, proves the reservation refuses it, then removes it. Expect the first
+-- select to return 0 rows (refused) and the row count to end at zero.
+do $$
+declare v_id uuid; v_result integer;
+begin
+  insert into public.interview_grants (user_id, turns_used)
+  select id, 24 from auth.users limit 1
+  returning id into v_id;
+
+  select public.consume_interview_turn(v_id) into v_result;
+  raise notice 'reservation at cap returned: % (expected NULL)', v_result;
+
+  update public.interview_grants set turns_used = 0 where id = v_id;
+  select public.consume_interview_turn(v_id) into v_result;
+  raise notice 'reservation below cap returned: % (expected 1)', v_result;
+
+  delete from public.interview_grants where id = v_id;
+end $$;
