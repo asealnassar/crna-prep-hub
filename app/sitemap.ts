@@ -17,7 +17,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     // Ultimate-gated page with no public landing state, and is marked noindex.
     { path: '/gpa-calculator', priority: 0.8 },
     { path: '/personal-statement', priority: 0.7 },
-    { path: '/resume-builder', priority: 0.7 },
+    // /resume-builder is intentionally absent: it is an authenticated
+    // application route that redirects logged-out visitors to /login, has no
+    // public landing state, and is marked noindex.
     { path: '/pricing', priority: 0.6 },
   ].map((p) => ({
     url: `${SITE}${p.path}`,
