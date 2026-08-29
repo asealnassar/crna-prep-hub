@@ -1,9 +1,10 @@
 import type { MetadataRoute } from 'next'
 import { getAllPosts } from '@/lib/blog'
+import { buildSlugMap, getPublicSchools } from '@/lib/schools'
 
 const SITE = 'https://www.crnaprephub.com'
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date()
 
   // Public, crawlable pages only. Anything gated or user-specific is excluded.
@@ -31,5 +32,16 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: post.isPillar ? 0.9 : 0.8,
   }))
 
-  return [...staticPages, ...posts]
+  // Individual school pages. Slugs come from the same buildSlugMap the route
+  // uses in generateStaticParams, so sitemap URLs cannot drift from real ones.
+  //
+  // No lastModified: the schools table has created_at but no updated_at, so
+  // there is no accurate modification date to report. Stamping today's date on
+  // every request would be a false freshness signal.
+  const schoolSlugs = Array.from(buildSlugMap(await getPublicSchools()).keys()).sort()
+  const schoolPages = schoolSlugs.map((slug) => ({
+    url: `${SITE}/schools/${slug}`,
+  }))
+
+  return [...staticPages, ...posts, ...schoolPages]
 }
