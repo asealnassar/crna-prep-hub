@@ -16,23 +16,31 @@ export default function PersonalStatementAnalyzer() {
   const [userTier, setUserTier] = useState('free')
   const [userEmail, setUserEmail] = useState('')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [authChecked, setAuthChecked] = useState(false)
   const { sidebarCollapsed } = useSidebarCollapsed()
   const router = useRouter()
   const supabase = createClient()
 
   const isUltimate = userTier === 'ultimate'
+  // Only true once the auth check has actually resolved, so a logged-in user
+  // never sees the logged-out button label while getUser() is in flight.
+  const loggedOut = authChecked && !isLoggedIn
 
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser()
+      // A null user is the public/logged-out state, not a reason to redirect.
+      // This is a public landing page: anonymous visitors stay and read it.
+      // Analysis itself is still account-gated, in analyzeStatement().
       if (!user) {
-        router.push('/login')
+        setAuthChecked(true)
         return
       }
       setIsLoggedIn(true)
       setUserEmail(user.email || '')
       const { data: profile } = await supabase.from('user_profiles').select('subscription_tier').eq('id', user.id).single()
       if (profile) setUserTier(profile.subscription_tier || 'free')
+      setAuthChecked(true)
     }
     init()
   }, [])
@@ -50,6 +58,14 @@ export default function PersonalStatementAnalyzer() {
   }
 
   const analyzeStatement = async () => {
+    // Authoritative check at click time, independent of render state, so no
+    // analysis request is ever issued for an unauthenticated visitor.
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      router.push('/login')
+      return
+    }
+
     if (!statement.trim() || statement.length < 100) {
       alert('Please paste a statement (at least 100 characters)')
       return
@@ -179,10 +195,10 @@ const rewriteStatement = async () => {
 
             <button
               onClick={analyzeStatement}
-              disabled={analyzing || statement.length < 100}
+              disabled={analyzing || (!loggedOut && statement.length < 100)}
               className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold rounded-xl hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {analyzing ? 'Analyzing...' : 'Analyze My Statement'}
+              {analyzing ? 'Analyzing...' : loggedOut ? 'Log In to Analyze My Statement' : 'Analyze My Statement'}
             </button>
           </div>
 
