@@ -47,8 +47,10 @@ alter table public.user_profiles enable row level security;
 --      * one uuid parameter, no column or value is caller-controlled
 --      * a single UPDATE statement, so concurrent starts cannot both read the
 --        same value and write the same +1
---      * empty search_path with fully schema-qualified names, so a hostile
---        temp schema cannot shadow the target table
+--      * empty search_path with the table schema-qualified, so a hostile
+--        temp schema cannot shadow it. Column references stay unqualified:
+--        search_path governs object lookup, not column resolution, and
+--        over-qualifying them only adds parse risk.
 --      * EXECUTE held only by service_role
 --    guard_user_profile_privileges() still fires on this UPDATE and simply
 --    re-asserts the unchanged tier and Stripe id, which is the desired result.
@@ -59,9 +61,9 @@ security definer
 set search_path = ''
 as $$
   update public.user_profiles
-     set interview_count = coalesce(public.user_profiles.interview_count, 0) + 1
-   where public.user_profiles.id = p_user_id
-  returning public.user_profiles.interview_count;
+     set interview_count = coalesce(interview_count, 0) + 1
+   where id = p_user_id
+  returning interview_count;
 $$;
 
 revoke all on function public.increment_interview_count(uuid) from public;
