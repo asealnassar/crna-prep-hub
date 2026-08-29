@@ -30,12 +30,11 @@ const handleSignUp = async (e: React.FormEvent) => {
       if (error) throw error
 
       if (data.user) {
-        await supabase.from('user_profiles').insert({
-          id: data.user.id,
-          email: data.user.email,
-          subscription_tier: 'free',
-          has_used_free_interview: false,
-        })
+        // The profile row is created by the handle_new_user() trigger on
+        // auth.users (SECURITY DEFINER), which sets subscription_tier='free'
+        // and interview_count=0. The browser used to insert it as well, which
+        // was redundant and required the authenticated role to hold INSERT on
+        // user_profiles — a privilege that also let it write usage fields.
 
         // Track signup with TikTok
         try {
