@@ -34,7 +34,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 py-3 sm:py-4">
           <div className="flex flex-col sm:flex-row justify-between items-center gap-3 sm:gap-0">
             <div className="flex items-center gap-3 sm:gap-4 w-full sm:w-auto justify-between sm:justify-start">
-              <h1 className="text-xl sm:text-2xl font-bold text-white">CRNA Prep Hub</h1>
+              <span className="text-xl sm:text-2xl font-bold text-white">CRNA Prep Hub</span>
             </div>
             <div className="flex flex-wrap justify-center gap-3 sm:gap-6 text-sm">
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
@@ -51,17 +51,13 @@ export default function Home() {
       {/* Hero Section */}
       <div className="max-w-7xl mx-auto px-4 py-12 sm:py-16 lg:py-24 text-center">
         <div className="inline-block bg-white/10 backdrop-blur-sm px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-indigo-200 text-xs sm:text-sm mb-4 sm:mb-6">
-          ✨ The #1 CRNA School Search Platform
+          CRNA SCHOOL APPLICATION & INTERVIEW PREP
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-7xl font-bold text-white mb-4 sm:mb-6 leading-tight">
-          Your Journey to<br />
-          <span className="bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-400 bg-clip-text text-transparent">
-            Becoming a CRNA
-          </span><br />
-          Starts Here
+          <span className="bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-400 bg-clip-text text-transparent">Find CRNA Schools & Prepare to Get Accepted</span>
         </h1>
         <p className="text-base sm:text-lg lg:text-xl text-indigo-200 mb-6 sm:mb-10 max-w-2xl mx-auto px-4">
-          Search 129+ accredited CRNA programs, filter by your preferences, and practice with AI-powered mock interviews.
+          Compare 135 CRNA programs, calculate your GPA, prepare for school-specific interviews, practice AI mock interviews, and strengthen your CRNA application.
         </p>
         <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4">
           <Link href="/signup" className="bg-gradient-to-r from-pink-500 to-purple-600 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-xl font-semibold text-base sm:text-lg hover:opacity-90 transition shadow-lg shadow-purple-500/30">
@@ -79,7 +75,7 @@ export default function Home() {
         <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-8 text-center">
             <div>
-              <div className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-1 sm:mb-2">129+</div>
+              <div className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-1 sm:mb-2">135+</div>
               <div className="text-xs sm:text-sm lg:text-base text-indigo-300">CRNA Schools</div>
             </div>
             <div>
@@ -121,7 +117,7 @@ export default function Home() {
           <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
             <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">🎓</div>
             <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">School Database</h3>
-            <p className="text-sm sm:text-base text-indigo-200">Search and filter through 129+ accredited CRNA programs. Find schools that match your GPA, location, and preferences.</p>
+            <p className="text-sm sm:text-base text-indigo-200">Compare 135+ CRNA programs by GPA requirements, tuition, program length, location, format, ICU experience, and more.</p>
           </div>
           <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
             <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">🎤</div>
