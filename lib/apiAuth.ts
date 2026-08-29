@@ -36,8 +36,12 @@ export type AuthedUser = {
   isUltimate: boolean
 }
 
-/** Reassembles the Supabase auth cookie, which is split across .0/.1 when large. */
-async function readAccessToken(): Promise<string | null> {
+/**
+ * Reassembles the Supabase auth cookie, which is split across .0/.1 when large.
+ * Exported so a route can build a Supabase client scoped to the caller's own
+ * JWT, which keeps RLS in force for queries that do not need the service role.
+ */
+export async function readAccessToken(): Promise<string | null> {
   const jar = await cookies()
   const parts = jar
     .getAll()

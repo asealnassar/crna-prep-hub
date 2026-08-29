@@ -105,6 +105,24 @@ const [compose, setCompose] = useState({
     }
   }
 
+  /**
+   * Display labels for the caller's conversation counterparts.
+   *
+   * user_profiles is no longer readable across users, so these come from a
+   * protected route that derives the allowed set from the caller's own thread
+   * membership. Returns an empty map on failure, which renders as the existing
+   * "Unknown" fallback rather than breaking the list.
+   */
+  const fetchParticipantEmails = async (): Promise<Record<string, { email: string }>> => {
+    try {
+      const res = await fetch('/api/messages/participants', { method: 'POST' })
+      if (!res.ok) return {}
+      return await res.json()
+    } catch {
+      return {}
+    }
+  }
+
   const loadThreads = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
@@ -135,6 +153,8 @@ const [compose, setCompose] = useState({
       return
     }
 
+    const participantEmails = await fetchParticipantEmails()
+
     const processedThreads = await Promise.all(
       threadsData.map(async (thread: any) => {
         const { data: participants } = await supabase
@@ -147,17 +167,13 @@ const [compose, setCompose] = useState({
 
 let otherEmail = 'Unknown'
         if (otherUserId) {
-          const { data: profile } = await supabase
-            .from('user_profiles')
-            .select('email')
-            .eq('id', otherUserId)
-            .single()
-          
+          const email = participantEmails[otherUserId]?.email
+
           // Show "CRNA PREP HUB Admin Team" if messaging admin
-          if (profile?.email === 'asealnassar@gmail.com') {
+          if (email === 'asealnassar@gmail.com') {
             otherEmail = 'CRNA PREP HUB Admin Team'
           } else {
-            otherEmail = profile?.email || 'Unknown'
+            otherEmail = email || 'Unknown'
           }
         }
         const { data: lastMsg } = await supabase
@@ -241,13 +257,10 @@ let otherEmail = 'Unknown'
       .order('created_at', { ascending: true })
 
     if (allMessages) {
+      // One lookup for the whole thread rather than one per message.
+      const senderEmails = await fetchParticipantEmails()
       for (const msg of allMessages) {
-        const { data: profile } = await supabase
-          .from('user_profiles')
-          .select('email')
-          .eq('id', msg.sender_id)
-          .single()
-        msg.senderEmail = profile?.email || 'Unknown'
+        msg.senderEmail = senderEmails[msg.sender_id]?.email || 'Unknown'
       }
     }
 
