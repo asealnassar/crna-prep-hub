@@ -17,6 +17,12 @@ import {
   serviceClient,
   FREE_INTERVIEW_ALLOWANCE,
 } from '@/lib/interviewUsage'
+import {
+  checkGrant,
+  completeGrant,
+  consumeTurn,
+  createGrant,
+} from '@/lib/interviewSession'
 import type { InterviewState, ModelTurn, QuestionFormat, TurnAction, TurnRender } from '@/lib/interview/types'
 
 export const maxDuration = 60
@@ -60,13 +66,10 @@ export async function POST(request: Request) {
     const body = await request.json()
     const messages = Array.isArray(body?.messages) ? body.messages : []
 
-    // Legacy callers (pre-engine clients still holding an old bundle) send a
-    // prebuilt systemMessage and no state. Keep them working unchanged.
-    if (!body?.state && typeof body?.systemMessage === 'string') {
-      // Reached only by an authenticated caller; the check above already ran.
-      const message = await runLegacyTurn(messages, body.systemMessage)
-      return NextResponse.json({ message })
-    }
+    // The legacy `systemMessage` path was removed: it forwarded an arbitrary
+    // caller-supplied prompt straight to the model, which made this route a
+    // general-purpose LLM proxy for anyone with an account, outside the
+    // interview allowance entirely. It had no callers left in the codebase.
 
     const fallbackState = createInitialState({
       mode: body?.mode === 'real' ? 'real' : 'practice',
@@ -103,10 +106,12 @@ export async function POST(request: Request) {
     // body claims about userTier, interview_count or isUltimate is ignored.
     const startingInterview = isOpeningTurn(state) && messages.length === 0
     let usageCount: number | null = null
+    let grantId: string | null = null
 
-    if (!auth.isUltimate) {
-      const used = await readInterviewCount(admin, auth.userId)
-      if (startingInterview) {
+    if (startingInterview) {
+      // A new interview is the only thing the allowance gates.
+      if (!auth.isUltimate) {
+        const used = await readInterviewCount(admin, auth.userId)
         if (used >= FREE_INTERVIEW_ALLOWANCE) {
           return NextResponse.json(
             {
@@ -115,15 +120,17 @@ export async function POST(request: Request) {
             { status: 403 }
           )
         }
-      } else if (used > FREE_INTERVIEW_ALLOWANCE) {
-        // Continuing turns stay allowed for the interview already charged for,
-        // but a count beyond the allowance means the state was not obtained
-        // through a legitimate start.
-        return NextResponse.json(
-          { error: 'Your free interview allowance has been used.' },
-          { status: 403 }
-        )
       }
+    } else {
+      // Continuations are authorised by the grant the server issued at the
+      // start, not by the state in the request and not by a fresh allowance
+      // check — an interview already paid for must be finishable even once the
+      // count has reached the limit.
+      const check = await checkGrant(admin, body?.grantId, auth.userId)
+      if (!check.ok) {
+        return NextResponse.json({ error: check.error }, { status: check.status })
+      }
+      grantId = check.grant?.id ?? null
     }
 
     const systemPrompt = buildSystemPrompt(state, { recentQuestions, seed })
@@ -162,15 +169,25 @@ export async function POST(request: Request) {
 
     // Charged only once the interview has actually begun, matching the previous
     // behaviour — but performed server-side, so the browser cannot skip it.
-    if (startingInterview && !auth.isUltimate) {
-      usageCount = await chargeInterview(admin, auth.userId)
+    if (startingInterview) {
+      if (!auth.isUltimate) {
+        usageCount = await chargeInterview(admin, auth.userId)
+      }
+      grantId = await createGrant(admin, auth.userId, nextState.mode, nextState.type)
+    } else if (grantId) {
+      await consumeTurn(admin, grantId)
     }
+
+    // A finished interview cannot be reopened for further model calls.
+    if (grantId && nextState.complete) await completeGrant(admin, grantId)
 
     return NextResponse.json({
       message: message || 'Could you expand on that?',
       render,
       // Authoritative usage, for display only. The server does not read it back.
       usage: { interviewCount: usageCount, isUltimate: auth.isUltimate },
+      // Opaque server-issued id the client must return on every later turn.
+      grantId,
       state: nextState,
       turnKind: nextState.turnKind,
       questionAsked: turn.question_asked || '',
@@ -375,28 +392,3 @@ function defaultAction(permitted: TurnAction[]): TurnAction {
 }
 
 /** Original pre-engine behaviour, kept for clients that have not reloaded. */
-async function runLegacyTurn(messages: any[], systemMessage: string): Promise<string> {
-  const response = await fetch(OPENAI_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      input: [
-        { role: 'developer', content: systemMessage },
-        ...messages.map((msg: any) => ({ role: msg.role, content: msg.content })),
-      ],
-      max_output_tokens: 800,
-    }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  })
-
-  const data = await response.json()
-  if (!response.ok) {
-    console.error('OpenAI API error:', data)
-    throw new Error(data.error?.message || 'OpenAI API error')
-  }
-  return extractOutputText(data) || 'Could you please repeat that?'
-}

@@ -1,0 +1,90 @@
+-- ============================================================================
+-- Step 21 — server-owned authorization for in-progress interviews.
+--
+-- The engine state travels with each request, so a continuation could be
+-- fabricated: a free user who had spent their allowance could hand-craft
+-- `state` and keep consuming model calls. New interviews were gated; continued
+-- ones were not, because re-checking the allowance on every turn would cut off
+-- an interview the user had legitimately started.
+--
+-- A grant row is created by the server when an interview is legitimately
+-- started, and every later turn must present its id.
+--
+-- Why not reuse interview_sessions: the browser inserts into that table
+-- directly (conversation, engine_state, scores). A table the client can write
+-- cannot authorize the client — a user could insert a row and "continue" it.
+-- This table is written only with the service role, holds no conversation
+-- content, and is unreadable from the browser.
+--
+-- Safe to run at any time. The application already treats a missing table as
+-- "checks inactive" and keeps working, so there is no ordering requirement in
+-- either direction.
+-- ============================================================================
+begin;
+
+create table if not exists public.interview_grants (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  mode           text,
+  interview_type text,
+  turns_used     integer not null default 0,
+  completed      boolean not null default false,
+  created_at     timestamptz not null default now()
+);
+
+create index if not exists interview_grants_user_id_idx
+  on public.interview_grants (user_id);
+
+-- RLS on with no policies at all: the browser has no read or write path, and
+-- the service role bypasses RLS. Nothing here is needed client-side.
+alter table public.interview_grants enable row level security;
+
+revoke all privileges on table public.interview_grants from anon;
+revoke all privileges on table public.interview_grants from authenticated;
+
+-- Atomic turn counter, so two concurrent turns on one grant cannot both read
+-- the same value and write the same +1. Same hardening as
+-- increment_interview_count: one uuid parameter, single statement, empty
+-- search_path, execute restricted to service_role.
+create or replace function public.consume_interview_turn(p_grant_id uuid)
+returns integer
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.interview_grants
+     set turns_used = coalesce(turns_used, 0) + 1
+   where id = p_grant_id
+  returning turns_used;
+$$;
+
+revoke all on function public.consume_interview_turn(uuid) from public;
+revoke all on function public.consume_interview_turn(uuid) from anon;
+revoke all on function public.consume_interview_turn(uuid) from authenticated;
+grant execute on function public.consume_interview_turn(uuid) to service_role;
+
+commit;
+
+-- ---------------------------------------------------------------------------
+-- VERIFICATION (read-only)
+-- ---------------------------------------------------------------------------
+
+-- Expect: rowsecurity = true.
+select relname, relrowsecurity
+from   pg_class c join pg_namespace n on n.oid = c.relnamespace
+where  n.nspname = 'public' and c.relname = 'interview_grants';
+
+-- Expect: zero rows. The browser has no access at all.
+select grantee, privilege_type
+from   information_schema.role_table_grants
+where  table_schema = 'public' and table_name = 'interview_grants'
+  and  grantee in ('anon','authenticated');
+
+-- Expect: zero rows. No policies is intentional, not an oversight.
+select policyname from pg_policies
+where  schemaname = 'public' and tablename = 'interview_grants';
+
+-- Expect: service_role / EXECUTE only.
+select grantee, privilege_type
+from   information_schema.routine_privileges
+where  routine_schema = 'public' and routine_name = 'consume_interview_turn';

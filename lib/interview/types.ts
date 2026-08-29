@@ -283,4 +283,6 @@ export interface InterviewTurnResponse {
    * reads a count back from the client.
    */
   usage?: { interviewCount: number | null; isUltimate: boolean }
+  /** Opaque server-issued interview authorization, echoed on later turns. */
+  grantId?: string | null
 }

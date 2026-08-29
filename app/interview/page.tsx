@@ -401,6 +401,13 @@ export default function Interview() {
     }
   }
 
+  /**
+   * Server-issued authorization for the interview in progress. Held in a ref
+   * rather than state because the first turn's response arrives before a state
+   * update would flush, and the next turn must already carry it.
+   */
+  const grantIdRef = useRef<string | null>(null)
+
   /** Single place that talks to the engine, so both turn paths stay in sync. */
   const requestTurn = async (
     convo: {role: string, content: string}[],
@@ -417,9 +424,13 @@ export default function Interview() {
         mode: interviewMode,
         type: interviewType,
         customTopic,
+        // Proves this turn belongs to an interview the server authorised.
+        grantId: grantIdRef.current,
       }),
     })
-    return response.json()
+    const data = await response.json()
+    if (typeof data?.grantId === 'string') grantIdRef.current = data.grantId
+    return data
   }
 
   const startInterview = async () => {
@@ -436,6 +447,7 @@ export default function Interview() {
     setEngineState(null)
     setInterviewEnded(false)
     setSessionId(Date.now().toString(36) + Math.random().toString(36).substring(2))
+    grantIdRef.current = null
     setCurrentSessionId(null)
 
     try {
