@@ -1,7 +1,9 @@
 -- ============================================================================
 -- Step 17, Part 2 — per-row least privilege for authenticated users.
 --
--- DO NOT RUN THIS YET. It restricts SELECT to the caller's own row, which
+-- DO NOT RUN THIS YET. Step 17B closes the anonymous leak on its own;
+-- this file remains a draft for a later step and has NOT been reviewed against
+-- the production policy set that the inspection revealed. It restricts SELECT to the caller's own row, which
 -- breaks two features that currently read other users' profiles from the
 -- browser:
 --
