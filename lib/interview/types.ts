@@ -278,4 +278,9 @@ export interface InterviewTurnResponse {
   finalReport: FinalReport | null
   complete: boolean
   degraded?: boolean
+  /**
+   * Authoritative usage, computed server-side. Display only — the API never
+   * reads a count back from the client.
+   */
+  usage?: { interviewCount: number | null; isUltimate: boolean }
 }

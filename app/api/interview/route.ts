@@ -10,6 +10,13 @@ import {
   normalizeState,
 } from '@/lib/interview/state'
 import { ALL_FORMATS } from '@/lib/interview/types'
+import { authenticateRequest } from '@/lib/apiAuth'
+import {
+  chargeInterview,
+  readInterviewCount,
+  serviceClient,
+  FREE_INTERVIEW_ALLOWANCE,
+} from '@/lib/interviewUsage'
 import type { InterviewState, ModelTurn, QuestionFormat, TurnAction, TurnRender } from '@/lib/interview/types'
 
 export const maxDuration = 60
@@ -34,12 +41,29 @@ export async function POST(request: Request) {
   let state: InterviewState | null = null
 
   try {
+    // Authentication and entitlement run before anything reaches OpenAI, so an
+    // unauthorized or exhausted caller costs zero tokens. This route was
+    // previously open: any unauthenticated request ran a full model turn.
+    const auth = await authenticateRequest()
+    if (!auth) {
+      return NextResponse.json(
+        { error: 'You must be signed in to run a mock interview.' },
+        { status: 401 }
+      )
+    }
+
+    const admin = serviceClient()
+    if (!admin) {
+      return NextResponse.json({ error: 'Server configuration error' }, { status: 500 })
+    }
+
     const body = await request.json()
     const messages = Array.isArray(body?.messages) ? body.messages : []
 
     // Legacy callers (pre-engine clients still holding an old bundle) send a
     // prebuilt systemMessage and no state. Keep them working unchanged.
     if (!body?.state && typeof body?.systemMessage === 'string') {
+      // Reached only by an authenticated caller; the check above already ran.
       const message = await runLegacyTurn(messages, body.systemMessage)
       return NextResponse.json({ message })
     }
@@ -75,6 +99,33 @@ export async function POST(request: Request) {
       : []
     const seed = `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
 
+    // Tier comes from user_profiles via the verified session. Anything the
+    // body claims about userTier, interview_count or isUltimate is ignored.
+    const startingInterview = isOpeningTurn(state) && messages.length === 0
+    let usageCount: number | null = null
+
+    if (!auth.isUltimate) {
+      const used = await readInterviewCount(admin, auth.userId)
+      if (startingInterview) {
+        if (used >= FREE_INTERVIEW_ALLOWANCE) {
+          return NextResponse.json(
+            {
+              error: `You have used all ${FREE_INTERVIEW_ALLOWANCE} free interviews. Upgrade to Ultimate for unlimited practice.`,
+            },
+            { status: 403 }
+          )
+        }
+      } else if (used > FREE_INTERVIEW_ALLOWANCE) {
+        // Continuing turns stay allowed for the interview already charged for,
+        // but a count beyond the allowance means the state was not obtained
+        // through a legitimate start.
+        return NextResponse.json(
+          { error: 'Your free interview allowance has been used.' },
+          { status: 403 }
+        )
+      }
+    }
+
     const systemPrompt = buildSystemPrompt(state, { recentQuestions, seed })
     const schema = buildTurnSchema(state)
 
@@ -109,9 +160,17 @@ export async function POST(request: Request) {
       allEvaluations: nextState.complete ? nextState.evaluations : [],
     }
 
+    // Charged only once the interview has actually begun, matching the previous
+    // behaviour — but performed server-side, so the browser cannot skip it.
+    if (startingInterview && !auth.isUltimate) {
+      usageCount = await chargeInterview(admin, auth.userId)
+    }
+
     return NextResponse.json({
       message: message || 'Could you expand on that?',
       render,
+      // Authoritative usage, for display only. The server does not read it back.
+      usage: { interviewCount: usageCount, isUltimate: auth.isUltimate },
       state: nextState,
       turnKind: nextState.turnKind,
       questionAsked: turn.question_asked || '',

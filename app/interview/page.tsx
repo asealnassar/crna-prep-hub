@@ -451,9 +451,12 @@ export default function Interview() {
       const convo = [toAssistantMessage(data.render, data.message)]
       setMessages(convo)
       setEngineState(data.state)
-      // Only charge the free interview once the interview actually started.
-      if (!isUltimate && userId) {
-        await supabase.from('user_profiles').update({ interview_count: interviewCount + 1 }).eq('id', userId)
+      // The server charges the interview and returns the authoritative count;
+      // the browser no longer writes interview_count itself. The UI gate below
+      // is presentation only — /api/interview enforces the real limit.
+      if (typeof data.usage?.interviewCount === 'number') {
+        setInterviewCount(data.usage.interviewCount)
+      } else if (!isUltimate) {
         setInterviewCount(interviewCount + 1)
       }
       if (data.turnKind === 'primary') await saveQuestion(data.questionAsked, interviewType)
