@@ -21,24 +21,102 @@ function locationLine(school: PublicSchool): string | null {
   return parts.length ? parts.join(', ') : null
 }
 
-export async function generateMetadata(
-  { params }: { params: Promise<{ slug: string }> }
-): Promise<Metadata> {
-  const { slug } = await params
-  const school = await getSchoolBySlug(slug)
-  if (!school) return { title: 'School not found' }
+const SITE = 'https://www.crnaprephub.com'
 
+/**
+ * Full descriptive title where it fits; for the handful of very long program
+ * names it steps down through shorter variants. The school name, "CRNA" and
+ * the brand are preserved at every step — only the descriptive part is cut.
+ */
+function buildTitle(name: string): string {
+  const variants = [
+    `${name} CRNA Program: Requirements & Tuition | CRNA Prep Hub`,
+    `${name} CRNA Program | CRNA Prep Hub`,
+    `${name} CRNA | CRNA Prep Hub`,
+  ]
+  return variants.find((t) => t.length <= 95) ?? variants[variants.length - 1]
+}
+
+/**
+ * Description assembled from public database values only. Every clause is
+ * dropped when its field is empty, so no school is described with data it
+ * does not have.
+ */
+function buildDescription(school: PublicSchool): string {
+  const possessive = school.name.endsWith('s') ? `${school.name}'` : `${school.name}'s`
   const where = locationLine(school)
-  const bits = [
-    school.program_type ? `${school.program_type} program` : 'CRNA program',
+
+  // The degree sits in the lead rather than the detail list — more specific,
+  // and it keeps the sentence shorter.
+  const lead = [
+    'Explore',
+    possessive,
+    school.program_length_months ? `${school.program_length_months}-month` : null,
+    school.program_type || null,
+    'CRNA program',
     where ? `in ${where}` : null,
   ]
     .filter(Boolean)
     .join(' ')
 
+  const details: string[] = []
+  if (school.gpa_requirement) details.push('minimum GPA')
+  if (school.tuition_total || school.tuition_yearly) details.push('tuition')
+  if (school.icu_experience_months) details.push('ICU experience requirements')
+  if (school.format) details.push('program format')
+
+  const compose = (items: string[]) => {
+    if (items.length === 0) return `${lead}. Program details for CRNA applicants.`
+    const rest = items.slice(0, -1)
+    const last = items[items.length - 1]
+    const list = rest.length ? `${rest.join(', ')} and ${last}` : last
+    return `${lead}, including ${list}.`
+  }
+
+  // Drop the least important details rather than hard-truncating mid-word, so
+  // the sentence always ends cleanly within snippet length.
+  let candidate = compose(details)
+  while (candidate.length > 158 && details.length > 0) {
+    details.pop()
+    candidate = compose(details)
+  }
+  return candidate
+}
+
+export async function generateMetadata(
+  { params }: { params: Promise<{ slug: string }> }
+): Promise<Metadata> {
+  const { slug } = await params
+  const school = await getSchoolBySlug(slug)
+
+  // Unknown slug: return minimal metadata and let the page component call
+  // notFound(). Metadata never affects the response status.
+  if (!school) return { title: 'School not found | CRNA Prep Hub' }
+
+  const title = buildTitle(school.name)
+  const description = buildDescription(school)
+  // `slug` is only non-null here because it resolved through buildSlugMap, so
+  // the canonical cannot drift from the route that actually exists.
+  const url = `${SITE}/schools/${slug}`
+
   return {
-    title: `${school.name} CRNA Program`,
-    description: `${school.name} nurse anesthesia ${bits}. Program details, admission requirements and tuition for CRNA applicants.`,
+    title,
+    description,
+    alternates: { canonical: url },
+    openGraph: {
+      title,
+      description,
+      url,
+      siteName: 'CRNA Prep Hub',
+      type: 'website',
+    },
+    // `summary` rather than `summary_large_image`: there is no social image
+    // asset on the site, and this step does not create one.
+    twitter: {
+      card: 'summary',
+      title,
+      description,
+    },
   }
 }
 
