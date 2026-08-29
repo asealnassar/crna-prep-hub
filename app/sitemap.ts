@@ -13,7 +13,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { path: '/blog', priority: 0.9 },
     { path: '/schools', priority: 0.9 },
     { path: '/interview', priority: 0.8 },
-    { path: '/interview-prep', priority: 0.8 },
+    // /interview-prep is intentionally absent: it is an authenticated,
+    // Ultimate-gated page with no public landing state, and is marked noindex.
     { path: '/gpa-calculator', priority: 0.8 },
     { path: '/personal-statement', priority: 0.7 },
     { path: '/resume-builder', priority: 0.7 },
