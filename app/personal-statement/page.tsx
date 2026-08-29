@@ -78,8 +78,15 @@ export default function PersonalStatementAnalyzer() {
       const res = await fetch('/api/analyze-statement', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ statement, userTier })
+        // userTier is deliberately not sent: the API resolves the tier from
+        // the authenticated session, so the browser cannot influence it.
+        body: JSON.stringify({ statement })
       })
+
+      if (res.status === 401) {
+        router.push('/login')
+        return
+      }
 
       const data = await res.json()
       if (data.error) {
@@ -110,7 +117,7 @@ const rewriteStatement = async () => {
       const res = await fetch('/api/analyze-statement', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ statement, userTier, analysis })
+        body: JSON.stringify({ statement, analysis })
       })
 
       const data = await res.json()

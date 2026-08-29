@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import { authenticateRequest } from '@/lib/apiAuth'
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -7,7 +8,17 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   try {
-    const { statement, userTier } = await request.json()
+    // Authorization runs before the body is read and before any OpenAI call,
+    // so an unauthorized request costs zero tokens.
+    const auth = await authenticateRequest()
+    if (!auth) {
+      return NextResponse.json(
+        { error: 'You must be signed in to analyze a statement.' },
+        { status: 401 }
+      )
+    }
+
+    const { statement } = await request.json()
 
     if (!statement || statement.trim().length < 100) {
       return NextResponse.json(
@@ -16,7 +27,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const isUltimate = userTier === 'ultimate'
+    // Read from the database via the verified session, never from the request
+    // body. A client claiming userTier: 'ultimate' has no effect here.
+    const isUltimate = auth.isUltimate
 
     const systemPrompt = `You are a critical CRNA admissions consultant analyzing personal statements. Be HONEST and DIRECT - don't sugarcoat weaknesses. Provide specific, actionable feedback.
 
@@ -85,14 +98,24 @@ Return ONLY valid JSON in this exact format:
 // Rewrite endpoint
 export async function PUT(request: NextRequest) {
   try {
-    const { statement, userTier, analysis } = await request.json()
+    // Both checks precede the body read and the OpenAI call.
+    const auth = await authenticateRequest()
+    if (!auth) {
+      return NextResponse.json(
+        { error: 'You must be signed in to use the rewrite feature.' },
+        { status: 401 }
+      )
+    }
 
-    if (userTier !== 'ultimate') {
+    // Server-side tier check. The hidden UI button was never a control.
+    if (!auth.isUltimate) {
       return NextResponse.json(
         { error: 'Rewrite feature is Ultimate only' },
         { status: 403 }
       )
     }
+
+    const { statement, analysis } = await request.json()
 
     // Build detailed improvement instructions from analysis
     let improvementInstructions = `You are a CRNA admissions expert. Completely rewrite this personal statement to be highly competitive.
