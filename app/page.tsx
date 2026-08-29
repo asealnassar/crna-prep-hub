@@ -1,5 +1,30 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import LazyTikTokSection from '@/components/LazyTikTokSection'
+
+const SITE = 'https://www.crnaprephub.com'
+
+// Overrides the layout default for the homepage only; every other route keeps
+// inheriting that default. The root layout sets a plain string title with no
+// `template`, so the brand is not appended a second time.
+const TITLE = 'CRNA School Finder, GPA Calculator & Interview Prep | CRNA Prep Hub'
+const DESCRIPTION =
+  'Find and compare CRNA schools by program requirements, calculate your GPA, ' +
+  'practice CRNA interviews, and prepare your application with CRNA Prep Hub.'
+
+export const metadata: Metadata = {
+  title: TITLE,
+  description: DESCRIPTION,
+  alternates: { canonical: `${SITE}/` },
+  openGraph: {
+    title: TITLE,
+    description: DESCRIPTION,
+    url: `${SITE}/`,
+    siteName: 'CRNA Prep Hub',
+    type: 'website',
+  },
+  twitter: { card: 'summary', title: TITLE, description: DESCRIPTION },
+}
 
 export default function Home() {
   return (
