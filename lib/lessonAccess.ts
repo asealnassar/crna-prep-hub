@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
+import { isAdminEmail } from './apiAuth'
 
 /**
  * Draft lessons are visible only to the author until the module launches.
@@ -9,7 +10,8 @@ import { createClient } from '@supabase/supabase-js'
  * next/headers `cookies()` synchronously. Next 16 returns a Promise from it, so
  * every server-side helper call throws `nextCookies.get is not a function`.
  */
-const AUTHORS = ['asealnassar@gmail.com']
+// Author identity comes from the shared admin allowlist in lib/apiAuth.ts
+// rather than a second hardcoded list that could drift out of sync.
 
 export const DRAFT_LESSONS = [
   {
@@ -102,7 +104,7 @@ export async function canViewDrafts(): Promise<boolean> {
     const { data, error } = await supabase.auth.getUser(token)
     if (error || !data?.user?.email) return false
 
-    return AUTHORS.includes(data.user.email.toLowerCase())
+    return isAdminEmail(data.user.email)
   } catch (error) {
     console.error('Draft access check failed:', error)
     return false

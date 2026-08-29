@@ -14,6 +14,20 @@ import { createClient } from '@supabase/supabase-js'
  * every server-side helper call throws `nextCookies.get is not a function`.
  * (lib/lessonAccess.ts reads the cookie the same way for the same reason.)
  */
+/**
+ * The single authoritative admin allowlist. Client components compare against
+ * this same address inline for UI purposes, but UI checks are presentation
+ * only — every privileged route must call isAdminEmail() on a verified
+ * session, never on anything the caller supplied.
+ */
+export const ADMIN_EMAILS: readonly string[] = ['asealnassar@gmail.com']
+
+/** Case-insensitive membership test. A missing email is never an admin. */
+export function isAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false
+  return ADMIN_EMAILS.includes(email.toLowerCase())
+}
+
 export type AuthedUser = {
   userId: string
   email: string | null
