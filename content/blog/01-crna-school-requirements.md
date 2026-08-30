@@ -99,7 +99,7 @@ Meeting requirements gets your file read. These are the things that shape how it
 
 **Progression.** Charge nurse, preceptor, rapid response, unit council, CCRN, committee work. These signal that you function beyond your own assignment.
 
-**Recency.** Science prerequisites taken twelve years ago may not count, and some programs impose explicit recency limits. Check this early — it is one of the most common late-stage surprises.
+**Recency.** Science prerequisites taken twelve years ago may not count, and some programs impose explicit recency limits. Check this early — it is one of the most common late-stage surprises. [CRNA school prerequisites](/blog/crna-school-prerequisites) goes through which courses programs name, how recency and grade rules work, and what to do about a gap.
 
 **Consistency.** Your resume, personal statement, and interview answers should describe the same nurse. Committees notice when the written application and the person in the interview don't match.
 

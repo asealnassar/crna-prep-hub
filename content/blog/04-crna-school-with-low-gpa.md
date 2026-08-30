@@ -53,7 +53,7 @@ Ranked roughly by impact:
 
 **1. A strong upward trend.** The single most persuasive pattern. It reads as maturation, and last-60 GPA is the mechanism that lets a program act on it. If your recent record is strong, target programs that weight it.
 
-**2. Targeted science retakes.** If your science GPA is the weak number, retaking two or three specific courses and earning A's can move it meaningfully — and demonstrates you can perform in exactly the subjects the curriculum is built on.
+**2. Targeted science retakes.** Before choosing courses, confirm which ones your programs actually require and whether any have aged out — [CRNA school prerequisites](/blog/crna-school-prerequisites) covers recency and grade rules, and a retake that satisfies a requirement as well as raising a number is worth more than one that only does the latter. If your science GPA is the weak number, retaking two or three specific courses and earning A's can move it meaningfully — and demonstrates you can perform in exactly the subjects the curriculum is built on.
 
 **3. Graduate coursework.** Doctoral-level science coursework or a science-heavy graduate certificate can demonstrate current academic capability. More persuasive than undergraduate retakes for applicants with very high credit volume.
 

@@ -44,7 +44,7 @@ This is the diagnostic phase. Nothing else is efficient until it's done.
 - Build a **per-program requirement grid** — prerequisites, GPA minimums and which GPA they apply to, ICU requirements, CCRN, GRE, shadowing
 - Confirm your **ICU qualifies** at your target programs, in writing
 - Calculate **cumulative, science, and last-60 GPA** separately
-- Identify **expired or missing prerequisites**, including recency limits
+- Identify **expired or missing prerequisites**, including recency limits — [CRNA school prerequisites](/blog/crna-school-prerequisites) covers how those rules work and what your options are if something has aged out
 - Decide whether a **unit change** is necessary
 
 Start with the [CRNA School Directory](/schools) to build the grid, and use the [GPA Analyzer](/gpa-calculator) to get your three GPAs — many applicants find their actual problem is narrower than they assumed. If you are not yet sure what belongs in the grid, the overview of [CRNA school requirements](/blog/crna-school-requirements) sets out what programs generally expect, and [how CRNA schools calculate GPA](/blog/how-crna-schools-calculate-gpa) explains why the three numbers differ.

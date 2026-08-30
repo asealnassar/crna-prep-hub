@@ -44,7 +44,7 @@ Typically the natural-science and math coursework a program specifies. Commonly 
 
 **Which courses count is program-defined.** One school may include statistics and exclude nursing pharmacology; another may do the reverse. Do not assume a universal list.
 
-Science GPA rewards applicants who did well in hard prerequisite coursework, and it's frequently weighted heavily — the reasoning being that it predicts performance in a front-loaded doctoral curriculum built on physiology and pharmacology.
+Science GPA rewards applicants who did well in hard prerequisite coursework — which courses a program counts is set by its own prerequisite list, covered in [CRNA school prerequisites](/blog/crna-school-prerequisites) — and it's frequently weighted heavily — the reasoning being that it predicts performance in a front-loaded doctoral curriculum built on physiology and pharmacology.
 
 ### Last 60 credit hours
 
