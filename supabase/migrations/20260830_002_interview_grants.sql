@@ -46,17 +46,26 @@ alter table public.interview_grants enable row level security;
 revoke all privileges on table public.interview_grants from anon;
 revoke all privileges on table public.interview_grants from authenticated;
 
--- Supabase's default privileges usually grant ALL on new public tables to
--- postgres, anon, authenticated and service_role -- which is why the revokes
--- above are needed. Do not rely on that for service_role: bypassing RLS is not
--- the same as holding SQL table privileges, and a project whose default
--- privileges have been altered would leave the server unable to read or write
--- this table. Granted explicitly, and only what the server actually uses:
+-- Supabase's default privileges grant ALL on new public tables to postgres,
+-- anon, authenticated and service_role -- which is why the revokes above are
+-- needed, and why service_role must be revoked before it is granted. GRANT is
+-- additive: granting the three wanted privileges leaves DELETE, TRUNCATE,
+-- REFERENCES and TRIGGER in place from the defaults.
+--
+-- Do not rely on the defaults for service_role either: bypassing RLS is not the
+-- same as holding SQL table privileges, and a project whose default privileges
+-- have been altered would leave the server unable to read or write this table.
+-- Revoked, then granted explicitly, and only what the server actually uses:
 --   INSERT  createGrant()   -- issuing a grant when an interview starts
 --   SELECT  checkGrant()    -- ownership, completion and cap checks
 --   UPDATE  completeGrant() -- marking an interview finished
--- No DELETE: nothing in the application removes grants.
-grant select, insert, update on table public.interview_grants to service_role;
+-- No DELETE, TRUNCATE, REFERENCES or TRIGGER: nothing in the application
+-- removes grants or needs them.
+revoke all privileges on table public.interview_grants from service_role;
+
+grant select, insert, update
+  on table public.interview_grants
+  to service_role;
 
 -- Atomic turn RESERVATION, not merely an atomic increment.
 --
@@ -122,8 +131,8 @@ from   information_schema.role_table_grants
 where  table_schema = 'public' and table_name = 'interview_grants'
   and  grantee in ('anon','authenticated');
 
--- Expect: exactly INSERT, SELECT, UPDATE for service_role. If DELETE also
--- appears it came from default privileges; harmless, but not required.
+-- Expect exactly three rows: INSERT, SELECT, UPDATE. Anything else (DELETE,
+-- TRUNCATE, REFERENCES, TRIGGER) means the revoke did not run before the grant.
 select grantee, privilege_type
 from   information_schema.role_table_grants
 where  table_schema = 'public' and table_name = 'interview_grants'
