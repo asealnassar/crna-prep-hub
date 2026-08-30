@@ -21,7 +21,7 @@ meta_description: A week-by-week CRNA interview preparation plan — what to stu
 
 Effective preparation runs about six weeks and has four components: rebuilding your clinical physiology, developing specific stories from your own practice, researching the individual program, and practicing out loud under follow-up pressure. Most applicants do the first and skip the other three.
 
-This article is the plan. If you're looking for the questions themselves and how to structure answers, that's covered separately in our guide to [CRNA school interview questions].
+This article is the plan. If you're looking for the questions themselves and how to structure answers, that's covered separately in our guide to [CRNA school interview questions](/blog/crna-school-interview-questions).
 
 ## Why most preparation fails
 
@@ -33,7 +33,7 @@ Three patterns account for most underperformance:
 
 **No specific material.** Knowing physiology in the abstract but unable to recall a specific patient when asked. "Tell me about a deteriorating patient" produces a long pause.
 
-The plan below addresses each directly.
+The plan below addresses each directly. Six weeks assumes you start when invitations go out; in the [CRNA school application timeline](/blog/crna-application-timeline), interview preparation sits three to one months before decisions, which is when most applicants should already be building story material.
 
 ## Six weeks out: rebuild the physiology
 
@@ -83,7 +83,7 @@ Find out:
 - Interview format — panel, MMI, group exercise, written component
 - Anything the program publicly emphasizes about its mission or graduates
 
-Program-specific interview format and emphasis details are collected in [School Interview Insights](/interview-prep), and the [CRNA School Directory](/schools) covers structural details. Verify anything decision-critical against the program's own site.
+The [CRNA School Directory](/schools) covers structural details — program length, format, and where the program sits. Verify anything decision-critical against the program's own site.
 
 **Turn research into two things:** a specific reason this program fits you, and three questions to ask that aren't answered on their website.
 

@@ -160,7 +160,7 @@ If you can't answer level four, you haven't finished preparing that topic. Pract
 
 You'll be invited to ask questions. Have three, and make them specific to the program — generic questions signal you didn't research.
 
-Reasonable directions: clinical site variety and case mix, how the program supports struggling students, what distinguishes graduates of this program, recent curriculum changes. Avoid anything answered on the program's website. Program-specific detail can be found in [School Interview Insights](/interview-prep).
+Reasonable directions: clinical site variety and case mix, how the program supports struggling students, what distinguishes graduates of this program, recent curriculum changes. Avoid anything answered on the program's website. Researching a program well enough to ask something specific is its own task, and worth starting weeks ahead — [how to prepare for a CRNA school interview](/blog/how-to-prepare-for-crna-interview) sets out when to do it alongside the rest of your preparation.
 
 ## Frequently asked questions
 
