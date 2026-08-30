@@ -45,7 +45,7 @@ There's no required format, but this structure holds up well:
 
 **Opening (1 paragraph).** A specific clinical moment or realization that started you toward anesthesia. Not "I have always been fascinated by medicine." Something real and particular.
 
-**Clinical foundation (1–2 paragraphs).** Your ICU experience — the unit, the acuity, what you independently manage. Include a specific example that demonstrates judgment.
+**Clinical foundation (1–2 paragraphs).** Your ICU experience — the unit, the acuity, what you independently manage. Include a specific example that demonstrates judgment. This is the narrative version of what your resume states in bullets: the statement explains why one case changed how you practise, while [building a CRNA school resume](/blog/crna-school-resume) covers presenting the same experience as concise evidence. The two should agree without repeating each other.
 
 **Why anesthesia specifically (1–2 paragraphs).** The connective tissue between what you do now and what CRNAs do. This is where shadowing pays off, and where most statements are weakest.
 
@@ -87,6 +87,8 @@ Brief, factual, forward. Two or three sentences.
 - Blame instructors, institutions, or circumstances
 - Spend a third of your statement on it
 - Ignore it entirely if it's substantially below the program's range
+
+What you write here is the last step, not the first — the work of repairing a transcript and choosing programs that read it favourably happens well before drafting, and [getting into CRNA school with a low GPA](/blog/crna-school-with-low-gpa) covers what actually moves the needle.
 
 **Weak:** "My GPA does not reflect my true ability. I was working full time and dealing with family issues, and the chemistry department at my school was notoriously difficult with an unfair grading curve."
 
@@ -140,6 +142,8 @@ That last one is the most common. A useful test: read each paragraph and ask whe
 **Draft five — read it aloud.** You'll hear awkwardness silent reading misses.
 
 **Then get outside eyes.** Ideally someone who knows CRNA admissions. A tool that checks structure and specificity is a reasonable first pass before you spend a colleague's time.
+
+Five drafts and a reference read take longer than most applicants plan for. In the [CRNA school application timeline](/blog/crna-application-timeline), drafting starts nine to six months before deadlines, for exactly this reason.
 
 ## Frequently asked questions
 
