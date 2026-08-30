@@ -136,6 +136,18 @@ function clean(value: unknown): string | null {
   return text
 }
 
+/**
+ * A GPA stored as 3.0 arrives as the number 3, which renders as "minimum GPA
+ * of 3". Always show at least one decimal place, and a second only when the
+ * stored value actually has one (3.25).
+ */
+function gpaText(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  if (!Number.isFinite(n)) return null
+  return n.toFixed((n * 100) % 10 === 0 ? 1 : 2)
+}
+
 const MONTHS = [
   'january', 'february', 'march', 'april', 'may', 'june',
   'july', 'august', 'september', 'october', 'november', 'december',
@@ -293,13 +305,14 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
     )
   }
 
+  const gpa = gpaText(school.gpa_requirement)
   const admissionSentences: string[] = []
-  if (school.gpa_requirement && school.icu_experience_months) {
+  if (gpa && school.icu_experience_months) {
     admissionSentences.push(
-      `${school.name} publishes a minimum GPA of ${school.gpa_requirement} and requires ${school.icu_experience_months} months of critical care experience.`
+      `${school.name} publishes a minimum GPA of ${gpa} and requires ${school.icu_experience_months} months of critical care experience.`
     )
-  } else if (school.gpa_requirement) {
-    admissionSentences.push(`${school.name} publishes a minimum GPA of ${school.gpa_requirement}.`)
+  } else if (gpa) {
+    admissionSentences.push(`${school.name} publishes a minimum GPA of ${gpa}.`)
   } else if (school.icu_experience_months) {
     admissionSentences.push(
       `${school.name} requires ${school.icu_experience_months} months of critical care experience.`
