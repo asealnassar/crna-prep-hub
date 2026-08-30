@@ -144,6 +144,8 @@ If your transcript spans multiple institutions or a decade, calculating this by 
 
 **Whether you explain without excusing.** Brief, factual context works. Extended justification does not. The distinction is a common personal statement failure — one worth thinking about before drafting, and something the [Personal Statement Analyzer](/personal-statement) can help you check.
 
+GPA is only one of the criteria weighed against each other in an application; the full picture of what programs ask for is covered in the overview of [CRNA school requirements](/blog/crna-school-requirements).
+
 ## Frequently asked questions
 
 **Which GPA matters most for CRNA school?**

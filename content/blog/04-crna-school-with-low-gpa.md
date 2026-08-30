@@ -27,7 +27,7 @@ This article is about that decision-making, not reassurance.
 
 Before planning a repair, find out what you're repairing. Most applicants quote cumulative GPA, which is often their weakest number and rarely the only one a program sees.
 
-Programs commonly evaluate cumulative GPA, science GPA, GPA over the last 60 credit hours, and graduate GPA separately. A 3.1 cumulative can coexist with a 3.7 last-60 — and at a program weighting last-60, that applicant isn't a low-GPA applicant at all.
+Programs commonly evaluate cumulative GPA, science GPA, GPA over the last 60 credit hours, and graduate GPA separately. A 3.1 cumulative can coexist with a 3.7 last-60 — and at a program weighting last-60, that applicant isn't a low-GPA applicant at all. A listed floor around 3.0 is common, and it sits alongside the other [CRNA school requirements](/blog/crna-school-requirements) — licensure, critical care experience, prerequisites — that a committee reads together rather than in isolation.
 
 **Do this before anything else:** calculate all four. The [GPA Analyzer](/gpa-calculator) separates them out. Applicants routinely discover their real problem is narrower than they assumed — often a specific science block rather than a global weakness.
 

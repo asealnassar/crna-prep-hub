@@ -35,7 +35,7 @@ Committees are looking for regular, independent experience with:
 - **Rapid, autonomous decision-making** — recognizing deterioration and acting before someone tells you to
 - **Titration against a physiologic endpoint**, not just against an order
 
-Notice that none of that is about the unit's name. A unit qualifies because of what you do in it. This is also why two applicants with "two years of ICU" can be evaluated very differently.
+Notice that none of that is about the unit's name. A unit qualifies because of what you do in it. This is also why two applicants with "two years of ICU" can be evaluated very differently. Critical care experience is one component of the broader [CRNA school requirements](/blog/crna-school-requirements) a program evaluates, and it is usually the one with the least room to improvise late.
 
 ## Which units typically qualify
 

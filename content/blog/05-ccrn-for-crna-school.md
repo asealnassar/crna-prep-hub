@@ -33,6 +33,8 @@ Requirements fall into three patterns:
 
 Verify per program, including *when* it must be held — application deadline versus matriculation is a meaningful difference if you're still accruing eligibility hours. You can filter programs in the [CRNA School Directory](/schools), then confirm against each program's admissions page.
 
+Certification is one line on a longer list — the overview of [CRNA school requirements](/blog/crna-school-requirements) sets out how it sits beside licensure, critical care hours, prerequisites and GPA.
+
 The practical answer for nearly everyone: get it. The cost of holding it unnecessarily is a few hundred dollars and some study time. The cost of not holding it can be exclusion from programs you'd otherwise be competitive at.
 
 ## Eligibility, and why it affects your timeline
