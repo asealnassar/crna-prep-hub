@@ -13,7 +13,7 @@ long_tail_keywords:
   - can I take CRNA prerequisites at a community college
 search_intent: Informational, transcript in hand. Reader is auditing coursework against program requirements and wants to know what to take, whether old courses still count, and what to do about a gap.
 slug: /blog/crna-school-prerequisites
-seo_title: "CRNA School Prerequisites: Courses, Recency & Retakes"
+seo_title: CRNA School Prerequisites: Courses, Recency & Retakes
 meta_description: Which prerequisite courses CRNA programs ask for, how recency and minimum grade rules work, when retaking is worth it, and how to audit your transcript.
 ---
 
