@@ -106,7 +106,7 @@ Applicants write extensively about ICU nursing and then assert they want to do a
 
 Ways to build that bridge credibly:
 
-- **Shadowing.** Reference something specific you observed, not that you shadowed. What surprised you? What did you notice about how the CRNA worked?
+- **Shadowing.** Reference something specific you observed, not that you shadowed. What surprised you? What did you notice about how the CRNA worked? If you have not shadowed yet, [CRNA shadowing hours](/blog/crna-shadowing-hours) covers arranging it and what to pay attention to while you are there.
 - **Overlap in your own practice.** Airway management, sedation, hemodynamic titration, rapid response — where does your current work already resemble anesthesia practice?
 - **Honest acknowledgment of differences.** Recognizing that anesthesia isn't just "ICU nursing with more autonomy" demonstrates realistic understanding.
 

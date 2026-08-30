@@ -127,7 +127,7 @@ Every applicant can say that. It contains no information.
 
 **Example:** "I've been in a cardiothoracic ICU for three years, and the part of the job I find most compelling is the narrow window where you're titrating against a physiologic target and the patient's response tells you within minutes whether you were right. Anesthesia is that continuously. I also shadowed a CRNA for two days last year, and what struck me was how much of the work was anticipating the next fifteen minutes rather than reacting — I want to be the person doing that."
 
-Specific, grounded, and it demonstrates you understand the role rather than romanticizing it.
+Specific, grounded, and it demonstrates you understand the role rather than romanticizing it. Observation is one way to build that kind of detail — [how to arrange CRNA shadowing](/blog/crna-shadowing-hours) covers getting access and what to watch for — though it is not the only one, and panels are listening for genuine understanding rather than for the fact that you shadowed.
 
 ## What separates good answers from elite ones
 

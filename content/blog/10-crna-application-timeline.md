@@ -55,7 +55,7 @@ Start with the [CRNA School Directory](/schools) to build the grid, and use the 
 
 - Retake or complete **prerequisite coursework**
 - Sit for the **GRE** if any target program requires it
-- Begin **shadowing** — earlier is better, because it informs your statement
+- Begin **shadowing** — earlier is better, because it informs your statement, and [arranging CRNA shadowing](/blog/crna-shadowing-hours) usually takes longer than the observation itself
 - Continue accruing **ICU hours**
 
 Retakes take a semester. Starting now means grades post before applications.
