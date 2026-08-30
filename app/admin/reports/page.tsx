@@ -2,41 +2,64 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
+
+const ADMIN_EMAIL = 'asealnassar@gmail.com'
 
 export default function AdminReports() {
   const [reports, setReports] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const router = useRouter()
   const supabase = createClient()
 
   useEffect(() => {
-    const fetchReports = async () => {
-      const { data } = await supabase
-        .from('school_reports')
-        .select('*')
-        .order('created_at', { ascending: false })
-      
-      setReports(data || [])
+    const init = async () => {
+      // Gate the page itself. This is presentation only -- /api/admin/reports
+      // enforces the real check server-side -- but without it the admin
+      // interface rendered for anyone who knew the URL.
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || user.email !== ADMIN_EMAIL) {
+        router.push('/dashboard')
+        return
+      }
+
+      // Reports come from the protected API rather than a direct table read,
+      // so the browser needs no privileges on school_reports at all.
+      const res = await fetch('/api/admin/reports')
+      if (!res.ok) {
+        setReports([])
+        setLoading(false)
+        return
+      }
+      const data = await res.json()
+      setReports(data.reports || [])
       setLoading(false)
     }
-    fetchReports()
+    init()
   }, [])
 
   const markResolved = async (id: string) => {
-    await supabase
-      .from('school_reports')
-      .update({ status: 'resolved' })
-      .eq('id', id)
-    
+    const res = await fetch('/api/admin/reports', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: 'resolved' }),
+    })
+    if (!res.ok) {
+      alert('Could not update that report.')
+      return
+    }
     setReports(reports.map(r => r.id === id ? { ...r, status: 'resolved' } : r))
   }
 
   const deleteReport = async (id: string) => {
-    await supabase
-      .from('school_reports')
-      .delete()
-      .eq('id', id)
-    
+    const res = await fetch(`/api/admin/reports?id=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) {
+      alert('Could not delete that report.')
+      return
+    }
     setReports(reports.filter(r => r.id !== id))
   }
 

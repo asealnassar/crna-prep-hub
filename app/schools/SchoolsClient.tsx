@@ -81,10 +81,19 @@ export default function SchoolsClient({ initialSchools }: { initialSchools: any[
     if (!reportDescription.trim()) { alert('Please describe the error'); return }
     setReportSubmitting(true)
     const { data: { user } } = await supabase.auth.getUser()
+    if (!user?.email) {
+      setReportSubmitting(false)
+      alert('Please sign in again to report errors')
+      return
+    }
+    // reporter_email must equal the session's own address: the insert policy
+    // checks it against auth.email(), so the old 'anonymous' fallback would be
+    // rejected. id, status and created_at are left to database defaults --
+    // the browser has no column privilege to set them.
     await supabase.from('school_reports').insert({
       school_id: reportingSchool.id, school_name: reportingSchool.name,
       field_with_error: reportField, description: reportDescription,
-      reporter_email: user?.email || 'anonymous'
+      reporter_email: user.email
     })
     setReportSubmitting(false)
     setShowReportModal(false)
