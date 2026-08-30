@@ -5,6 +5,7 @@ import {
   buildSlugMap,
   getPublicSchools,
   getSchoolBySlug,
+  slugForSchool,
   type PublicSchool,
 } from '@/lib/schools'
 import BlogShell from '@/components/BlogShell'
@@ -138,6 +139,26 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
   const { slug } = await params
   const school = await getSchoolBySlug(slug)
   if (!school) notFound()
+
+  /**
+   * Other programs in the same state.
+   *
+   * Every school page was previously a dead end: reachable only from the
+   * /schools hub and linking to no other school. These links come entirely
+   * from verified fields — name, location_state and the slug the route itself
+   * resolves through — so nothing is inferred or ranked. The list shares the
+   * cached fetch the page already performs, so it costs no extra query.
+   */
+  const allSchools = await getPublicSchools()
+  const slugMap = buildSlugMap(allSchools)
+  const siblings = school.location_state
+    ? allSchools
+        .filter((s) => s.id !== school.id && s.location_state === school.location_state)
+        .map((s) => ({ school: s, slug: slugForSchool(s, slugMap) }))
+        // A school without a resolvable slug has no public page to link to.
+        .filter((s) => Boolean(s.slug) && slugMap.has(s.slug))
+        .sort((a, b) => a.school.name.localeCompare(b.school.name))
+    : []
 
   const where = locationLine(school)
   const months = school.program_length_months
@@ -292,6 +313,33 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
               </Link>
             </div>
           </section>
+
+          {/* Omitted entirely when the state has no other program, rather than
+              rendering an empty box. */}
+          {siblings.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-1 text-xl font-bold tracking-tight text-slate-900">
+                Other CRNA programs in {school.location_state}
+              </h2>
+              <p className="mb-4 text-[13px] text-slate-400">
+                {siblings.length === 1
+                  ? 'One other nurse anesthesia program in this state.'
+                  : `${siblings.length} other nurse anesthesia programs in this state.`}
+              </p>
+              <ul className="grid gap-2 sm:grid-cols-2">
+                {siblings.map(({ school: sibling, slug: siblingSlug }) => (
+                  <li key={sibling.id}>
+                    <Link
+                      href={`/schools/${siblingSlug}`}
+                      className="block rounded-xl border border-slate-200 bg-white px-4 py-3 text-[15px] font-semibold leading-snug text-slate-900 transition hover:border-violet-400"
+                    >
+                      {sibling.name} CRNA Program
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <Link
             href="/schools"
