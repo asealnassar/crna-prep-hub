@@ -144,22 +144,7 @@ select proname, prosecdef, proconfig, pg_get_userbyid(proowner) as owner
 from   pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where  n.nspname = 'public' and p.proname = 'consume_interview_turn';
 
--- Cap behaviour, non-destructive: creates a throwaway grant already at the
--- limit, proves the reservation refuses it, then removes it. Expect the first
--- select to return 0 rows (refused) and the row count to end at zero.
-do $$
-declare v_id uuid; v_result integer;
-begin
-  insert into public.interview_grants (user_id, turns_used)
-  select id, 24 from auth.users limit 1
-  returning id into v_id;
-
-  select public.consume_interview_turn(v_id) into v_result;
-  raise notice 'reservation at cap returned: % (expected NULL)', v_result;
-
-  update public.interview_grants set turns_used = 0 where id = v_id;
-  select public.consume_interview_turn(v_id) into v_result;
-  raise notice 'reservation below cap returned: % (expected 1)', v_result;
-
-  delete from public.interview_grants where id = v_id;
-end $$;
+-- Cap behaviour is NOT exercised here. A schema migration should not insert,
+-- mutate and delete a production row to prove a function works. Run
+-- supabase/tests/consume_interview_turn_test.sql separately; it is wrapped in
+-- an explicit rollback and commits nothing.
