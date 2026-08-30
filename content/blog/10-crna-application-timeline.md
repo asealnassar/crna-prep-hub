@@ -71,7 +71,7 @@ The case log is the highest-leverage habit in this entire timeline and almost no
 
 ### 9–6 months out: references and drafting
 
-- **Identify references** and ask early. Give them your resume, your statement draft, and specifics you'd like emphasized. A reference written in a rush is generic.
+- **Identify references** and ask early. Give them your resume, your statement draft, and specifics you'd like emphasized — [CRNA school letters of recommendation](/blog/crna-school-letters-of-recommendation) covers who to ask and what the packet should contain. A reference written in a rush is generic.
 - **Draft your personal statement.** Expect five or more revisions. [Writing a CRNA personal statement](/blog/crna-personal-statement) covers structure and the mistakes that cost drafts the most.
 - **Build your resume**, rewriting clinical bullets to make acuity explicit — [building a CRNA school resume](/blog/crna-school-resume) sets out what to include and how to format it
 - **Order transcripts** from every institution attended

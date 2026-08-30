@@ -123,7 +123,7 @@ Work through this before writing a single essay:
 - [ ] Confirm current CCRN status and expiration date
 - [ ] Check whether each program requires the GRE this cycle
 - [ ] Identify shadowing requirements and whether hours must be documented
-- [ ] Confirm how many references each program wants and from whom
+- [ ] Confirm how many references each program wants and from whom — both vary, and [CRNA school letters of recommendation](/blog/crna-school-letters-of-recommendation) covers choosing and approaching recommenders once you know
 - [ ] Note each program's deadline and whether admission is rolling
 - [ ] Build a grid of all of the above, per program
 

@@ -141,7 +141,7 @@ That last one is the most common. A useful test: read each paragraph and ask whe
 
 **Draft five — read it aloud.** You'll hear awkwardness silent reading misses.
 
-**Then get outside eyes.** Ideally someone who knows CRNA admissions. A tool that checks structure and specificity is a reasonable first pass before you spend a colleague's time.
+**Then get outside eyes.** Ideally someone who knows CRNA admissions. A tool that checks structure and specificity is a reasonable first pass before you spend a colleague's time. A readable draft is also worth having ready for anyone writing on your behalf — [CRNA school letters of recommendation](/blog/crna-school-letters-of-recommendation) covers what to give a recommender, and your statement is part of it.
 
 Five drafts and a reference read take longer than most applicants plan for. In the [CRNA school application timeline](/blog/crna-application-timeline), drafting starts nine to six months before deadlines, for exactly this reason.
 
