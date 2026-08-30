@@ -163,6 +163,32 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
   const where = locationLine(school)
   const months = school.program_length_months
 
+  /**
+   * BreadcrumbList reflecting the page's position in the site hierarchy.
+   *
+   * The URL for the final item is built from the same `slug` the route
+   * resolved through buildSlugMap, so it is the canonical generateMetadata
+   * emits — one canonical, no second or conflicting declaration.
+   *
+   * Home is position 1 even though the visible trail starts at "CRNA Schools":
+   * the header logo links home on every page, and this matches the pattern
+   * already used by /blog/[slug].
+   */
+  const breadcrumbSchema = {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: SITE },
+      { '@type': 'ListItem', position: 2, name: 'CRNA Schools', item: `${SITE}/schools` },
+      {
+        '@type': 'ListItem',
+        position: 3,
+        name: school.name,
+        item: `${SITE}/schools/${slug}`,
+      },
+    ],
+  }
+
   // Every sentence below is assembled from database values only; each clause is
   // dropped when its field is empty rather than guessed at.
   const introBits: string[] = []
@@ -191,6 +217,11 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
   return (
     <div className="min-h-screen bg-[#F7F8FC]">
       <BlogShell>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
+        />
+
         <div className="mx-auto w-full max-w-3xl px-4 pb-20 pt-8 sm:px-6 lg:pt-12">
           <nav aria-label="Breadcrumb" className="mb-6 text-xs text-slate-400">
             <Link href="/schools" className="font-semibold text-violet-600 hover:text-violet-700">
