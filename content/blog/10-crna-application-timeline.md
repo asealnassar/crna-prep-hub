@@ -47,7 +47,7 @@ This is the diagnostic phase. Nothing else is efficient until it's done.
 - Identify **expired or missing prerequisites**, including recency limits
 - Decide whether a **unit change** is necessary
 
-Start with the [CRNA School Directory](/schools) to build the grid, and use the [GPA Analyzer](/gpa-calculator) to get your three GPAs — many applicants find their actual problem is narrower than they assumed.
+Start with the [CRNA School Directory](/schools) to build the grid, and use the [GPA Analyzer](/gpa-calculator) to get your three GPAs — many applicants find their actual problem is narrower than they assumed. If you are not yet sure what belongs in the grid, the overview of [CRNA school requirements](/blog/crna-school-requirements) sets out what programs generally expect, and [how CRNA schools calculate GPA](/blog/how-crna-schools-calculate-gpa) explains why the three numbers differ.
 
 **Decision point:** if the audit reveals a gap requiring more than six months to close, this determines your application year. Better to know now.
 
@@ -62,7 +62,7 @@ Retakes take a semester. Starting now means grades post before applications.
 
 ### 12–9 months out: certification and depth
 
-- Sit for **CCRN** if eligible
+- Sit for **CCRN** if eligible — whether a program requires it, and when it must be held, is covered in [is CCRN required for CRNA school](/blog/ccrn-for-crna-school)
 - Pursue **leadership** — precepting, charge, committee, rapid response
 - Seek **higher-acuity assignments** deliberately
 - Begin a **case log** — three lines after notable shifts (what was happening physiologically, what you did, what you'd change). This becomes your interview and personal statement material.
@@ -72,8 +72,8 @@ The case log is the highest-leverage habit in this entire timeline and almost no
 ### 9–6 months out: references and drafting
 
 - **Identify references** and ask early. Give them your resume, your statement draft, and specifics you'd like emphasized. A reference written in a rush is generic.
-- **Draft your personal statement.** Expect five or more revisions.
-- **Build your resume**, rewriting clinical bullets to make acuity explicit
+- **Draft your personal statement.** Expect five or more revisions. [Writing a CRNA personal statement](/blog/crna-personal-statement) covers structure and the mistakes that cost drafts the most.
+- **Build your resume**, rewriting clinical bullets to make acuity explicit — [building a CRNA school resume](/blog/crna-school-resume) sets out what to include and how to format it
 - **Order transcripts** from every institution attended
 
 Ask references at least three months before your earliest deadline. The strongest references come from people who need time to write something specific.
@@ -92,7 +92,8 @@ Don't wait for an invitation.
 
 - **Rebuild physiology** — vasopressors, hemodynamics, shock states, ventilation, acid-base
 - **Write your story bank** — five to seven specific incidents, in bullets
-- **Research each program's interview format**, collected in [School Interview Insights](/interview-prep)
+- **Research each program's interview format** and the question types that recur — [CRNA school interview questions](/blog/crna-school-interview-questions) breaks them down with answer frameworks
+- **Work to a preparation schedule** rather than ad hoc revision; [how to prepare for a CRNA school interview](/blog/how-to-prepare-for-crna-interview) lays out a six-week version
 - **Practice out loud with follow-ups**, not silently
 
 Invitations sometimes arrive with two weeks' notice. Applicants who start preparing on receipt are already behind.
