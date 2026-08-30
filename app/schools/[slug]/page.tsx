@@ -163,7 +163,9 @@ const MONTHS = [
  *   "September" / "September 1" / "February 28th"  ->  a real opening date
  *   "Rolling"                                      ->  rolling admissions
  */
-function applicationOpening(value: unknown): { kind: 'date'; text: string } | { kind: 'rolling' } | null {
+function applicationOpening(
+  value: unknown
+): { kind: 'month'; text: string } | { kind: 'day'; text: string } | { kind: 'rolling' } | null {
   const text = clean(value)
   if (!text) return null
   if (/^rolling$/i.test(text)) return { kind: 'rolling' }
@@ -174,7 +176,13 @@ function applicationOpening(value: unknown): { kind: 'date'; text: string } | { 
   if (!MONTHS.includes(month)) return null
 
   const proper = match[1][0].toUpperCase() + month.slice(1)
-  return { kind: 'date', text: match[2] ? `${proper} ${match[2]}` : proper }
+
+  // A bare month reads as a period and is stated as an opening. A specific
+  // day is reported neutrally: the column name is the only thing suggesting
+  // these are opening dates, and a mid-month date is equally the shape a
+  // deadline takes. Nothing in the stored value settles it, so the page does
+  // not claim to know.
+  return match[2] ? { kind: 'day', text: `${proper} ${match[2]}` } : { kind: 'month', text: proper }
 }
 
 /**
@@ -444,16 +452,23 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
                 Applying to {school.name}
               </h2>
               <div className="space-y-3 text-[16px] leading-relaxed text-slate-700">
-                <p>
-                  {opening.kind === 'rolling'
-                    ? `${school.name} accepts applications on a rolling basis.`
-                    : `Applications open ${/\d/.test(opening.text) ? 'on' : 'in'} ${opening.text}.`}{' '}
-                  Building backwards from that date is the point of the{' '}
-                  <Link href="/blog/crna-application-timeline" className="font-semibold text-violet-600 hover:text-violet-700">
-                    CRNA application timeline
-                  </Link>
-                  .
-                </p>
+                {opening.kind === 'day' ? (
+                  <p>
+                    Application date listed: {opening.text}. Confirm the current application
+                    opening and deadline directly with the program.
+                  </p>
+                ) : (
+                  <p>
+                    {opening.kind === 'rolling'
+                      ? `${school.name} accepts applications on a rolling basis.`
+                      : `Applications open in ${opening.text}.`}{' '}
+                    Building backwards from that is the point of the{' '}
+                    <Link href="/blog/crna-application-timeline" className="font-semibold text-violet-600 hover:text-violet-700">
+                      CRNA application timeline
+                    </Link>
+                    .
+                  </p>
+                )}
               </div>
             </section>
           )}
