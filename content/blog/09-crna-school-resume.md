@@ -111,7 +111,7 @@ List with full names, issuing body, and expiration:
 
 Credentials also belong after your name at the top. The AACN convention is highest degree first, then licensure, then certifications — for example, *Jordan Rivera, BSN, RN, CCRN*.
 
-If you hold subspecialty certification (CSC, CMC), list it — it signals deliberate depth beyond the baseline.
+If you hold subspecialty certification (CSC, CMC), list it — it signals deliberate depth beyond the baseline. What that baseline is varies by program, and [is CCRN required for CRNA school](/blog/ccrn-for-crna-school) works through which programs require the CCRN and when it has to be held.
 
 ## Formatting standards
 
@@ -135,9 +135,9 @@ If formatting is where you get stuck, the [Resume Builder](/resume-builder) foll
 
 **Unit type.** Frequently the first thing scanned. Make it unmissable — don't bury "cardiothoracic ICU" inside a paragraph.
 
-**Progression.** Movement from bedside toward precepting, charge, committee work reads as growth. A flat five years reads differently, even in a strong unit.
+**Progression.** Movement from bedside toward precepting, charge, committee work reads as growth. A flat five years reads differently, even in a strong unit. Progression is the one line on a resume you cannot write quickly — the [CRNA school application timeline](/blog/crna-application-timeline) puts leadership and higher-acuity assignments twelve to nine months out, which is roughly what it takes to have something to list.
 
-**Consistency with the rest of your file.** Your resume, personal statement, and interview answers should describe the same nurse. A resume claiming extensive CRRT experience paired with an interview answer that can't explain CRRT is a problem.
+**Consistency with the rest of your file.** Your resume, personal statement, and interview answers should describe the same nurse. A resume claiming extensive CRRT experience paired with an interview answer that can't explain CRRT is a problem. The two documents do different jobs — the resume is concise evidence that something happened, while [writing a CRNA personal statement](/blog/crna-personal-statement) covers turning one of those entries into narrative and reflection — but they must agree on the facts.
 
 ## Before and after: one applicant
 
