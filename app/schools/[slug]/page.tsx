@@ -8,6 +8,7 @@ import {
   slugForSchool,
   type PublicSchool,
 } from '@/lib/schools'
+import { eligibleStates, normalizeJurisdiction } from '@/lib/states'
 import BlogShell from '@/components/BlogShell'
 
 export const revalidate = 3600
@@ -229,6 +230,18 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
    */
   const allSchools = await getPublicSchools()
   const slugMap = buildSlugMap(allSchools)
+
+  /**
+   * The state hub, when one exists. Resolved through the same
+   * eligibleStates() the /schools/state route uses in generateStaticParams,
+   * so this can only ever link to a page that is actually generated — states
+   * with fewer than three programs, and Puerto Rico, resolve to nothing.
+   */
+  const jurisdiction = normalizeJurisdiction(school.location_state)
+  const stateHub = jurisdiction
+    ? eligibleStates(allSchools).find((g) => g.jurisdiction.slug === jurisdiction.slug) ?? null
+    : null
+
   const siblings = school.location_state
     ? allSchools
         .filter((s) => s.id !== school.id && s.location_state === school.location_state)
@@ -498,6 +511,19 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
                   </li>
                 ))}
               </ul>
+              {stateHub && (
+                <p className="mt-4 text-[15px]">
+                  <Link
+                    href={`/schools/state/${stateHub.jurisdiction.slug}`}
+                    className="font-semibold text-violet-600 hover:text-violet-700"
+                  >
+                    See all {stateHub.schools.length} CRNA programs in {stateHub.jurisdiction.name}
+                  </Link>{' '}
+                  <span className="text-slate-500">
+                    — compared side by side on GPA, ICU experience, tuition and format.
+                  </span>
+                </p>
+              )}
             </section>
           )}
 
