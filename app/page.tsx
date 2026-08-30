@@ -147,6 +147,63 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Free Tools — server-rendered links so the tool pages are reachable and
+          weighted from the homepage, which previously linked to neither. */}
+      <div className="max-w-7xl mx-auto px-4 pb-12 sm:pb-24">
+        <h2 className="text-2xl sm:text-3xl font-bold text-white text-center mb-3">Free CRNA Application Tools</h2>
+        <p className="text-sm sm:text-base text-indigo-200 text-center mb-8 sm:mb-12 max-w-2xl mx-auto">
+          Work out where you stand before you apply — no payment required to start.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
+          <Link href="/gpa-calculator" className="block bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
+            <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">📊</div>
+            <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">CRNA GPA Calculator</h3>
+            <p className="text-sm sm:text-base text-indigo-200">Calculate your science, nursing, overall and last 60 credits GPA the way CRNA programs do.</p>
+          </Link>
+          <Link href="/personal-statement" className="block bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
+            <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">✍️</div>
+            <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">Personal Statement Analyzer</h3>
+            <p className="text-sm sm:text-base text-indigo-200">Get AI feedback and a score on your CRNA personal statement before an admissions committee reads it.</p>
+          </Link>
+          <Link href="/interview" className="block bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
+            <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">🎤</div>
+            <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">Practice a CRNA Mock Interview</h3>
+            <p className="text-sm sm:text-base text-indigo-200">Answer adaptive clinical and behavioral questions, with follow-ups and written feedback.</p>
+          </Link>
+        </div>
+      </div>
+
+      {/* CRNA Guides — the article library had no path from the homepage. */}
+      <div className="max-w-7xl mx-auto px-4 pb-12 sm:pb-24">
+        <h2 className="text-2xl sm:text-3xl font-bold text-white text-center mb-3">CRNA Application Guides</h2>
+        <p className="text-sm sm:text-base text-indigo-200 text-center mb-8 sm:mb-12 max-w-2xl mx-auto">
+          Detailed, honest answers to the questions ICU nurses ask before applying.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+          <Link href="/blog/crna-school-requirements" className="block bg-white/10 backdrop-blur-md rounded-2xl p-5 sm:p-6 border border-white/10 hover:bg-white/15 transition">
+            <h3 className="text-base sm:text-lg font-bold text-white mb-2">CRNA School Requirements: What You Actually Need</h3>
+            <p className="text-sm text-indigo-200">GPA, ICU experience, certifications and prerequisites, and which of them are negotiable.</p>
+          </Link>
+          <Link href="/blog/icu-experience-for-crna-school" className="block bg-white/10 backdrop-blur-md rounded-2xl p-5 sm:p-6 border border-white/10 hover:bg-white/15 transition">
+            <h3 className="text-base sm:text-lg font-bold text-white mb-2">What ICU Experience Counts for CRNA School</h3>
+            <p className="text-sm text-indigo-200">How programs weigh different units, and what makes experience count as critical care.</p>
+          </Link>
+          <Link href="/blog/how-crna-schools-calculate-gpa" className="block bg-white/10 backdrop-blur-md rounded-2xl p-5 sm:p-6 border border-white/10 hover:bg-white/15 transition">
+            <h3 className="text-base sm:text-lg font-bold text-white mb-2">How CRNA Schools Calculate GPA</h3>
+            <p className="text-sm text-indigo-200">Cumulative, science and last 60 credits — why the same transcript produces different numbers.</p>
+          </Link>
+          <Link href="/blog/crna-school-interview-questions" className="block bg-white/10 backdrop-blur-md rounded-2xl p-5 sm:p-6 border border-white/10 hover:bg-white/15 transition">
+            <h3 className="text-base sm:text-lg font-bold text-white mb-2">CRNA School Interview Questions</h3>
+            <p className="text-sm text-indigo-200">The question types programs actually use, and frameworks for answering each one.</p>
+          </Link>
+        </div>
+        <div className="text-center mt-8">
+          <Link href="/blog" className="inline-block bg-white/10 backdrop-blur-sm text-white px-6 py-3 rounded-xl font-semibold hover:bg-white/20 transition border border-white/20">
+            Browse all CRNA school guides
+          </Link>
+        </div>
+      </div>
+
       {/* CTA Section */}
       {/* TikTok Section - lazy-loaded, only mounts the heavy embeds once scrolled near */}
       <LazyTikTokSection />
