@@ -265,15 +265,30 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
    * the header logo links home on every page, and this matches the pattern
    * already used by /blog/[slug].
    */
+  // The state sits between the directory and the school only where a state
+  // landing page actually exists — stateHub resolves through the same
+  // eligibleStates() the /schools/state route uses, so the breadcrumb can
+  // never point at a URL that 404s. Schools in one- and two-program states,
+  // and Puerto Rico, keep the three-item trail.
   const breadcrumbSchema = {
     '@context': 'https://schema.org',
     '@type': 'BreadcrumbList',
     itemListElement: [
       { '@type': 'ListItem', position: 1, name: 'Home', item: SITE },
       { '@type': 'ListItem', position: 2, name: 'CRNA Schools', item: `${SITE}/schools` },
+      ...(stateHub
+        ? [
+            {
+              '@type': 'ListItem',
+              position: 3,
+              name: stateHub.jurisdiction.name,
+              item: `${SITE}/schools/state/${stateHub.jurisdiction.slug}`,
+            },
+          ]
+        : []),
       {
         '@type': 'ListItem',
-        position: 3,
+        position: stateHub ? 4 : 3,
         name: school.name,
         item: `${SITE}/schools/${slug}`,
       },
@@ -362,6 +377,17 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
               CRNA Schools
             </Link>
             <span className="mx-2">/</span>
+            {stateHub && (
+              <>
+                <Link
+                  href={`/schools/state/${stateHub.jurisdiction.slug}`}
+                  className="font-semibold text-violet-600 hover:text-violet-700"
+                >
+                  {stateHub.jurisdiction.name}
+                </Link>
+                <span className="mx-2">/</span>
+              </>
+            )}
             <span>{school.name}</span>
           </nav>
 
