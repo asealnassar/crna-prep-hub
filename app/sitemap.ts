@@ -1,6 +1,7 @@
 import type { MetadataRoute } from 'next'
 import { getAllPosts } from '@/lib/blog'
 import { buildSlugMap, getPublicSchools } from '@/lib/schools'
+import { eligibleStates } from '@/lib/states'
 
 const SITE = 'https://www.crnaprephub.com'
 
@@ -41,10 +42,20 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // No lastModified: the schools table has created_at but no updated_at, so
   // there is no accurate modification date to report. Stamping today's date on
   // every request would be a false freshness signal.
-  const schoolSlugs = Array.from(buildSlugMap(await getPublicSchools()).keys()).sort()
+  const allSchools = await getPublicSchools()
+  const schoolSlugs = Array.from(buildSlugMap(allSchools).keys()).sort()
   const schoolPages = schoolSlugs.map((slug) => ({
     url: `${SITE}/schools/${slug}`,
   }))
 
-  return [...staticPages, ...posts, ...schoolPages]
+  // State landing pages, from the same eligibility function the route uses in
+  // generateStaticParams — so a sitemap URL cannot point at a page that does
+  // not exist, and ineligible states are never listed.
+  const statePages = eligibleStates(allSchools).map((group) => ({
+    url: `${SITE}/schools/state/${group.jurisdiction.slug}`,
+    changeFrequency: 'monthly' as const,
+    priority: 0.7,
+  }))
+
+  return [...staticPages, ...posts, ...statePages, ...schoolPages]
 }

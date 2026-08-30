@@ -1,7 +1,9 @@
 import { cache } from 'react'
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { createClient } from '@supabase/supabase-js'
 import SchoolsClient from './SchoolsClient'
+import { eligibleStates } from '@/lib/states'
 
 const SITE = 'https://www.crnaprephub.com'
 
@@ -76,5 +78,39 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function SchoolsPage() {
   const schools = await getSchools()
-  return <SchoolsClient initialSchools={schools} />
+  // Server-rendered so the state pages are crawlable from the directory hub.
+  // Only states that actually have a landing page are listed — a link to a
+  // state with one or two programs would 404.
+  const states = eligibleStates(schools as any)
+
+  return (
+    <>
+      <SchoolsClient initialSchools={schools} />
+      {states.length > 0 && (
+        <section className="border-t border-white/10 bg-[#0B1220] px-4 py-12 sm:px-6">
+          <div className="mx-auto w-full max-w-5xl">
+            <h2 className="mb-2 text-xl font-bold tracking-tight text-white sm:text-2xl">
+              Browse CRNA schools by state
+            </h2>
+            <p className="mb-6 text-[14px] text-slate-400">
+              States with three or more nurse anesthesia programs in the directory.
+            </p>
+            <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+              {states.map(({ jurisdiction, schools: stateSchools }) => (
+                <li key={jurisdiction.slug}>
+                  <Link
+                    href={`/schools/state/${jurisdiction.slug}`}
+                    className="block rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-[14px] font-semibold text-white transition hover:border-violet-400"
+                  >
+                    CRNA schools in {jurisdiction.name}
+                    <span className="ml-1 font-normal text-slate-400">({stateSchools.length})</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
+    </>
+  )
 }
