@@ -121,6 +121,64 @@ export async function generateMetadata(
   }
 }
 
+/**
+ * Values in these free-text columns are frequently placeholders rather than
+ * data. Rendering them verbatim produced rows reading "Not specified" on more
+ * than a hundred pages, so anything matching this is treated as absent.
+ */
+const PLACEHOLDER =
+  /^(not specified|not published|not applicable|n\/?a|none|none noted|none listed|tbd|unknown|varies|-+)$/i
+
+function clean(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  const text = String(value).trim()
+  if (!text || PLACEHOLDER.test(text)) return null
+  return text
+}
+
+const MONTHS = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+]
+
+/**
+ * application_opens_month is not a month column in practice: alongside real
+ * values it holds placeholders, vague seasons ("Fall", "Late Winter"),
+ * deadlines and free-text notes. Only two shapes can be stated accurately as
+ * application timing, so everything else omits the section rather than
+ * guessing at what the stored text meant.
+ *
+ *   "September" / "September 1" / "February 28th"  ->  a real opening date
+ *   "Rolling"                                      ->  rolling admissions
+ */
+function applicationOpening(value: unknown): { kind: 'date'; text: string } | { kind: 'rolling' } | null {
+  const text = clean(value)
+  if (!text) return null
+  if (/^rolling$/i.test(text)) return { kind: 'rolling' }
+
+  const match = text.match(/^([A-Za-z]+)(?:\s+(\d{1,2})(?:st|nd|rd|th)?)?$/)
+  if (!match) return null
+  const month = match[1].toLowerCase()
+  if (!MONTHS.includes(month)) return null
+
+  const proper = match[1][0].toUpperCase() + month.slice(1)
+  return { kind: 'date', text: match[2] ? `${proper} ${match[2]}` : proper }
+}
+
+/**
+ * prerequisites_not_required is the least reliable column on the table: most
+ * rows are placeholders, several hold markdown notes, and a handful contain
+ * deadline or GRE information — both of which are paid fields elsewhere. Only
+ * text that reads as an actual list of coursework is shown.
+ */
+function usableNotRequired(value: unknown): string | null {
+  const text = clean(value)
+  if (!text || text.length < 8) return null
+  if (text.includes('**') || /^note\b/i.test(text)) return null
+  if (/\bdeadline\b|\bGRE\b/i.test(text)) return null
+  return text
+}
+
 /** Only renders a row when the database actually holds a value — nothing invented. */
 function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   if (value === null || value === undefined || value === '') return null
@@ -189,30 +247,72 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
     ],
   }
 
-  // Every sentence below is assembled from database values only; each clause is
-  // dropped when its field is empty rather than guessed at.
-  const introBits: string[] = []
-  introBits.push(
-    `${school.name} offers a nurse anesthesia program${
-      school.program_type ? ` awarding a ${school.program_type}` : ''
-    }${where ? `, based in ${where}` : ''}.`
-  )
-  if (months) {
-    introBits.push(
-      `The program runs ${months} months${
-        months % 12 === 0 ? ` (${months / 12} years)` : ''
-      }${school.format ? ` and is delivered in a ${school.format.toLowerCase()} format` : ''}.`
+  // Every sentence below is assembled from database values that actually
+  // exist. Rather than one template with blanks, each section picks a
+  // construction based on which fields are present, so a school with three
+  // recorded fields does not read like a school with eight, redacted.
+  const tuitionTotal = school.tuition_total
+  const tuitionYearly = school.tuition_yearly
+  const frontLoaded = /^yes$/i.test(String(school.front_loaded ?? ''))
+  const prereqs = clean(school.prerequisites_required)
+  const notRequired = usableNotRequired(school.prerequisites_not_required)
+  const opening = applicationOpening(school.application_opens_month)
+
+  const lead = `${school.name} offers a nurse anesthesia program${
+    school.program_type ? ` awarding a ${school.program_type}` : ''
+  }${where ? `, based in ${where}` : ''}.`
+
+  const costSentences: string[] = []
+  if (tuitionTotal) {
+    // tuition_yearly is printed only where the column holds a value. It is
+    // never derived from tuition_total divided by program length -- that
+    // arithmetic would invent a figure the program never published.
+    if (tuitionYearly && months) {
+      costSentences.push(
+        `Total tuition is listed at ${usd(tuitionTotal)}, or ${usd(tuitionYearly)} per year across the ${months}-month program.`
+      )
+    } else if (tuitionYearly) {
+      costSentences.push(
+        `Total tuition is listed at ${usd(tuitionTotal)}, with yearly tuition of ${usd(tuitionYearly)}.`
+      )
+    } else if (months) {
+      costSentences.push(
+        `Total tuition is listed at ${usd(tuitionTotal)} for the ${months}-month program.`
+      )
+    } else {
+      costSentences.push(`Total tuition is listed at ${usd(tuitionTotal)}.`)
+    }
+  } else if (months) {
+    costSentences.push(
+      `The program runs ${months} months${months % 12 === 0 ? ` (${months / 12} years)` : ''}. Tuition is not recorded in this directory.`
     )
-  } else if (school.format) {
-    introBits.push(`It is delivered in a ${school.format.toLowerCase()} format.`)
   }
-  if (school.gpa_requirement || school.icu_experience_months) {
-    const reqs: string[] = []
-    if (school.gpa_requirement) reqs.push(`a minimum GPA of ${school.gpa_requirement}`)
-    if (school.icu_experience_months)
-      reqs.push(`${school.icu_experience_months} months of critical care experience`)
-    introBits.push(`Published admission requirements include ${reqs.join(' and ')}.`)
+  if (frontLoaded) {
+    costSentences.push(
+      `${school.name} runs a front-loaded curriculum, with didactic coursework concentrated before clinical rotations begin.`
+    )
   }
+
+  const admissionSentences: string[] = []
+  if (school.gpa_requirement && school.icu_experience_months) {
+    admissionSentences.push(
+      `${school.name} publishes a minimum GPA of ${school.gpa_requirement} and requires ${school.icu_experience_months} months of critical care experience.`
+    )
+  } else if (school.gpa_requirement) {
+    admissionSentences.push(`${school.name} publishes a minimum GPA of ${school.gpa_requirement}.`)
+  } else if (school.icu_experience_months) {
+    admissionSentences.push(
+      `${school.name} requires ${school.icu_experience_months} months of critical care experience.`
+    )
+  }
+  if (prereqs) {
+    admissionSentences.push(
+      /^none\b/i.test(prereqs)
+        ? 'No specific prerequisite coursework is listed beyond the standard entry requirements.'
+        : `Listed prerequisite coursework: ${prereqs}.`
+    )
+  }
+  if (notRequired) admissionSentences.push(`Not required: ${notRequired}.`)
 
   return (
     <div className="min-h-screen bg-[#F7F8FC]">
@@ -258,92 +358,93 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
           </header>
 
           <section className="mb-8">
-            <h2 className="mb-3 text-xl font-bold tracking-tight text-slate-900">Program overview</h2>
-            <div className="space-y-3 text-[16px] leading-relaxed text-slate-700">
-              {introBits.map((line, i) => (
-                <p key={i}>{line}</p>
-              ))}
-            </div>
+            <p className="text-[16px] leading-relaxed text-slate-700">{lead}</p>
           </section>
 
+          {/* Compact facts. Deliberately limited to the four scannable
+              attributes; GPA, ICU, tuition and prerequisites are covered in
+              the sections below rather than duplicated here. */}
           <section className="mb-8 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] sm:p-6">
             <h2 className="mb-1 text-xl font-bold tracking-tight text-slate-900">
               Program details
             </h2>
             <p className="mb-4 text-[13px] text-slate-400">
-              As recorded in the CRNA Prep Hub directory. Always confirm against the program.
+              As recorded in the CRNA Prep Hub directory — always confirm against the program.
             </p>
             <dl>
               <Fact label="Location" value={where} />
               <Fact label="Program type" value={school.program_type} />
-              <Fact label="Program format" value={school.format} />
-              <Fact
-                label="Program length"
-                value={months ? `${months} months` : null}
-              />
-              <Fact
-                label="Minimum GPA"
-                value={school.gpa_requirement ? String(school.gpa_requirement) : null}
-              />
-              <Fact
-                label="ICU experience required"
-                value={
-                  school.icu_experience_months
-                    ? `${school.icu_experience_months} months`
-                    : null
-                }
-              />
-              <Fact
-                label="Accepts new-grad ICU"
-                value={
-                  school.accepts_new_grad_icu === null
-                    ? null
-                    : school.accepts_new_grad_icu
-                      ? 'Yes'
-                      : 'No'
-                }
-              />
-              <Fact
-                label="Total tuition"
-                value={school.tuition_total ? usd(school.tuition_total) : null}
-              />
-              <Fact
-                label="Yearly tuition"
-                value={school.tuition_yearly ? usd(school.tuition_yearly) : null}
-              />
-              <Fact label="Application opens" value={school.application_opens_month} />
-              <Fact label="Prerequisites required" value={school.prerequisites_required} />
-              <Fact
-                label="Prerequisites not required"
-                value={school.prerequisites_not_required}
-              />
+              <Fact label="Program format" value={clean(school.format)} />
+              <Fact label="Program length" value={months ? `${months} months` : null} />
             </dl>
           </section>
 
-          <section className="mb-8 rounded-2xl border border-violet-200 bg-white p-5 sm:p-6">
-            <h2 className="text-lg font-bold tracking-tight text-slate-900">
-              Preparing to interview at {school.name}?
-            </h2>
-            <p className="mt-2 text-[15px] leading-relaxed text-slate-600">
-              School Interview Styles collects program-specific interview format details, and the AI
-              Mock Interview lets you practise clinical and behavioural questions with adaptive
-              follow-ups.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <Link
-                href="/interview-prep"
-                className="rounded-xl bg-gradient-to-r from-violet-600 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:from-violet-700 hover:to-indigo-600"
-              >
-                School Interview Styles
-              </Link>
-              <Link
-                href="/interview"
-                className="rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-violet-400"
-              >
-                Practise a mock interview
-              </Link>
-            </div>
-          </section>
+          {costSentences.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-3 text-xl font-bold tracking-tight text-slate-900">
+                Cost and program length
+              </h2>
+              <div className="space-y-3 text-[16px] leading-relaxed text-slate-700">
+                {costSentences.map((line, i) => (
+                  <p key={i}>{line}</p>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {admissionSentences.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-3 text-xl font-bold tracking-tight text-slate-900">
+                Admission requirements
+              </h2>
+              <div className="space-y-3 text-[16px] leading-relaxed text-slate-700">
+                {admissionSentences.map((line, i) => (
+                  <p key={i}>{line}</p>
+                ))}
+                <p>
+                  Programs weigh cumulative, science and last-60-credit GPAs differently — the{' '}
+                  <Link href="/gpa-calculator" className="font-semibold text-violet-600 hover:text-violet-700">
+                    CRNA GPA calculator
+                  </Link>{' '}
+                  works out all four, and{' '}
+                  <Link href="/blog/how-crna-schools-calculate-gpa" className="font-semibold text-violet-600 hover:text-violet-700">
+                    how CRNA schools calculate GPA
+                  </Link>{' '}
+                  explains why the same transcript produces different numbers.
+                  {school.icu_experience_months ? (
+                    <>
+                      {' '}If you are unsure whether your unit counts,{' '}
+                      <Link href="/blog/icu-experience-for-crna-school" className="font-semibold text-violet-600 hover:text-violet-700">
+                        what ICU experience counts for CRNA school
+                      </Link>{' '}
+                      covers how programs assess it.
+                    </>
+                  ) : null}
+                </p>
+              </div>
+            </section>
+          )}
+
+          {opening && (
+            <section className="mb-8">
+              <h2 className="mb-3 text-xl font-bold tracking-tight text-slate-900">
+                Applying to {school.name}
+              </h2>
+              <div className="space-y-3 text-[16px] leading-relaxed text-slate-700">
+                <p>
+                  {opening.kind === 'rolling'
+                    ? `${school.name} accepts applications on a rolling basis.`
+                    : `Applications open ${/\d/.test(opening.text) ? 'on' : 'in'} ${opening.text}.`}{' '}
+                  Building backwards from that date is the point of the{' '}
+                  <Link href="/blog/crna-application-timeline" className="font-semibold text-violet-600 hover:text-violet-700">
+                    CRNA application timeline
+                  </Link>
+                  .
+                </p>
+              </div>
+            </section>
+          )}
+
 
           {/* Omitted entirely when the state has no other program, rather than
               rendering an empty box. */}
@@ -371,6 +472,27 @@ export default async function SchoolPage({ params }: { params: Promise<{ slug: s
               </ul>
             </section>
           )}
+
+          {/* Replaces the old "Preparing to interview at {school}?" block, which
+              was identical on all 135 pages and whose primary link pointed at
+              /interview-prep — a noindex route. These point at indexable pages
+              and read as next steps rather than a link list. */}
+          <section className="mb-8 rounded-2xl border border-violet-200 bg-white p-5 sm:p-6">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">
+              Prepare for your CRNA application
+            </h2>
+            <p className="mt-2 text-[15px] leading-relaxed text-slate-600">
+              Once a program is on your list, the work is your own application. The{' '}
+              <Link href="/interview" className="font-semibold text-violet-600 hover:text-violet-700">
+                AI mock interview
+              </Link>{' '}
+              runs adaptive clinical and behavioural questions with follow-ups, and the{' '}
+              <Link href="/personal-statement" className="font-semibold text-violet-600 hover:text-violet-700">
+                personal statement analyzer
+              </Link>{' '}
+              scores a draft before an admissions committee reads it.
+            </p>
+          </section>
 
           <Link
             href="/schools"
