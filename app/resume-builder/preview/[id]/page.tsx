@@ -97,10 +97,14 @@ export default function PreviewResume() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          icuPosition: icuData.positions[positionIndex],
-          userTier
+          icuPosition: icuData.positions[positionIndex]
         })
       })
+
+      if (res.status === 401) {
+        alert('Please sign in again to enhance bullet points.')
+        return
+      }
 
       const data = await res.json()
       if (data.bullets) {

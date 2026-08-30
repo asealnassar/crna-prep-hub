@@ -129,10 +129,14 @@ export default function EditResume() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          icuPosition: formData.icu_experience.positions[positionIndex],
-          userTier
+          icuPosition: formData.icu_experience.positions[positionIndex]
         })
       })
+
+      if (res.status === 401) {
+        alert('Please sign in again to enhance bullet points.')
+        return
+      }
 
       const data = await res.json()
       if (data.bullets) {

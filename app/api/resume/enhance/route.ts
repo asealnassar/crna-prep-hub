@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import { authenticateRequest } from '@/lib/apiAuth'
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -7,9 +8,23 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   try {
-    const { icuPosition, userTier } = await request.json()
+    // Authorization runs before the body is read and before any OpenAI call,
+    // so an unauthorized request costs zero tokens. This route was previously
+    // open: an unauthenticated POST returned real GPT-4o output, and the
+    // Ultimate branch was unlocked by whatever the caller claimed.
+    const auth = await authenticateRequest()
+    if (!auth) {
+      return NextResponse.json(
+        { error: 'You must be signed in to enhance resume bullet points.' },
+        { status: 401 }
+      )
+    }
 
-    const isUltimate = userTier === 'ultimate'
+    const { icuPosition } = await request.json()
+
+    // Read from the database via the verified session, never from the request
+    // body. A client claiming userTier: 'ultimate' has no effect here.
+    const isUltimate = auth.isUltimate
 
     // Build context from ICU position data
     const context = {
