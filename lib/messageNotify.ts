@@ -164,6 +164,15 @@ export async function handleMessageNotification(request: NextRequest) {
     // determine identity.
     const claimedPreview = typeof body?.messagePreview === 'string' ? body.messagePreview : ''
 
+    // Optional: the id of the message that triggered this notification. When
+    // supplied, the preview comes from that exact row rather than "the
+    // caller's most recent message in a shared thread" -- two replies landing
+    // together would otherwise email the wrong text.
+    const messageId = typeof body?.messageId === 'string' ? body.messageId : ''
+    if (messageId && !UUID_RE.test(messageId)) {
+      return NextResponse.json({ error: 'Invalid message id' }, { status: 400 })
+    }
+
     // 2. Sender identity from the verified session only.
     const isAdmin = isAdminEmail(auth.email)
     const senderName = isAdmin ? 'CRNA Prep Hub Admin' : (auth.email || 'A CRNA Prep Hub member')
@@ -220,7 +229,26 @@ export async function handleMessageNotification(request: NextRequest) {
     // 5. Preview text from the stored message wherever one exists, so the
     //    browser cannot fabricate the body of an email we send.
     let preview = ''
-    if (sharedThreadIds.length > 0) {
+    if (messageId) {
+      // Named message: it must have been written by the caller and must sit in
+      // a thread the caller shares with this recipient. Both are checked
+      // against the database, so an id belonging to someone else's
+      // conversation cannot be used to email its contents.
+      const { data: named } = await adminClient
+        .from('thread_messages')
+        .select('message_text, sender_id, thread_id')
+        .eq('id', messageId)
+        .maybeSingle()
+
+      if (
+        !named ||
+        named.sender_id !== auth.userId ||
+        !sharedThreadIds.includes(named.thread_id)
+      ) {
+        return NextResponse.json({ error: 'Message not found for this conversation' }, { status: 403 })
+      }
+      preview = String(named.message_text ?? '')
+    } else if (sharedThreadIds.length > 0) {
       const { data: lastMessage } = await adminClient
         .from('thread_messages')
         .select('message_text')

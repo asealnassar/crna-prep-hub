@@ -368,9 +368,44 @@ let otherEmail = 'Unknown'
       .update({ updated_at: new Date().toISOString() })
       .eq('id', selectedThread.id)
 
+    // Replies previously stopped here, so the other participant was never
+    // emailed -- only new threads triggered a notification. One request per
+    // other participant (one, in a normal two-party thread). The sender is
+    // already excluded: `participants` is queried with .neq('user_id', user.id).
+    //
+    // The reply itself is saved above and is never rolled back if the email
+    // fails, and nothing here retries, so a notification failure cannot
+    // duplicate the message.
+    let notifyFailed = false
+    if (participants && newMessage) {
+      for (const p of participants) {
+        try {
+          const res = await fetch('/api/messages/notify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              recipientId: p.user_id,
+              // The exact message just written. The server validates that it
+              // belongs to this sender and to a thread shared with the
+              // recipient, then uses its stored text for the preview.
+              messageId: newMessage.id,
+            }),
+          })
+          if (!res.ok) notifyFailed = true
+        } catch (err) {
+          console.error('Reply notification failed:', err)
+          notifyFailed = true
+        }
+      }
+    }
+
     setReplyText('')
     setSending(false)
     loadThread(selectedThread.id)
+
+    if (notifyFailed) {
+      alert('Your reply was sent, but the email notification could not be delivered.')
+    }
   }
 
 const composeMessage = async () => {
