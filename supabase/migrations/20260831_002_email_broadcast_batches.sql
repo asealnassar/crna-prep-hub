@@ -29,9 +29,25 @@ alter table public.email_broadcasts
   add column if not exists lease_expires_at timestamptz,
   add column if not exists lease_owner      uuid;
 
-alter table public.email_broadcasts
-  add constraint email_broadcasts_planned_batches_positive
-  check (planned_batches is null or planned_batches > 0);
+-- ADD CONSTRAINT has no IF NOT EXISTS, so guard it to keep this file
+-- re-runnable alongside the ADD COLUMN IF NOT EXISTS above.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'public.email_broadcasts'::regclass
+       and conname  = 'email_broadcasts_planned_batches_positive'
+  ) then
+    alter table public.email_broadcasts
+      add constraint email_broadcasts_planned_batches_positive
+      check (planned_batches is null or planned_batches > 0);
+  end if;
+end $$;
+
+-- NOTE: planned_batches is immutable by convention, enforced in application
+-- code (it is only ever set when it is NULL). A CHECK cannot express "never
+-- changes once set"; a trigger could, and is deliberately not added here to
+-- keep the migration to schema only.
 
 -- ---------------------------------------------------------------------------
 -- 2. Immutable batch plans. Inserted in ONE statement, before any Resend call.
