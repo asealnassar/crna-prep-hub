@@ -435,11 +435,18 @@ const composeMessage = async () => {
               }),
             })
 
-            // Another worker holds the lease, or this one has more to do.
+            // Another worker holds the lease, or batches remain unfinished.
             // Keep polling; do not report failure.
+            //
+            // Both conditions are checked deliberately. The server sets
+            // still_processing whenever work is outstanding, and that is the
+            // same condition that produces status 'sending' — but the client
+            // should not depend on the server always sending both. A batch
+            // left recoverable must never be abandoned just because the
+            // request returned 200.
             if (res.status === 200) {
               const result = await res.json()
-              if (result.still_processing) continue
+              if (result.still_processing || result.status === 'sending') continue
               emailSummary = describe(result)
               break
             }
