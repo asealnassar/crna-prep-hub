@@ -393,41 +393,67 @@ const composeMessage = async () => {
           p_tier: compose.selectedTier
         })
 
-        // Email notifications are sent server-side in batches. The browser
-        // used to loop one unawaited request per recipient, which meant 114
-        // concurrent Resend calls and no idea how many actually landed. It
-        // now makes one awaited call and reports the real counts.
-        //
-        // requestKey is generated once for this send and replayed on retry,
-        // so a double-click cannot start a second broadcast.
+        // The in-app messages are already created by send_tier_broadcast above.
+        // Email delivery is a separate, recoverable concern: this key is
+        // generated once and replayed on every retry, so a retry resumes the
+        // same broadcast instead of starting a second one. send_tier_broadcast
+        // is NEVER called again as part of email recovery.
         const requestKey =
           typeof crypto !== 'undefined' && 'randomUUID' in crypto
             ? crypto.randomUUID()
             : `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
-        let emailSummary = ''
-        try {
-          const res = await fetch('/api/messages/broadcast', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              tier: compose.selectedTier,
-              requestKey,
-              subject: compose.subject,
-              message: compose.message,
-            }),
-          })
-          const result = await res.json()
-          if (!res.ok) {
-            emailSummary = `\n\nEmail notifications could not be sent: ${result.error || 'unknown error'}`
-          } else if (result.failed > 0) {
-            emailSummary = `\n\n${result.succeeded} of ${result.attempted} email notifications were sent. ${result.failed} failed.`
-          } else {
-            emailSummary = `\n\nEmail notifications sent to ${result.succeeded} of ${result.attempted} ${compose.selectedTier} members.`
+        const describe = (r: any) => {
+          if (r.uncertain > 0) {
+            return `\n\n${r.succeeded} email notifications were confirmed sent. Delivery status for ${r.uncertain} requires review. Do not resend this broadcast until checked.`
           }
-        } catch (err) {
-          console.error('Broadcast notification failed:', err)
-          emailSummary = '\n\nThe in-app message was sent, but email notifications could not be dispatched.'
+          if (r.failed > 0) {
+            return `\n\n${r.succeeded} of ${r.attempted} email notifications were sent. ${r.failed} failed.`
+          }
+          return `\n\nEmail notifications sent to ${r.succeeded} of ${r.attempted} ${compose.selectedTier} members.`
+        }
+
+        // Bounded: roughly a minute of polling across six attempts. Every call
+        // carries the same requestKey.
+        const DELAYS_MS = [0, 2000, 4000, 8000, 16000, 30000]
+        let emailSummary =
+          '\n\nThe in-app message was sent. Email notifications are still processing.'
+
+        for (let attempt = 0; attempt < DELAYS_MS.length; attempt++) {
+          if (DELAYS_MS[attempt] > 0) {
+            await new Promise((r) => setTimeout(r, DELAYS_MS[attempt]))
+          }
+          try {
+            const res = await fetch('/api/messages/broadcast', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                tier: compose.selectedTier,
+                requestKey,
+                subject: compose.subject,
+                message: compose.message,
+              }),
+            })
+
+            // Another worker holds the lease, or this one has more to do.
+            // Keep polling; do not report failure.
+            if (res.status === 200) {
+              const result = await res.json()
+              if (result.still_processing) continue
+              emailSummary = describe(result)
+              break
+            }
+
+            // Transient server-side problem: retry the same key.
+            if (res.status >= 500) continue
+
+            const result = await res.json().catch(() => ({}))
+            emailSummary = `\n\nEmail notifications could not be sent: ${result.error || `error ${res.status}`}`
+            break
+          } catch (err) {
+            // Network failure. Retry the email endpoint only — never the RPC.
+            console.error('Broadcast notification attempt failed:', err)
+          }
         }
 
         alert(`Message sent to ${count} users in ${compose.selectedTier} tier${emailSummary}`)
