@@ -113,13 +113,28 @@ const [compose, setCompose] = useState({
    * membership. Returns an empty map on failure, which renders as the existing
    * "Unknown" fallback rather than breaking the list.
    */
-  const fetchParticipantEmails = async (): Promise<Record<string, { email: string }>> => {
+  /**
+   * Inbox metadata: counterpart addresses, per-thread state, and broadcast
+   * groups. One request replaces the per-thread participant query this
+   * component used to run once per conversation — 522 of them at the last
+   * count, which is why names intermittently rendered as "Unknown".
+   */
+  const fetchInboxMeta = async (): Promise<{
+    emails: Record<string, { email: string }>
+    threads: any[]
+    groups: any[]
+  }> => {
     try {
       const res = await fetch('/api/messages/participants', { method: 'POST' })
-      if (!res.ok) return {}
-      return await res.json()
+      if (!res.ok) return { emails: {}, threads: [], groups: [] }
+      const data = await res.json()
+      return {
+        emails: data.emails ?? {},
+        threads: data.threads ?? [],
+        groups: data.groups ?? [],
+      }
     } catch {
-      return {}
+      return { emails: {}, threads: [], groups: [] }
     }
   }
 
@@ -153,97 +168,64 @@ const [compose, setCompose] = useState({
       return
     }
 
-    const participantEmails = await fetchParticipantEmails()
+    // Single request: addresses, per-thread state and broadcast groups.
+    const meta = await fetchInboxMeta()
+    const metaByThread = new Map<string, any>(meta.threads.map((t: any) => [t.thread_id, t]))
 
-    const processedThreads = await Promise.all(
-      threadsData.map(async (thread: any) => {
-        const { data: participants } = await supabase
-          .from('thread_participants')
-          .select('user_id')
-          .eq('thread_id', thread.id)
-          .neq('user_id', user.id)
+    const processedThreads = threadsData.map((thread: any) => {
+      const m = metaByThread.get(thread.id)
+      const email = m?.counterpart_id ? meta.emails[m.counterpart_id]?.email : undefined
 
-        const otherUserId = participants?.[0]?.user_id
+      let otherEmail = 'Unknown'
+      if (email === 'asealnassar@gmail.com') otherEmail = 'CRNA PREP HUB Admin Team'
+      else if (email) otherEmail = email
 
-let otherEmail = 'Unknown'
-        if (otherUserId) {
-          const email = participantEmails[otherUserId]?.email
+      return {
+        ...thread,
+        otherParticipantEmail: otherEmail,
+        unreadCount: m?.unread_count ?? 0,
+        recipientHasRead: m?.recipient_has_read ?? true,
+        lastMessage: m?.last_message ?? '',
+        lastMessageTime: m?.last_message_at ?? thread.created_at,
+        groupId: m?.group_id ?? null,
+      }
+    })
 
-          // Show "CRNA PREP HUB Admin Team" if messaging admin
-          if (email === 'asealnassar@gmail.com') {
-            otherEmail = 'CRNA PREP HUB Admin Team'
-          } else {
-            otherEmail = email || 'Unknown'
-          }
-        }
-        const { data: lastMsg } = await supabase
-          .from('thread_messages')
-          .select('message_text, created_at')
-          .eq('thread_id', thread.id)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single()
+    // Threads belonging to a broadcast fan-out collapse into one row until
+    // the recipient replies, at which point the server stops assigning them a
+    // group and they reappear here as ordinary conversations.
+    const grouped = processedThreads.filter(t => t.groupId)
+    const individual = processedThreads.filter(t => !t.groupId)
 
-        // Track 1: Messages YOU haven't read (for blue dot indicator)
-        const { data: unreadMsgs } = await supabase
-          .from('thread_messages')
-          .select('id')
-          .eq('thread_id', thread.id)
-          .neq('sender_id', user.id)
-
-        let unreadCount = 0
-        if (unreadMsgs && unreadMsgs.length > 0) {
-          for (const msg of unreadMsgs) {
-            const { data: readStatuses } = await supabase
-              .from('message_read_status')
-              .select('read_at')
-              .eq('message_id', msg.id)
-              .eq('user_id', user.id)
-            
-            if (!readStatuses || readStatuses.length === 0 || !readStatuses[0]?.read_at) {
-              unreadCount++
-            }
-          }
-        }
-
-        // Track 2: Whether THEY read YOUR last message (for filtering)
-        let recipientHasRead = true // Default to true
-        if (lastMsg) {
-          const { data: lastMsgFull } = await supabase
-            .from('thread_messages')
-            .select('sender_id, id')
-            .eq('thread_id', thread.id)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .single()
-
-          if (lastMsgFull && lastMsgFull.sender_id === user.id) {
-            // You sent the last message - check if recipient read it
-            const { data: readStatus } = await supabase
-              .from('message_read_status')
-              .select('read_at')
-              .eq('message_id', lastMsgFull.id)
-              .neq('user_id', user.id)
-              .single()
-
-            recipientHasRead = !!readStatus?.read_at
-          }
-        }
-
+    const groupRows = meta.groups
+      .filter((g: any) => grouped.some(t => t.groupId === g.group_id))
+      .map((g: any) => {
+        const members = grouped.filter(t => t.groupId === g.group_id)
+        const newest = members.reduce(
+          (a, b) => (a.lastMessageTime > b.lastMessageTime ? a : b),
+          members[0]
+        )
         return {
-          ...thread,
-          otherParticipantEmail: otherEmail,
-          unreadCount: unreadCount,
-          recipientHasRead: recipientHasRead,
-          lastMessage: lastMsg?.message_text || '',
-          lastMessageTime: lastMsg?.created_at || thread.created_at
+          id: g.group_id,
+          isGroup: true,
+          subject: g.subject,
+          otherParticipantEmail:
+            g.replies > 0
+              ? `${g.recipients} recipients · ${g.replies} ${g.replies === 1 ? 'reply' : 'replies'}`
+              : `${g.recipients} recipients · No replies yet`,
+          lastMessage: newest?.lastMessage ?? '',
+          lastMessageTime: g.last_message_at || newest?.lastMessageTime,
+          unreadCount: 0,
+          recipientHasRead: true,
         }
       })
+
+    const combined = [...individual, ...groupRows].sort((a, b) =>
+      String(b.lastMessageTime).localeCompare(String(a.lastMessageTime))
     )
 
-    setThreads(processedThreads)
-    const totalUnread = processedThreads.filter(t => t.unreadCount > 0).length
-    setGlobalMessagesUnreadCount(totalUnread)
+    setThreads(combined)
+    setGlobalMessagesUnreadCount(individual.filter(t => t.unreadCount > 0).length)
   }
 
   const loadThread = async (threadId: string) => {
@@ -258,7 +240,7 @@ let otherEmail = 'Unknown'
 
     if (allMessages) {
       // One lookup for the whole thread rather than one per message.
-      const senderEmails = await fetchParticipantEmails()
+      const senderEmails = (await fetchInboxMeta()).emails
       for (const msg of allMessages) {
         msg.senderEmail = senderEmails[msg.sender_id]?.email || 'Unknown'
       }
@@ -746,7 +728,7 @@ setCompose({
                   .filter(thread => 
                     thread.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
                     thread.otherParticipantEmail.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    thread.lastMessage.toLowerCase().includes(searchQuery.toLowerCase())
+                    (thread.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase())
                   )
                   .filter(thread => {
                     if (messageFilter === 'unread') return !thread.recipientHasRead
@@ -799,7 +781,7 @@ setCompose({
                     {filteredThreads.map((thread) => (
                       <div
                         key={thread.id}
-                        onClick={() => loadThread(thread.id)}
+                        onClick={() => { if (!thread.isGroup) loadThread(thread.id) }}
                         className={`mx-2 my-0.5 px-3 py-3 cursor-pointer transition-all duration-150 group hover:bg-white hover:shadow-sm rounded-xl relative ${
                           selectedThread?.id === thread.id ? 'bg-white shadow-sm ring-1 ring-blue-500/20' : ''
                         }`}
@@ -811,7 +793,7 @@ setCompose({
                         <div className="flex items-start justify-between mb-1.5">
                           <div className="flex items-center gap-3 flex-1 min-w-0">
                             <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 shadow-sm ring-1 ring-black/5">
-                              {thread.otherParticipantEmail[0].toUpperCase()}
+                              {thread.isGroup ? '\u2709' : thread.otherParticipantEmail[0].toUpperCase()}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-0.5">
@@ -828,8 +810,10 @@ setCompose({
                           <div className="flex flex-col items-end gap-1.5 flex-shrink-0 ml-3">
                             <span className="text-[11px] font-medium text-gray-400">{formatTime(thread.lastMessageTime)}</span>
                             <button
+                              hidden={thread.isGroup}
                               onClick={(e) => {
                                 e.stopPropagation()
+                                if (thread.isGroup) return
                                 if (confirm('Delete this conversation?')) {
                                   deleteThread(thread.id)
                                 }
@@ -997,7 +981,7 @@ className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none
                 <div className="h-[72px] px-6 flex items-center justify-between border-b border-gray-200/60 bg-white/80 backdrop-blur-sm">
                   <div className="flex items-center gap-3">
                     <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold shadow-sm ring-1 ring-black/5">
-                      {threads.find(t => t.id === selectedThread.id)?.otherParticipantEmail[0].toUpperCase()}
+                      {(threads.find(t => t.id === selectedThread.id)?.otherParticipantEmail || '?')[0].toUpperCase()}
                     </div>
                     <div>
                       <h3 className="font-semibold text-gray-900 text-[15px]">{selectedThread.subject}</h3>
