@@ -393,30 +393,44 @@ const composeMessage = async () => {
           p_tier: compose.selectedTier
         })
 
-        // GET ALL USERS IN THIS TIER TO SEND EMAILS
-        const { data: tierUsers } = await supabase
-          .from('user_profiles')
-          .select('id, email')
-          .eq('subscription_tier', compose.selectedTier)
+        // Email notifications are sent server-side in batches. The browser
+        // used to loop one unawaited request per recipient, which meant 114
+        // concurrent Resend calls and no idea how many actually landed. It
+        // now makes one awaited call and reports the real counts.
+        //
+        // requestKey is generated once for this send and replayed on retry,
+        // so a double-click cannot start a second broadcast.
+        const requestKey =
+          typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`
 
-        // SEND EMAIL TO EACH USER
-        console.log(`📧 Sending emails to ${tierUsers?.length} users in ${compose.selectedTier} tier`)
-        
-        if (tierUsers && tierUsers.length > 0) {
-          for (const user of tierUsers) {
-            fetch('/api/messages/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                recipientId: user.id,
-                senderName: 'CRNA Prep Hub Admin',
-                messagePreview: compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : '')
-              })
-            }).catch(err => console.error(`Email failed for ${user.email}:`, err))
+        let emailSummary = ''
+        try {
+          const res = await fetch('/api/messages/broadcast', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tier: compose.selectedTier,
+              requestKey,
+              subject: compose.subject,
+              message: compose.message,
+            }),
+          })
+          const result = await res.json()
+          if (!res.ok) {
+            emailSummary = `\n\nEmail notifications could not be sent: ${result.error || 'unknown error'}`
+          } else if (result.failed > 0) {
+            emailSummary = `\n\n${result.succeeded} of ${result.attempted} email notifications were sent. ${result.failed} failed.`
+          } else {
+            emailSummary = `\n\nEmail notifications sent to ${result.succeeded} of ${result.attempted} ${compose.selectedTier} members.`
           }
+        } catch (err) {
+          console.error('Broadcast notification failed:', err)
+          emailSummary = '\n\nThe in-app message was sent, but email notifications could not be dispatched.'
         }
 
-        alert(`Message sent to ${count} users in ${compose.selectedTier} tier`)
+        alert(`Message sent to ${count} users in ${compose.selectedTier} tier${emailSummary}`)
       } else {
 
         let recipientId
