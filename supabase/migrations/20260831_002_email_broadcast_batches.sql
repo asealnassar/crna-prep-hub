@@ -44,10 +44,61 @@ begin
   end if;
 end $$;
 
--- NOTE: planned_batches is immutable by convention, enforced in application
--- code (it is only ever set when it is NULL). A CHECK cannot express "never
--- changes once set"; a trigger could, and is deliberately not added here to
--- keep the migration to schema only.
+-- planned_batches immutability. A CHECK cannot express "never changes once
+-- set" because it only sees the new row, so this is a trigger. Application
+-- code still sets it only when NULL; the database is the final protection.
+--   NULL -> positive integer   allowed (planning completes)
+--   value -> same value        allowed (idempotent re-write)
+--   value -> different value   rejected
+--   value -> NULL              rejected
+create or replace function public.email_broadcasts_freeze_planned_batches()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if old.planned_batches is not null
+     and new.planned_batches is distinct from old.planned_batches then
+    raise exception
+      'planned_batches is immutable once set (broadcast %, % -> %)',
+      old.id, old.planned_batches, new.planned_batches
+      using errcode = 'restrict_violation';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists email_broadcasts_freeze_planned_batches
+  on public.email_broadcasts;
+
+create trigger email_broadcasts_freeze_planned_batches
+  before update on public.email_broadcasts
+  for each row
+  execute function public.email_broadcasts_freeze_planned_batches();
+
+-- ---------------------------------------------------------------------------
+-- 1b. Narrow the parent's UPDATE privilege to the delivery-mutable columns.
+--
+-- 20260831_000 granted table-wide UPDATE. Identity and audit fields --
+-- id, request_key, tier, subject, created_by, created_at -- must not be
+-- rewritable by application code once the broadcast exists. Revoking the
+-- table-level privilege and re-granting per column leaves them structurally
+-- immutable to service_role.
+--
+-- Postgres tracks table-level and column-level privileges separately, so the
+-- revoke must come first or the broad grant would survive.
+-- ---------------------------------------------------------------------------
+revoke update on table public.email_broadcasts from service_role;
+
+grant update (
+  attempted,
+  succeeded,
+  failed,
+  status,
+  completed_at,
+  planned_batches,
+  lease_owner,
+  lease_expires_at
+) on table public.email_broadcasts to service_role;
 
 -- ---------------------------------------------------------------------------
 -- 2. Immutable batch plans. Inserted in ONE statement, before any Resend call.
@@ -169,10 +220,27 @@ revoke all privileges on table public.email_broadcast_batches from anon;
 revoke all privileges on table public.email_broadcast_batches from authenticated;
 revoke all privileges on table public.email_broadcast_batches from service_role;
 
--- UPDATE covers status transitions and nulling the payload at purge time.
+-- INSERT writes the frozen plan once. UPDATE is granted ONLY on the columns
+-- that legitimately change during delivery, which makes the frozen fields --
+-- broadcast_id, batch_index, payload, idempotency_key, recipient_count,
+-- created_at -- structurally immutable to application code. A service-role
+-- UPDATE naming any of them is rejected by Postgres, not merely discouraged.
+--
+-- payload and payload_purged_at are deliberately excluded: the retention
+-- purge is a maintenance operation run as the database owner, not something
+-- the application should be able to do.
+--
 -- No DELETE: rows are retained for audit; the parent cascade is the only
 -- removal path.
-grant select, insert, update on table public.email_broadcast_batches to service_role;
+grant select, insert on table public.email_broadcast_batches to service_role;
+
+grant update (
+  status,
+  attempts,
+  last_error,
+  submitted_at,
+  completed_at
+) on table public.email_broadcast_batches to service_role;
 
 commit;
 
@@ -198,8 +266,40 @@ select column_name from information_schema.columns
  where table_schema='public' and table_name='email_broadcasts'
    and column_name in ('planned_batches','lease_expires_at','lease_owner');
 
+-- Expect: no table-level UPDATE for service_role on either table -- only
+-- SELECT, and INSERT where applicable.
+select table_name, grantee, privilege_type
+  from information_schema.role_table_grants
+ where table_schema = 'public'
+   and table_name in ('email_broadcasts','email_broadcast_batches')
+   and grantee = 'service_role'
+ order by table_name, privilege_type;
+
+-- Expect for email_broadcast_batches: UPDATE on exactly status, attempts,
+-- last_error, submitted_at, completed_at -- and nothing on payload,
+-- idempotency_key, recipient_count, batch_index, broadcast_id, created_at.
+select table_name, column_name, privilege_type
+  from information_schema.column_privileges
+ where table_schema = 'public'
+   and table_name in ('email_broadcasts','email_broadcast_batches')
+   and grantee = 'service_role'
+   and privilege_type = 'UPDATE'
+ order by table_name, column_name;
+
+-- Expect: one BEFORE UPDATE row trigger on email_broadcasts.
+select tgname, pg_get_triggerdef(oid)
+  from pg_trigger
+ where tgrelid = 'public.email_broadcasts'::regclass and not tgisinternal;
+
 -- ---------------------------------------------------------------------------
--- OPERATIONAL SWEEPS -- run on a schedule. NOT part of the migration.
+-- OPERATIONAL SWEEPS -- manual maintenance. NOT scheduled, NOT part of the
+-- migration. Inline recovery in the endpoint is the primary mechanism; these
+-- exist so a stranded broadcast can be surfaced even if nobody retries it.
+--
+-- Sweep A touches only columns service_role can update, so it may be run by
+-- either role. Sweep B writes payload and payload_purged_at, which
+-- service_role deliberately cannot update -- run it as the database owner
+-- (the postgres role in the Supabase SQL Editor).
 -- ---------------------------------------------------------------------------
 
 -- A. Stale-submission sweep. Marks batches uncertain once they are outside
