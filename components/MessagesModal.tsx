@@ -491,13 +491,31 @@ if (isAdmin) {
             return
           }
           
-          // Send to each selected user
+          // One PRIVATE thread per selected user: the RPC is called once per
+          // recipient with a single-element array, never once with several.
+          // Recipients therefore never appear in each other's conversations,
+          // and there is no shared admin-plus-many thread anywhere.
+          //
+          // Each result is now checked. Previously the RPC's error was
+          // discarded and the alert below claimed every recipient had been
+          // messaged even when none had -- which is exactly what a tightened
+          // database policy would surface, silently.
+          const failed: string[] = []
+          let sent = 0
           for (const recipientId of compose.selectedUserIds) {
-            await supabase.rpc('create_thread_with_message', {
+            const { error: threadError } = await supabase.rpc('create_thread_with_message', {
               p_subject: compose.subject,
               p_recipient_ids: [recipientId],
               p_message_text: compose.message
             })
+
+            if (threadError) {
+              console.error('Thread creation failed for recipient:', threadError.message)
+              failed.push(recipientId)
+              // No notification: there is no message to notify anybody about.
+              continue
+            }
+            sent++
 
             fetch('/api/messages/notify', {
               method: 'POST',
@@ -510,7 +528,9 @@ if (isAdmin) {
             }).catch(err => console.error('Email notification failed:', err))
           }
 
-alert(`Message sent to ${compose.selectedUserIds.length} user(s)`)
+alert(failed.length === 0
+            ? `Message sent to ${sent} user(s)`
+            : `Message sent to ${sent} of ${compose.selectedUserIds.length} user(s). ${failed.length} could not be delivered.`)
           setCompose({
             subject: '',
             message: '',
