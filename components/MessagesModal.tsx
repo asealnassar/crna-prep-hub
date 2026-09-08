@@ -25,6 +25,21 @@ export default function MessagesModal({ userEmail, isAdmin }: MessagesModalProps
 const [searchQuery, setSearchQuery] = useState('')
   const [userSearchQuery, setUserSearchQuery] = useState('')  // ADD THIS LINE
   const [messageFilter, setMessageFilter] = useState<'all' | 'unread' | 'read'>('all')
+  /**
+   * H-2: who is reading this conversation, by id.
+   *
+   * Ownership of a message used to be decided by comparing the sender's email
+   * -- resolved over the network from /api/messages/participants -- with the
+   * userEmail prop. Any failure of that lookup produced the string 'Unknown',
+   * which never equals an address, so a transient 500 made EVERY message in a
+   * thread render as the other person's: own messages left-aligned, white, and
+   * with their read receipt gone.
+   *
+   * The authoritative pair was already in hand. null means "not resolved yet",
+   * and no bubble is drawn until it is, so nothing is ever painted on the wrong
+   * side and then corrected.
+   */
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   
 const [compose, setCompose] = useState({
     subject: '',
@@ -80,6 +95,21 @@ const [compose, setCompose] = useState({
       supabase.removeChannel(channel)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
+  }, [])
+
+  // Resolved once, then kept in step with the session for the life of the tab:
+  // signing out or switching accounts without a remount must not leave the
+  // previous user's id deciding who owns which message.
+  useEffect(() => {
+    let cancelled = false
+    supabase.auth.getUser().then(({ data }) => {
+      if (!cancelled) setCurrentUserId(data?.user?.id ?? null)
+    })
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUserId(session?.user?.id ?? null)
+    })
+    return () => { cancelled = true; sub.subscription.unsubscribe() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const getAdminId = async () => {
@@ -1024,14 +1054,31 @@ className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none
 
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto px-6 py-6 bg-gradient-to-b from-gray-50/30 to-white">
-                  {messages.length === 0 ? (
+                  {/* H-2: nothing is drawn until the reader's id is known.
+                      Rendering first and correcting afterwards would put a
+                      message on the wrong side for a frame. */}
+                  {!currentUserId ? (
+                    <div className="h-full flex items-center justify-center">
+                      <p className="text-gray-400 text-sm">Loading conversation…</p>
+                    </div>
+                  ) : messages.length === 0 ? (
                     <div className="h-full flex items-center justify-center">
                       <p className="text-gray-400 text-sm">No messages yet</p>
                     </div>
                   ) : (
                     <div className="space-y-4 max-w-4xl mx-auto">
                       {messages.map((msg) => {
-                        const isMyMessage = msg.senderEmail === userEmail
+                        // H-2: the stored sender, against the authenticated
+                        // reader. Never an email, and never a value that had to
+                        // survive a network round trip.
+                        //
+                        // The null guard is not redundant with the gate above:
+                        // it makes "a null sender_id is never mine" true of the
+                        // rule itself rather than only of the one place it is
+                        // currently evaluated, so `null === null` can never
+                        // read as ownership.
+                        const isMyMessage =
+                          msg.sender_id != null && msg.sender_id === currentUserId
                         
                         return (
                           <div
