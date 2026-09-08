@@ -42,6 +42,8 @@ interface NavItem {
   group: string
   requiresAuth: boolean
   adminOnly?: boolean
+  /** Rendered as a non-interactive row with a "Coming Soon" badge. */
+  comingSoon?: boolean
 }
 
 export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedChange }: SidebarProps) {
@@ -118,7 +120,9 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
     { href: '/schools', label: 'Schools', icon: School, group: 'Prepare', requiresAuth: false },
     { href: '/interview', label: 'Mock Interview', icon: Mic, group: 'Prepare', requiresAuth: false },
     { href: '/interview-prep', label: 'School Interview Styles', icon: GraduationCap, group: 'Prepare', requiresAuth: false },
-    ...(isAdmin ? [{ href: '/lessons', label: 'Learning Modules', icon: BookOpen, group: 'Build', requiresAuth: true } as NavItem] : []),
+    // Visible to everyone as a teaser. Admins keep a working link so the pages
+    // can still be built and previewed; everyone else sees a "Coming Soon" row.
+    { href: '/lessons', label: 'Learning Modules', icon: BookOpen, group: 'Build', requiresAuth: false, comingSoon: !isAdmin },
     { href: '/gpa-calculator', label: 'GPA Calculator', icon: Calculator, group: 'Build', requiresAuth: false },
     { href: '/personal-statement', label: 'Personal Statement', icon: FileText, group: 'Build', requiresAuth: false },
     { href: '/resume-builder', label: 'Resume Builder', icon: FileUser, group: 'Build', requiresAuth: false },
@@ -220,6 +224,31 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
                   {group.items.map((item) => {
                     const Icon = item.icon
                     const active = pathname === item.href
+
+                    if (item.comingSoon) {
+                      return (
+                        <li key={item.href}>
+                          <div
+                            aria-disabled="true"
+                            title={`${item.label} — Coming Soon`}
+                            className={`${linkClass(false)} cursor-not-allowed text-slate-500 hover:bg-transparent hover:text-slate-500`}
+                          >
+                            <Icon className="h-[18px] w-[18px] shrink-0" />
+                            {isCollapsed ? (
+                              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-400/80" />
+                            ) : (
+                              <>
+                                <span className="truncate">{item.label}</span>
+                                <span className="ml-auto shrink-0 rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300/90">
+                                  Soon
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </li>
+                      )
+                    }
+
                     return (
                       <li key={item.href}>
                         <Link href={item.href} title={isCollapsed ? item.label : undefined} className={linkClass(active)}>

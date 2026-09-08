@@ -8,6 +8,15 @@ import Sidebar from '@/components/Sidebar'
 
 export default function Analytics() {
   const [users, setUsers] = useState<any[]>([])
+  // The four top cards come from the server as aggregates. They are no longer
+  // derived from browser-side arrays, which PostgREST was truncating at 1000
+  // rows -- that is why Questions Asked read exactly 1000 against a real 3,842.
+  const [metrics, setMetrics] = useState<{
+    totalUsers: number
+    usedInterview: number
+    ultimateMembers: number
+    questionsAsked: number
+  } | null>(null)
   const [feedback, setFeedback] = useState<any[]>([])
   const [featureRequests, setFeatureRequests] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -20,34 +29,30 @@ export default function Analytics() {
   const supabase = createClient()
 
   const loadData = async () => {
+    // Aggregates first: four integers, independent of the row-level data the
+    // activity table below still uses.
+    try {
+      const metricsRes = await fetch('/api/admin/analytics')
+      if (metricsRes.ok) setMetrics(await metricsRes.json())
+    } catch (err) {
+      console.error('Analytics metrics failed to load')
+    }
+
     const response = await fetch('/api/admin/users')
     const authUsers = await response.json()
-    
-    console.log('Auth users:', authUsers)
-    
+
     const { data: profiles } = await supabase.from('user_profiles').select('*')
-    console.log('Profiles:', profiles)
 
     const { data: questions } = await supabase
       .from('user_asked_questions')
       .select('*')
       .order('asked_at', { ascending: false })
 
-    console.log('Questions:', questions)
-
     const combinedUsers = authUsers?.map((authUser: any) => {
       const profile = profiles?.find(p => p.id === authUser.id)
       const userQuestions = questions?.filter(q => q.user_id === authUser.id) || []
       const interviewTypes = [...new Set(userQuestions.map(q => q.interview_type))]
       const lastInterview = userQuestions.length > 0 ? userQuestions[0]?.asked_at : null
-
-      if (authUser.email === 'anassar@icpcnj.org') {
-        console.log('DEBUG anassar@icpcnj.org:')
-        console.log('  authUser.id:', authUser.id)
-        console.log('  profile found:', !!profile)
-        console.log('  userQuestions count:', userQuestions.length)
-        console.log('  sample question user_ids:', questions?.slice(0, 5).map(q => q.user_id))
-      }
 
       return {
         id: authUser.id,
@@ -61,7 +66,6 @@ export default function Analytics() {
       }
     }).sort((a: any, b: any) => b.totalQuestions - a.totalQuestions) || []
 
-    console.log('Combined users:', combinedUsers)
     setUsers(combinedUsers)
 
     const { data: feedbackData } = await supabase
@@ -148,8 +152,6 @@ export default function Analytics() {
     )
   }
 
-  const activeUsers = users.filter(u => u.totalQuestions > 0)
-  const ultimateUsers = users.filter(u => u.subscription_tier === 'ultimate')
   const premiumUsers = users.filter(u => u.subscription_tier === 'premium')
   const totalQuestions = users.reduce((sum, u) => sum + u.totalQuestions, 0)
 
@@ -175,25 +177,25 @@ export default function Analytics() {
           <div className="grid md:grid-cols-4 gap-6 mb-8">
             <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-6">
               <div className="text-3xl mb-2">👥</div>
-              <h3 className="text-3xl font-bold text-white">{users.length}</h3>
+              <h3 className="text-3xl font-bold text-white">{metrics?.totalUsers ?? '—'}</h3>
               <p className="text-indigo-200">Total Users</p>
             </div>
 
             <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-6">
               <div className="text-3xl mb-2">🎤</div>
-              <h3 className="text-3xl font-bold text-white">{activeUsers.length}</h3>
+              <h3 className="text-3xl font-bold text-white">{metrics?.usedInterview ?? '—'}</h3>
               <p className="text-indigo-200">Used Interview</p>
             </div>
 
             <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-6">
               <div className="text-3xl mb-2">⭐</div>
-              <h3 className="text-3xl font-bold text-white">{ultimateUsers.length}</h3>
+              <h3 className="text-3xl font-bold text-white">{metrics?.ultimateMembers ?? '—'}</h3>
               <p className="text-indigo-200">Ultimate Members</p>
             </div>
 
             <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-6">
               <div className="text-3xl mb-2">💬</div>
-              <h3 className="text-3xl font-bold text-white">{totalQuestions}</h3>
+              <h3 className="text-3xl font-bold text-white">{metrics?.questionsAsked ?? '—'}</h3>
               <p className="text-indigo-200">Questions Asked</p>
             </div>
           </div>

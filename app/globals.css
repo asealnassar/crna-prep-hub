@@ -123,3 +123,26 @@ body {
   accent-color: #6d28d9;
 }
 .blog-prose li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.1em; }
+
+/*
+ * A short attention pulse for the required-setup card.
+ *
+ * Three soft cycles and then still: enough to catch the eye on arrival,
+ * never a loop. The ring is what moves, so no layout shifts and the text
+ * stays perfectly legible throughout.
+ */
+@keyframes gpa-attention {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(225, 29, 72, 0); }
+  50%      { box-shadow: 0 0 0 6px rgba(225, 29, 72, 0.18); }
+}
+
+.gpa-attention {
+  animation: gpa-attention 700ms ease-in-out 3;
+}
+
+/* Motion is an enhancement; the red treatment carries the message on its own. */
+@media (prefers-reduced-motion: reduce) {
+  .gpa-attention {
+    animation: none;
+  }
+}

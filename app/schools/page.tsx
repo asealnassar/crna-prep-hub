@@ -38,7 +38,7 @@ const getSchools = cache(async () => {
       .select(
         'id, name, location_city, location_state, program_type, program_length_months, ' +
           'tuition_total, gpa_requirement, icu_experience_months, format, ' +
-          'application_opens_month, prerequisites_required, prerequisites_not_required'
+          'application_opens_month'
       )
       .order('name')
     if (error) {

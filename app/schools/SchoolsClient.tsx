@@ -43,6 +43,9 @@ export default function SchoolsClient({ initialSchools }: { initialSchools: any[
   const router = useRouter()
   const supabase = createClient()
   const isPremium = userTier === 'premium' || userTier === 'ultimate'
+  // Blurred filler for locked prerequisite rows. Deliberately not real course
+  // names: if anyone strips the blur in devtools they see dots, not data.
+  const PREREQ_PLACEHOLDER = '\u2022\u2022\u2022\u2022\u2022\u2022 \u2022\u2022\u2022 \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022, \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022, \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'
   const allPrereqs = ['Anatomy & Physiology', 'Microbiology', 'Chemistry', 'Organic Chemistry', 'Biochemistry', 'Statistics', 'Research', 'Pharmacology', 'Physics']
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
@@ -469,7 +472,25 @@ export default function SchoolsClient({ initialSchools }: { initialSchools: any[
                   </div>
                 </div>
 
-                {(school.prerequisites_required || school.prerequisites_not_required) && (
+                {/* Prerequisites are a paid field. Free users get the labels and a
+                    blurred placeholder -- never the real values -- so the card
+                    advertises the data without handing it over. */}
+                {!isPremium ? (
+                  <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-gray-100 relative overflow-hidden">
+                    <p className="text-xs sm:text-sm text-gray-600 mb-2">
+                      <span className="text-purple-600 font-semibold">Required:</span>{' '}
+                      <span className="blur-sm select-none" aria-hidden="true">{PREREQ_PLACEHOLDER}</span>
+                    </p>
+                    <p className="text-xs sm:text-sm text-gray-600">
+                      <span className="text-green-600 font-semibold">NOT Required:</span>{' '}
+                      <span className="blur-sm select-none" aria-hidden="true">{PREREQ_PLACEHOLDER}</span>
+                    </p>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-xs">🔒</span>
+                    </div>
+                    <span className="sr-only">Prerequisites are available on Premium and Ultimate plans.</span>
+                  </div>
+                ) : (school.prerequisites_required || school.prerequisites_not_required) && (
                   <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-gray-100">
                     {school.prerequisites_required && (
                       <p className="text-xs sm:text-sm text-gray-600 mb-2"><span className="text-purple-600 font-semibold">Required:</span> {school.prerequisites_required}</p>
