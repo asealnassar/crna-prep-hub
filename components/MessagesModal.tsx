@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 
@@ -19,6 +19,36 @@ export default function MessagesModal({ userEmail, isAdmin }: MessagesModalProps
   const [messages, setMessages] = useState<any[]>([])
   const [replyText, setReplyText] = useState('')
   const [sending, setSending] = useState(false)
+  /**
+   * H-3: one send action, at most one message.
+   *
+   * `sending` cannot be the duplicate guard. It is React state, so two events
+   * dispatched in the same tick both observe the pre-render value `false` --
+   * and the old code did not even set it until AFTER
+   * `await supabase.auth.getUser()`, leaving the whole auth round-trip
+   * unguarded. The button's `disabled={sending}` therefore stopped nothing in
+   * a real double-click, and the Enter handler consulted no guard at all.
+   *
+   * A ref mutates synchronously, so a second invocation -- from a second
+   * click, a second Enter, or one of each -- sees it set before it can reach
+   * its first await. `sending` stays what it always was: the button label and
+   * disabled state.
+   */
+  const sendInFlight = useRef(false)
+  /**
+   * H-3B: the same gate for Compose, deliberately a SEPARATE ref.
+   *
+   * Compose had the identical defect -- `setSending(true)` after
+   * `await supabase.auth.getUser()`, guarded only by React state -- but a
+   * wider blast radius: a doubled tier broadcast calls send_tier_broadcast
+   * twice and fans out to every member of the tier twice, and the email
+   * poll that follows runs for up to a minute, so the two runs overlap.
+   *
+   * Separate from sendInFlight because these are different surfaces: an
+   * in-flight reply must not block Compose, or the reverse. They share only
+   * the cosmetic `sending` state, which is pre-existing.
+   */
+  const composeInFlight = useRef(false)
   const [allUsers, setAllUsers] = useState<any[]>([])
   const [adminId, setAdminId] = useState<string>('')
   const [showCompose, setShowCompose] = useState(false)
@@ -342,103 +372,135 @@ const [compose, setCompose] = useState({
   }
 
   const sendReply = async () => {
+    // The gate, and nothing between reading it and taking it. Both early
+    // returns below happen before it is taken, so `finally` only ever runs
+    // for a send that actually holds it.
+    if (sendInFlight.current) return
     if (!replyText.trim() || !selectedThread) return
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
+    sendInFlight.current = true
     setSending(true)
 
-    const { data: newMessage } = await supabase
-      .from('thread_messages')
-      .insert({
-        thread_id: selectedThread.id,
-        sender_id: user.id,
-        message_text: replyText
-      })
-      .select()
-      .single()
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
 
-    const { data: participants } = await supabase
-      .from('thread_participants')
-      .select('user_id')
-      .eq('thread_id', selectedThread.id)
-      .neq('user_id', user.id)
-
-    if (participants && newMessage) {
-      for (const p of participants) {
-        await supabase.from('message_read_status').insert({
-          message_id: newMessage.id,
-          user_id: p.user_id,
-          delivered_at: new Date().toISOString()
+      const { data: newMessage, error: insertError } = await supabase
+        .from('thread_messages')
+        .insert({
+          thread_id: selectedThread.id,
+          sender_id: user.id,
+          message_text: replyText
         })
+        .select()
+        .single()
+
+      // A failed insert used to fall through to the success path: the reply
+      // text was cleared, updated_at was bumped for a message that does not
+      // exist, and nothing was reported -- so the send looked like it worked
+      // and the text needed to retry it was already gone.
+      if (insertError || !newMessage) {
+        console.error('Reply insert failed:', insertError)
+        alert('Your reply could not be sent. Please try again.')
+        return
       }
-    }
 
-    await supabase
-      .from('message_threads')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('id', selectedThread.id)
+      const { data: participants } = await supabase
+        .from('thread_participants')
+        .select('user_id')
+        .eq('thread_id', selectedThread.id)
+        .neq('user_id', user.id)
 
-    // Replies previously stopped here, so the other participant was never
-    // emailed -- only new threads triggered a notification. One request per
-    // other participant (one, in a normal two-party thread). The sender is
-    // already excluded: `participants` is queried with .neq('user_id', user.id).
-    //
-    // The reply itself is saved above and is never rolled back if the email
-    // fails, and nothing here retries, so a notification failure cannot
-    // duplicate the message.
-    let notifyFailed = false
-    if (participants && newMessage) {
-      for (const p of participants) {
-        try {
-          const res = await fetch('/api/messages/notify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              recipientId: p.user_id,
-              // The exact message just written. The server validates that it
-              // belongs to this sender and to a thread shared with the
-              // recipient, then uses its stored text for the preview.
-              messageId: newMessage.id,
-            }),
+      if (participants) {
+        for (const p of participants) {
+          await supabase.from('message_read_status').insert({
+            message_id: newMessage.id,
+            user_id: p.user_id,
+            delivered_at: new Date().toISOString()
           })
-          if (!res.ok) notifyFailed = true
-        } catch (err) {
-          console.error('Reply notification failed:', err)
-          notifyFailed = true
         }
       }
-    }
 
-    setReplyText('')
-    setSending(false)
-    loadThread(selectedThread.id)
+      await supabase
+        .from('message_threads')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', selectedThread.id)
 
-    if (notifyFailed) {
-      alert('Your reply was sent, but the email notification could not be delivered.')
+      // Replies previously stopped here, so the other participant was never
+      // emailed -- only new threads triggered a notification. One request per
+      // other participant (one, in a normal two-party thread). The sender is
+      // already excluded: `participants` is queried with .neq('user_id', user.id).
+      //
+      // The reply itself is saved above and is never rolled back if the email
+      // fails, and nothing here retries, so a notification failure cannot
+      // duplicate the message.
+      let notifyFailed = false
+      if (participants) {
+        for (const p of participants) {
+          try {
+            const res = await fetch('/api/messages/notify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                recipientId: p.user_id,
+                // The exact message just written. The server validates that it
+                // belongs to this sender and to a thread shared with the
+                // recipient, then uses its stored text for the preview.
+                messageId: newMessage.id,
+              }),
+            })
+            if (!res.ok) notifyFailed = true
+          } catch (err) {
+            console.error('Reply notification failed:', err)
+            notifyFailed = true
+          }
+        }
+      }
+
+      setReplyText('')
+      loadThread(selectedThread.id)
+
+      if (notifyFailed) {
+        alert('Your reply was sent, but the email notification could not be delivered.')
+      }
+    } finally {
+      // Every exit releases the gate: the `!user` return, the failed insert,
+      // a thrown request, and the successful send alike. A send that fails
+      // leaves the box exactly as it was and can simply be retried.
+      sendInFlight.current = false
+      setSending(false)
     }
   }
 
 const composeMessage = async () => {
+    // The gate, taken before any await. Validation stays ahead of it, so an
+    // incomplete form returns without ever holding the lock.
+    if (composeInFlight.current) return
     if (!compose.subject || !compose.message) {
       alert('Subject and message are required')
       return
     }
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
+    composeInFlight.current = true
     setSending(true)
 
-    try {                                    // ADD THIS LINE
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
       if (compose.recipientType === 'tier' && isAdmin) {
-        const { data: count } = await supabase.rpc('send_tier_broadcast', {
+        const { data: count, error: broadcastError } = await supabase.rpc('send_tier_broadcast', {
 
           p_subject: compose.subject,
           p_message_text: compose.message,
           p_tier: compose.selectedTier
         })
+
+        // The RPC's error was discarded here, so a rejected broadcast fell
+        // through to the email poll and then alerted "Message sent to null
+        // users in <tier> tier". Routed to the existing catch below: same
+        // failure message, compose state preserved, retry possible.
+        if (broadcastError) throw broadcastError
 
         // The in-app messages are already created by send_tier_broadcast above.
         // Email delivery is a separate, recoverable concern: this key is
@@ -517,7 +579,6 @@ const composeMessage = async () => {
 if (isAdmin) {
           if (compose.selectedUserIds.length === 0) {
             alert('Please select at least one recipient')
-            setSending(false)
             return
           }
           
@@ -577,7 +638,6 @@ setCompose({
         selectedUserIds: [],  // ADD THIS LINE
         selectedTier: 'free'
       })
-          setSending(false)
           setShowCompose(false)
           loadThreads()
           return
@@ -585,15 +645,18 @@ setCompose({
           recipientId = adminId
           if (!recipientId) {
             alert('Admin user not found')
-            setSending(false)
             return
           }
         }
-await supabase.rpc('create_thread_with_message', {
+const { error: createError } = await supabase.rpc('create_thread_with_message', {
           p_subject: compose.subject,
           p_recipient_ids: [recipientId],
           p_message_text: compose.message
         })
+
+        // Same as the broadcast: the error was dropped and the compose form
+        // was then cleared as though the conversation had been created.
+        if (createError) throw createError
 
         // Send email notification
 console.log('📧 About to call email API with:', {
@@ -627,12 +690,15 @@ setCompose({
         selectedUserIds: [],  // ADD THIS LINE
         selectedTier: 'free'
       })
-      setSending(false)
       setShowCompose(false)
       loadThreads()
     } catch (error) {
       console.error('Error sending message:', error)
       alert('Failed to send message')
+    } finally {
+      // One release site for every exit: the `!user` return, both validation
+      // returns, a thrown RPC, the multi-select return, and success.
+      composeInFlight.current = false
       setSending(false)
     }
   }
@@ -1125,6 +1191,11 @@ className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none
                         onKeyPress={(e) => {
                           if (e.key === 'Enter' && !e.shiftKey) {
                             e.preventDefault()
+                            // Deliberately no `sending` check here: sendReply
+                            // takes the single-flight gate as its own first
+                            // statement, so Enter, the button, and any race
+                            // between them contend for one lock rather than
+                            // two conditions that can disagree.
                             sendReply()
                           }
                         }}
