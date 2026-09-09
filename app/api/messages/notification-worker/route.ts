@@ -8,8 +8,8 @@ import {
   NOTIFICATION_SUBJECT,
   buildNotificationEmail,
 } from '@/lib/messageNotify'
+import { claimJobs } from '@/lib/messaging/notificationClaim'
 import {
-  LEASE_MS,
   runWorker,
   senderNameFor,
   previewFor,
@@ -34,10 +34,6 @@ import {
 export const maxDuration = 60
 
 const resend = new Resend(process.env.RESEND_API_KEY)
-
-/** How many jobs one invocation will take. Bounded so a backlog drains over
- *  several runs rather than one long request that risks the timeout. */
-const BATCH = 25
 
 /**
  * Cron only.
@@ -69,43 +65,6 @@ function serviceClient(): SupabaseClient | null {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, key, {
     auth: { autoRefreshToken: false, persistSession: false },
   })
-}
-
-/**
- * Take a lease on due jobs.
- *
- * Read-then-write rather than a single atomic statement, because PostgREST
- * offers no UPDATE ... RETURNING over a subquery. The lease is what makes that
- * safe: the update is conditioned on the row still being unleased, so a peer
- * that wrote first keeps it and this worker simply sees fewer rows back.
- */
-async function claimJobs(db: SupabaseClient, workerId: string, now: number): Promise<JobRow[]> {
-  const nowIso = new Date(now).toISOString()
-  const leaseUntil = new Date(now + LEASE_MS).toISOString()
-
-  const { data: candidates } = await db
-    .from('email_notification_jobs')
-    .select('message_id, recipient_user_id, status, attempts, next_attempt_at, lease_owner, lease_expires_at')
-    .in('status', ['pending', 'sending'])
-    .lte('next_attempt_at', nowIso)
-    .or(`lease_expires_at.is.null,lease_expires_at.lt.${nowIso}`)
-    .order('next_attempt_at', { ascending: true })
-    .limit(BATCH)
-
-  const claimed: JobRow[] = []
-  for (const job of (candidates ?? []) as JobRow[]) {
-    const { data: won } = await db
-      .from('email_notification_jobs')
-      .update({ status: 'sending', lease_owner: workerId, lease_expires_at: leaseUntil })
-      .eq('message_id', job.message_id)
-      .in('status', ['pending', 'sending'])
-      .or(`lease_expires_at.is.null,lease_expires_at.lt.${nowIso}`)
-      .select('message_id')
-
-    // No row back means a peer leased it between the read and the write.
-    if ((won ?? []).length === 1) claimed.push(job)
-  }
-  return claimed
 }
 
 /** Everything the email needs, from the immutable message and the profiles. */
