@@ -292,10 +292,17 @@ test('no per-answer "Ask Me a Follow-Up" button remains', () => {
 })
 
 test('no per-answer "Next Question" decision button remains', () => {
-  assert.doesNotMatch(PAGE, /Next Question/)
   assert.doesNotMatch(page, /sendMessage\('next'\)/)
   assert.match(page, /onClick=\{\(\) => sendMessage\(\)\}/, 'a plain Send again')
-  assert.match(PAGE, /<span className="hidden sm:inline">Send<\/span>/)
+  assert.match(PAGE, /<span className="hidden sm:inline">Send<\/span>/, 'the label is not conditional')
+  assert.doesNotMatch(page, /canAskFollowUp \? 'Next Question' : 'Send'/, 'the old two-way label is gone')
+  // The phrase survives in exactly one place: the Practice feedback
+  // checkpoint's "Continue to Next Question". That is not a per-answer choice
+  // -- it appears only after a review, it is the sole action offered, and it
+  // submits nothing. Counted rather than banned, so a second decision button
+  // reappearing would still fail this.
+  assert.equal([...PAGE.matchAll(/Next Question/g)].length, 1, 'exactly one mention')
+  assert.match(PAGE, /Continue to Next Question/)
 })
 
 test('the TurnIntent mechanism is gone from every layer', () => {

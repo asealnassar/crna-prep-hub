@@ -68,6 +68,36 @@ export default function Interview() {
   const [recentQuestions, setRecentQuestions] = useState<string[]>([])
   const [sessionId, setSessionId] = useState('')
   const [engineState, setEngineState] = useState<InterviewState | null>(null)
+  /**
+   * Practice-mode feedback checkpoint.
+   *
+   * One model turn returns BOTH the review of the question just answered and
+   * the next question to ask -- so the transcript used to render Q2 above Q1's
+   * review, which reads as the interviewer moving on before the coaching lands.
+   *
+   * The turn is not re-requested and nothing is regenerated: the next question
+   * is already in hand and simply held here, along with the engine state it
+   * belongs to, until the applicant clicks Continue. Keeping the state pending
+   * too is what stops the header counting up to Q2 while Q1's review is still
+   * on screen.
+   *
+   * The final turn works the same way: it returns Q10's review AND the whole
+   * report, so the report is deferred exactly as a next question is, and the
+   * applicant reads the last scenario's coaching before the interview's verdict
+   * lands on top of it.
+   *
+   * null means no checkpoint is open, which is every turn in Real Interview
+   * mode, every follow-up turn (they carry no evaluation), and the opening
+   * question.
+   */
+  const [pendingNext, setPendingNext] = useState<{
+    /** The deferred half: the next question, or the closing line plus report. */
+    message: ChatMessage
+    state: InterviewState
+    questionAsked: string
+    /** True when the deferred half completes the interview. */
+    isFinal: boolean
+  } | null>(null)
   const [turnError, setTurnError] = useState('')
   const [feedbackMessage, setFeedbackMessage] = useState('')
   const [feedbackSent, setFeedbackSent] = useState(false)
@@ -90,7 +120,11 @@ export default function Interview() {
   const freeRemaining = Math.max(0, FREE_INTERVIEW_ALLOWANCE - interviewCount)
   const maxQuestions = MAX_PRIMARY_QUESTIONS
   const questionNumber = Math.min(Math.max(engineState?.primaryQuestionNumber || 1, 1), maxQuestions)
-  const onFollowUp = engineState?.turnKind === 'follow_up'
+  // Suppressed during a feedback checkpoint: the header belongs to the question
+  // being reviewed, and that review closed the scenario the follow-up was part
+  // of. The question NUMBER is already correct, because the pending state is
+  // not applied until Continue.
+  const onFollowUp = engineState?.turnKind === 'follow_up' && !pendingNext
 
   const interviewTypes: {
     id: string
@@ -431,6 +465,12 @@ export default function Interview() {
    * `loading` stays what it was: the disabled state and the spinner.
    */
   const turnInFlight = useRef(false)
+  /**
+   * Continue is a state transition, not a request, so React state cannot guard
+   * it either: two clicks in one tick would both read pendingNext and append
+   * the question twice. Same synchronous ref, same reason.
+   */
+  const continueInFlight = useRef(false)
 
   /** Single place that talks to the engine, so both turn paths stay in sync. */
   const requestTurn = async (
@@ -483,6 +523,9 @@ export default function Interview() {
     setTurnError('')
     setMessages([])
     setEngineState(null)
+    // A new interview never inherits a checkpoint from the previous one.
+    setPendingNext(null)
+    continueInFlight.current = false
     setInterviewEnded(false)
     setSessionId(Date.now().toString(36) + Math.random().toString(36).substring(2))
     grantIdRef.current = null
@@ -520,6 +563,10 @@ export default function Interview() {
 
   const sendMessage = async () => {
     if (!input.trim() || interviewEnded) return
+    // The next question is generated but deliberately not shown yet, so there
+    // is nothing to answer: an answer sent now would be read against a question
+    // the applicant has not seen.
+    if (pendingNext) return
     // Acquired before the first await, released in `finally` on every path.
     if (turnInFlight.current) return
     turnInFlight.current = true
@@ -548,7 +595,57 @@ export default function Interview() {
         return
       }
 
-      const updatedMessages = [...newMessages, toAssistantMessage(data.render, data.message)]
+      const turnMessage = toAssistantMessage(data.render, data.message)
+
+      // Practice mode reviews the scenario before the interviewer moves on.
+      // The split applies only when this turn actually closed one -- it carries
+      // an evaluation -- and only when there is a next question to hold back.
+      // A follow-up turn carries no evaluation, a Real Interview turn never
+      // carries one, and the final turn is `complete` with a report rather
+      // than a question, so none of them open a checkpoint.
+      const practice = data.state.mode !== 'real'
+      // A closing turn always carries the review. What it carries ALONGSIDE the
+      // review is the next question, or -- on the last one -- the final report.
+      // Either way that second half is what gets held back.
+      const deferrable = data.complete ? Boolean(data.finalReport) : Boolean(turnMessage.content)
+      const checkpoint = practice && Boolean(data.evaluation) && deferrable
+
+      if (checkpoint) {
+        // One turn, two transcript entries: the review lands now, the rest
+        // waits. Nothing is re-requested to produce either half.
+        const review: ChatMessage = {
+          ...turnMessage,
+          content: '',
+          // Stripped so the verdict cannot render underneath the review it is
+          // supposed to follow.
+          finalReport: null,
+          allEvaluations: [],
+        }
+        const deferred: ChatMessage = data.complete
+          ? {
+              role: 'assistant',
+              content: turnMessage.content,
+              finalReport: turnMessage.finalReport,
+              allEvaluations: turnMessage.allEvaluations,
+            }
+          : { role: 'assistant', content: turnMessage.content }
+
+        const shown = [...newMessages, review]
+        setMessages(shown)
+        setPendingNext({
+          message: deferred,
+          state: data.state,
+          questionAsked: data.questionAsked,
+          isFinal: data.complete === true,
+        })
+        // Saved as the applicant sees it: the review, and the state the review
+        // belongs to. The checkpoint action commits the rest -- including, on
+        // the final turn, `complete`.
+        await saveSession(shown, engineState, currentSessionId)
+        return
+      }
+
+      const updatedMessages = [...newMessages, turnMessage]
       setMessages(updatedMessages)
       setEngineState(data.state)
       // Follow-ups deliberately aren't logged — the anti-repetition list
@@ -569,8 +666,46 @@ export default function Interview() {
     }
   }
 
+  /**
+   * Reveals the half of the turn that was held back -- the next question, or
+   * the final report.
+   *
+   * Deliberately NOT a request. Both halves, the engine state and the question
+   * text were all produced by the turn that closed the previous scenario, so
+   * this costs no model call, consumes no reserved turn, and cannot advance
+   * the interview a second time. On the final turn it is what applies
+   * `complete`, which is therefore applied exactly once.
+   */
+  const advanceFromCheckpoint = async () => {
+    if (continueInFlight.current) return
+    const next = pendingNext
+    if (!next) return
+    // Acquired before the first await; released in `finally` on every path.
+    continueInFlight.current = true
+    try {
+      const revealed = [...messages, next.message]
+      setMessages(revealed)
+      setEngineState(next.state)
+      setPendingNext(null)
+      if (next.isFinal) {
+        setInterviewEnded(true)
+        stopDictation()
+      } else if (next.questionAsked) {
+        // Follow-ups deliberately aren't logged — the anti-repetition list
+        // tracks primary scenarios only, and a checkpoint only ever holds a
+        // primary. The final turn asks nothing, so it logs nothing.
+        await saveQuestion(next.questionAsked, interviewType)
+      }
+      await saveSession(revealed, next.state, currentSessionId)
+    } finally {
+      continueInFlight.current = false
+    }
+  }
+
   const resetInterview = () => {
     turnInFlight.current = false
+    continueInFlight.current = false
+    setPendingNext(null)
     // Cleared, never carried over: the next interview asks again from scratch.
     setFollowUpsChoice(null)
     stopDictation()
@@ -1281,7 +1416,28 @@ export default function Interview() {
               </div>
 
               <div className="border-t border-slate-100 p-3 sm:p-4">
-                {!interviewEnded ? (
+                {pendingNext ? (
+                  /*
+                    The composer is replaced, not merely disabled: the next
+                    question exists but is deliberately not on screen, so there
+                    is nothing here to answer yet. One action, and it reveals a
+                    question that has already been generated -- no model call.
+                  */
+                  <div className="text-center">
+                    <p className="mb-3 text-xs text-slate-500 sm:text-sm">
+                      {pendingNext.isFinal
+                        ? 'Review your feedback for this question, then see your full report.'
+                        : 'Review your feedback above, then continue.'}
+                    </p>
+                    <button
+                      onClick={advanceFromCheckpoint}
+                      className="inline-flex h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-500 px-6 text-sm font-semibold text-white transition hover:from-violet-700 hover:to-indigo-600 sm:w-auto"
+                    >
+                      {pendingNext.isFinal ? 'Finish Interview' : 'Continue to Next Question'}
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : !interviewEnded ? (
                   <>
                     <div className="flex gap-2 sm:gap-3">
                       <input
