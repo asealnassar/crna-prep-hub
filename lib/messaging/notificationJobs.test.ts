@@ -105,20 +105,6 @@ async function setup(): Promise<World> {
   return world
 }
 
-/** Jobs for the tagged fixture only -- never a count of the whole table. */
-async function jobsForTaggedMessages(): Promise<number> {
-  const { data: threads } = await admin
-    .from('message_threads').select('id').like('subject', `${TAG}%`)
-  const tids = (threads ?? []).map((t: any) => t.id)
-  if (!tids.length) return 0
-  const { data: msgs } = await admin.from('thread_messages').select('id').in('thread_id', tids)
-  const mids = (msgs ?? []).map((m: any) => m.id)
-  if (!mids.length) return 0
-  const { count } = await admin
-    .from(JOBS).select('*', { count: 'exact', head: true }).in('message_id', mids)
-  return count ?? 0
-}
-
 // ===================================================== the table is there at all
 
 test('0: the table exists after the migration', { skip }, async () => {
@@ -167,12 +153,27 @@ test('A3: the ADMIN browser session cannot touch it either', { skip }, async () 
 
 test('B1: service_role can SELECT and INSERT a valid job', { skip }, async () => {
   const w = await setup()
-  await admin.from(JOBS).delete().eq('message_id', w.messageId)
+
+  // A null-sender message, which the Phase 2 trigger deliberately skips, so no
+  // job exists for it and this test measures the worker's own INSERT rather
+  // than the trigger's. Clearing a trigger-created job first is not an option:
+  // service_role has no DELETE grant on this table, by design -- the earlier
+  // version of this test relied on a privilege it never had, and only passed
+  // while the table was inert.
+  const { data: msg } = await admin
+    .from('thread_messages')
+    .insert({ thread_id: w.threadId, sender_id: null, message_text: `${TAG} worker-insert` })
+    .select('id').single()
+
+  const { count: preexisting } = await admin
+    .from(JOBS).select('*', { count: 'exact', head: true }).eq('message_id', msg!.id)
+  assert.equal(preexisting, 0, 'the trigger leaves a null-sender message alone')
+
   const { error } = await admin
-    .from(JOBS).insert({ message_id: w.messageId, recipient_user_id: w.aId })
+    .from(JOBS).insert({ message_id: msg!.id, recipient_user_id: w.aId })
   assert.equal(error, null, 'the worker must be able to record an obligation')
 
-  const { data } = await admin.from(JOBS).select('*').eq('message_id', w.messageId).single()
+  const { data } = await admin.from(JOBS).select('*').eq('message_id', msg!.id).single()
   assert.equal(data!.status, 'pending', 'default status')
   assert.equal(data!.attempts, 0, 'default attempts')
   assert.ok(data!.next_attempt_at, 'default next_attempt_at')
@@ -267,45 +268,12 @@ test('C5: deleting the message cascades its job away', { skip }, async () => {
   assert.equal(after.count, 0, 'the job must go with its message')
 })
 
-// ===================================================== D. INERTNESS
+// ===================================================== D. the RPCs still behave
 
-test('D1: creating a new conversation creates NO job', { skip }, async () => {
-  const w = await setup()
-  // w.aClient, not a fresh sessionFor: A is already authenticated in setup.
-  const { data: threadId, error } = await w.aClient.rpc(
-    'create_thread_with_message',
-    { p_subject: `${TAG} inert-new`, p_recipient_ids: [w.adminId], p_message_text: `${TAG} inert-new` },
-  )
-  assert.equal(error, null, 'the conversation itself must still work')
-
-  const { data: msgs } = await admin.from('thread_messages').select('id').eq('thread_id', threadId)
-  assert.ok((msgs ?? []).length >= 1, 'the message was created')
-
-  const { count } = await admin
-    .from(JOBS).select('*', { count: 'exact', head: true })
-    .in('message_id', (msgs ?? []).map((m: any) => m.id))
-  assert.equal(count, 0, 'Phase 1 must not enqueue anything')
-})
-
-test('D2: a reply creates NO job', { skip }, async () => {
-  const w = await setup()
-  const { data: msg, error } = await w.adminClient
-    .from('thread_messages')
-    .insert({ thread_id: w.threadId, sender_id: w.adminId, message_text: `${TAG} inert-reply` })
-    .select('id').single()
-  assert.equal(error, null, 'replying must still work')
-
-  const { count } = await admin
-    .from(JOBS).select('*', { count: 'exact', head: true }).eq('message_id', msg!.id)
-  assert.equal(count, 0, 'no trigger may exist on thread_messages yet')
-})
-
-test('D3: no trigger exists -- proven behaviourally across every insert path', { skip }, async () => {
-  // Stronger than reading pg_trigger: if any notification trigger existed on
-  // thread_messages, one of these would have produced a row.
-  const n = await jobsForTaggedMessages()
-  assert.equal(n, 1, 'only the single job tests B1-B3 inserted by hand may exist')
-})
+// D1-D3 lived here. They asserted that NOTHING enqueued -- correct while the
+// table was inert in Phase 1, and deliberately false since the Phase 2 trigger
+// shipped. notificationTrigger.test.ts owns that behaviour now and proves the
+// positive case, which is the stronger assertion.
 
 test('D4: the messaging RPCs are unchanged and still work', { skip }, async () => {
   const w = await setup()
