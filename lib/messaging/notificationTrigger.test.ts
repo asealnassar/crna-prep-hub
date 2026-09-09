@@ -274,8 +274,8 @@ test('7: every tagged fixture and job is removed', { skip }, async () => {
   const { data: threads } = await admin
     .from('message_threads').select('id').like('subject', `${TAG}%`)
   const ids = (threads ?? []).map((t: any) => t.id)
+  const mids = await msgsIn(ids)
   if (ids.length) {
-    const mids = await msgsIn(ids)
     if (mids.length) {
       await admin.from(JOBS).delete().in('message_id', mids)
       await admin.from('message_read_status').delete().in('message_id', mids)
@@ -290,8 +290,12 @@ test('7: every tagged fixture and job is removed', { skip }, async () => {
     .from('message_threads').select('*', { count: 'exact', head: true }).like('subject', `${TAG}%`)
   assert.equal(left, 0, 'no tagged thread survives')
 
-  const { count: jobs } = await admin.from(JOBS).select('*', { count: 'exact', head: true })
-  assert.equal(jobs, 0, 'the queue is empty again -- no worker exists to drain it')
+  // Scoped to THIS suite's messages. A whole-table count was only ever right
+  // while the queue happened to be empty; it now holds real, unsent jobs that
+  // are none of this suite's business.
+  const { count: jobs } = await admin
+    .from(JOBS).select('*', { count: 'exact', head: true }).in('message_id', mids)
+  assert.equal(jobs, 0, 'every job this suite created went with its message')
 
   // The cohort and the control are unchanged by this suite.
   const { data: tiers } = await admin

@@ -306,8 +306,17 @@ test('E1: no UNPLANNED worker route exists', { skip: false }, () => {
   }
 })
 
-test('E2: no cron configuration exists yet', { skip: false }, () => {
-  assert.ok(!existsSync('vercel.json'), 'vercel.json must not exist in Phase 1')
+test('E2: the worker is scheduled, and only the worker', { skip: false }, () => {
+  // Was "no cron configuration exists yet", true from Phase 1 until the
+  // cutover deliberately scheduled the worker. What still matters is that the
+  // schedule contains the worker and nothing else.
+  assert.ok(existsSync('vercel.json'), 'the worker must actually be scheduled')
+  const cron = JSON.parse(readFileSync('vercel.json', 'utf8'))
+  assert.deepEqual(Object.keys(cron), ['crons'], 'no unrelated config')
+  assert.equal(cron.crons.length, 1, 'exactly one cron')
+  assert.equal(cron.crons[0].path, '/api/messages/notification-worker')
+  assert.equal(cron.crons[0].schedule, '* * * * *')
+  assert.ok(!JSON.stringify(cron).includes('CRON_SECRET'), 'no secret in source control')
 })
 
 test('E3: the migration is inert -- no trigger, GUC, or RPC change in its SQL', { skip: false }, () => {
@@ -338,15 +347,19 @@ test('E3: the migration is inert -- no trigger, GUC, or RPC change in its SQL', 
   assert.match(exec, /grant update \(/i)
 })
 
-test('E4: Phase 1 inline notification behaviour is untouched', { skip: false }, () => {
+test('E4: the queue is the sole normal-message sender', { skip: false }, () => {
+  // Was "Phase 1 inline notification behaviour is untouched". The cutover
+  // removed that behaviour on purpose; what must hold now is its absence.
   const modal = readFileSync('components/MessagesModal.tsx', 'utf8')
-  assert.match(modal, /const notifyRecipient = async/, 'M-5 Phase 1 helper still present')
-  assert.match(modal, /await notifyRecipient\(/)
-  assert.match(modal, /fetch\('\/api\/messages\/notify'/)
-  assert.ok(!/email_notification_jobs/.test(modal), 'the client must not know about the queue yet')
+  assert.ok(!/notifyRecipient/.test(modal), 'the inline helper is gone')
+  assert.ok(!/api\/messages\/notify/.test(modal), 'and so is every call to it')
+
+  // The client still never touches the queue directly -- the trigger enqueues,
+  // the worker drains, and neither is the browser's business.
+  assert.ok(!/email_notification_jobs/.test(modal), 'the client must not read the queue')
 
   const notify = readFileSync('lib/messageNotify.ts', 'utf8')
-  assert.ok(!/email_notification_jobs/.test(notify), 'the notify route must not use the queue yet')
+  assert.ok(!/email_notification_jobs/.test(notify), 'the notify route does not use the queue')
 })
 
 // ===================================================== CLEANUP
@@ -355,9 +368,11 @@ test('cleanup: every row this suite created is removed', { skip }, async () => {
   const { data: threads } = await admin
     .from('message_threads').select('id').like('subject', `${TAG}%`)
   const ids = (threads ?? []).map((t: any) => t.id)
+  const { data: msgs } = ids.length
+    ? await admin.from('thread_messages').select('id').in('thread_id', ids)
+    : { data: [] as any[] }
+  const mids = (msgs ?? []).map((m: any) => m.id)
   if (ids.length) {
-    const { data: msgs } = await admin.from('thread_messages').select('id').in('thread_id', ids)
-    const mids = (msgs ?? []).map((m: any) => m.id)
     if (mids.length) {
       await admin.from(JOBS).delete().in('message_id', mids)
       await admin.from('message_read_status').delete().in('message_id', mids)
@@ -371,7 +386,11 @@ test('cleanup: every row this suite created is removed', { skip }, async () => {
     .from('message_threads').select('*', { count: 'exact', head: true }).like('subject', `${TAG}%`)
   assert.equal(count, 0, 'test data must not be left behind')
 
-  const { count: jobs } = await admin.from(JOBS).select('*', { count: 'exact', head: true })
-  assert.equal(jobs, 0, 'the queue must be empty again -- Phase 1 leaves it inert')
+  // Scoped to THIS suite's messages. A whole-table count was only ever right
+  // while the queue happened to be empty; it now holds real, unsent jobs.
+  const { count: jobs } = mids.length
+    ? await admin.from(JOBS).select('*', { count: 'exact', head: true }).in('message_id', mids)
+    : { count: 0 }
+  assert.equal(jobs, 0, 'every job this suite created went with its message')
   world = null
 })

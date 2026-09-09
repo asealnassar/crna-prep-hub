@@ -100,7 +100,14 @@ async function resolvePayload(db: SupabaseClient, job: JobRow) {
   }
 }
 
-export async function POST(request: NextRequest) {
+/**
+ * One handler, exposed as both methods.
+ *
+ * Vercel Cron invokes a configured path with GET; POST is kept for a manual
+ * operator run. They are the SAME function object, not two functions that
+ * happen to agree -- there is no second copy of the worker body to drift.
+ */
+async function handleWorkerRequest(request: NextRequest) {
   const refused = authorize(request)
   if (refused) return refused
 
@@ -151,3 +158,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Worker failed' }, { status: 500 })
   }
 }
+
+export const GET = handleWorkerRequest
+export const POST = handleWorkerRequest

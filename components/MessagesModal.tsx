@@ -444,43 +444,13 @@ const [compose, setCompose] = useState({
         .update({ updated_at: new Date().toISOString() })
         .eq('id', selectedThread.id)
 
-      // Replies previously stopped here, so the other participant was never
-      // emailed -- only new threads triggered a notification. One request per
-      // other participant (one, in a normal two-party thread). The sender is
-      // already excluded: `participants` is queried with .neq('user_id', user.id).
-      //
-      // The reply itself is saved above and is never rolled back if the email
-      // fails, and nothing here retries, so a notification failure cannot
-      // duplicate the message.
-      let notifyFailed = false
-      if (participants) {
-        for (const p of participants) {
-          try {
-            const res = await fetch('/api/messages/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                recipientId: p.user_id,
-                // The exact message just written. The server validates that it
-                // belongs to this sender and to a thread shared with the
-                // recipient, then uses its stored text for the preview.
-                messageId: newMessage.id,
-              }),
-            })
-            if (!res.ok) notifyFailed = true
-          } catch (err) {
-            console.error('Reply notification failed:', err)
-            notifyFailed = true
-          }
-        }
-      }
-
+      // The email is no longer sent from here. Inserting the message above
+      // fires the database trigger, which records a durable notification job;
+      // the worker delivers it under the same idempotency key this path used
+      // to present. Nothing is awaited and nothing is lost when the tab
+      // closes, which is the whole point of the queue.
       setReplyText('')
       loadThread(selectedThread.id)
-
-      if (notifyFailed) {
-        alert('Your reply was sent, but the email notification could not be delivered.')
-      }
     } finally {
       // Every exit releases the gate: the `!user` return, the failed insert,
       // a thrown request, and the successful send alike. A send that fails
@@ -490,49 +460,17 @@ const [compose, setCompose] = useState({
     }
   }
 
-/**
-   * M-5: one awaited notification attempt for one recipient.
+  /**
+   * There is no inline notification sender any more.
    *
-   * Returns whether the email workflow was accepted. Both compose paths used
-   * to fire this and walk away: a fire-and-forget fetch is cancelled when the
-   * tab closes, and a non-2xx resolves normally rather than throwing, so a
-   * bare `.catch()` reported rate limits, 403s and 502s as success. That is
-   * how a 114-recipient send once delivered about 19 emails with nothing
-   * recorded anywhere.
+   * Every normal message -- new conversation or reply -- is enqueued by the
+   * database trigger the moment it is inserted, and the durable worker sends
+   * it under `message-notification-<message_id>`. That removes the two failure
+   * modes an inline send could never fix: a request cancelled by the tab
+   * closing, and a rejection nobody retried.
    *
-   * It never touches the in-app message. `false` means "the email did not
-   * go" -- never "create the message again".
+   * Tier broadcasts are untouched and keep their own batch email system.
    */
-  const notifyRecipient = async (
-    recipientId: string,
-    senderName: string,
-    threadId?: string | null,
-  ): Promise<boolean> => {
-    try {
-      const res = await fetch('/api/messages/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipientId,
-          senderName,
-          // The thread the RPC just created, NOT a message id. The server looks
-          // the message up itself: Compose cannot know the message id, and a
-          // client-supplied one would not be trusted for it anyway.
-          ...(threadId ? { threadId } : {}),
-          messagePreview:
-            compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : ''),
-        }),
-      })
-      if (!res.ok) {
-        console.error('Notification rejected with status', res.status, 'for', recipientId)
-        return false
-      }
-      return true
-    } catch (err) {
-      console.error('Notification request failed for', recipientId, err)
-      return false
-    }
-  }
 
 const composeMessage = async () => {
     // The gate, taken before any await. Validation stays ahead of it, so an
@@ -655,11 +593,6 @@ if (isAdmin) {
           // database policy would surface, silently.
           const failed: string[] = []
           let sent = 0
-          // M-5: email outcomes are counted apart from message outcomes, so a
-          // delivered conversation is never reported as a failed one, and a
-          // failed email is never reported as a delivered one.
-          let emailed = 0
-          let emailFailed = 0
           for (const recipientId of compose.selectedUserIds) {
             const { data: newThreadId, error: threadError } = await supabase.rpc('create_thread_with_message', {
               p_subject: compose.subject,
@@ -674,30 +607,21 @@ if (isAdmin) {
               continue
             }
             sent++
-
-            // Awaited inside the existing sequential loop, deliberately: one
-            // request in flight at a time. The previous loop fired every
-            // recipient's notification at once, which is what met the
-            // provider's rate limiting. Promise.all would keep that burst.
-            // This mirrors how the broadcast route paces itself -- batches
-            // sent one after another, never concurrently.
-            if (await notifyRecipient(recipientId, 'CRNA Prep Hub Admin', newThreadId)) emailed++
-            else emailFailed++
+            // No notification call: the trigger enqueued one when the RPC
+            // inserted the message.
           }
 
-const totalSelected = compose.selectedUserIds.length
-          const messagePart =
-            failed.length === 0
-              ? `Messages sent to ${sent} users.`
-              : `Messages sent to ${sent} of ${totalSelected} users. ${failed.length} could not be delivered.`
-          const emailPart =
-            emailFailed === 0
-              ? `Email notifications sent to ${emailed}.`
-              : `Email notifications sent to ${emailed}; ${emailFailed} failed.`
+// Only the message outcome is known here. Provider delivery is now
+          // asynchronous, so the wording says the notifications are QUEUED --
+          // claiming they were sent would be a guess about work that has not
+          // happened yet.
+          const totalSelected = compose.selectedUserIds.length
           alert(
-            failed.length === 0 && emailFailed === 0
-              ? `Messages and email notifications sent to ${sent} users.`
-              : `${messagePart} ${emailPart}`
+            failed.length === 0
+              ? `Messages sent to ${sent} users. Email notifications queued.`
+              : `Messages sent to ${sent} of ${totalSelected} users. ` +
+                `${failed.length} could not be delivered. ` +
+                `Email notifications queued for the ${sent} successful messages.`
           )
           setCompose({
             subject: '',
@@ -742,17 +666,9 @@ console.log('📧 About to call email API with:', {
           messagePreview: compose.message.substring(0, 150)
         })
         
-        // The conversation above is already committed. A failed email is
-        // reported as exactly that, never as a failed message, and nothing
-        // here re-creates the thread.
-        const notified = await notifyRecipient(
-          recipientId,
-          isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
-          newThreadId
-        )
-        if (!notified) {
-          alert('Message sent, but the email notification could not be delivered.')
-        }
+        // The conversation is committed and its notification is already
+        // queued by the trigger. Nothing to await, nothing to report: this
+        // path stays silent on success, as it always has.
       }
 setCompose({
         subject: '',

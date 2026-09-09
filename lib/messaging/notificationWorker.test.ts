@@ -289,7 +289,15 @@ test('16: the route is cron-only and fails closed', () => {
   assert.equal(adminUses.length, 1, 'exactly one use')
   assert.match(src, /senderName: senderNameFor\(senderEmail, isAdminEmail\(senderEmail\)\)/,
     'and it is the sender-name lookup, not an authorization check')
-  assert.ok(!/export async function GET/.test(src), 'no GET surface')
+  // Vercel Cron invokes with GET, so GET exists -- but it is the SAME function
+  // object as POST, not a second copy of the worker body.
+  assert.match(src, /export const GET = handleWorkerRequest/)
+  assert.match(src, /export const POST = handleWorkerRequest/)
+  assert.equal(
+    [...src.matchAll(/async function handleWorkerRequest/g)].length, 1,
+    'exactly one handler implementation',
+  )
+  assert.ok(!/export async function (GET|POST)/.test(src), 'no separately-defined method')
 
   // Authorization happens before anything else.
   const authorize = src.indexOf('const refused = authorize(request)')
@@ -314,12 +322,20 @@ test('17: these tests cannot reach a database, a provider, or a real job', () =>
   }
 })
 
-test('17b: cron is OFF -- no schedule exists', () => {
-  assert.ok(!existsSync(`${ROOT}vercel.json`), 'no vercel.json, so no cron entry')
-  assert.ok(!existsSync(`${ROOT}app/api/cron`), 'no cron route directory')
-  // And the worker is not referenced by anything that could call it.
+test('17b: cron is ON, pointed at this worker, and carries no secret', () => {
+  // Was "cron is OFF". Phases 1-3 held the worker dormant; the cutover armed
+  // it. What still matters: the schedule names THIS worker, nothing else runs
+  // on it, and no secret was committed.
+  const cron = JSON.parse(read('vercel.json'))
+  assert.deepEqual(Object.keys(cron), ['crons'])
+  assert.equal(cron.crons.length, 1)
+  assert.equal(cron.crons[0].path, '/api/messages/notification-worker')
+  assert.equal(cron.crons[0].schedule, '* * * * *')
+  assert.ok(!JSON.stringify(cron).includes('CRON_SECRET'))
+
+  // Still no browser path to it: cron calls it, nothing in the UI does.
   const modal = read('components/MessagesModal.tsx')
-  assert.ok(!/notification-worker/.test(modal), 'the browser must not know it exists')
+  assert.ok(!/notification-worker/.test(modal), 'the browser must not invoke it')
 })
 
 test('17c: the broadcast worker is untouched', () => {

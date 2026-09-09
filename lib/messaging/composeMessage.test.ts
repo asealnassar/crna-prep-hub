@@ -521,9 +521,8 @@ test('23: compose shows only approved copy', () => {
     "'Admin user not found'",
     "'Failed to send message'",
     '`Message sent to ${count} users in ${compose.selectedTier} tier${emailSummary}`',
-    // M-5 Phase 1, approved:
-    "'Message sent, but the email notification could not be delivered.'",
-    'failed.length === 0 && emailFailed === 0',
+    // Cutover, approved: delivery is asynchronous, so the copy says queued.
+    'failed.length === 0',
   ]
   for (const a of alerts) {
     assert.ok(
