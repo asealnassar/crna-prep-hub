@@ -468,7 +468,9 @@ export async function POST(request: NextRequest) {
       ...(agg.outstanding > 0 ? { still_processing: true } : {}),
     })
   } catch (error) {
-    console.error('Broadcast error:', error)
+    // Code and message only. This block holds the broadcast subject and body,
+    // and a Postgres error's `details` can echo the row it failed on.
+    console.error('Broadcast error:', (error as any)?.code, (error as any)?.message)
     if (claimed) {
       // Release the lease so a retry can recover immediately rather than
       // waiting it out.

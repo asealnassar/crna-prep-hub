@@ -117,10 +117,26 @@ test('10: no render path compares senderEmail with userEmail', () => {
 })
 
 // -------------------------------------- 11: email still available for notifications
-test('11: userEmail is still used for the notification sender name', () => {
-  assert.ok(/senderName: isAdmin \? 'CRNA Prep Hub Admin' : userEmail/.test(code),
-    'the notify payload still names the sender by address')
+test('11: the sender DISPLAY name is server-side, and never decides ownership', () => {
+  // This once asserted a client-side notify payload named the sender by
+  // address. That payload went with the durable-email cutover, and its last
+  // copy went with the M-6 debug log. Naming is now the worker's job.
+  const worker = readFileSync(
+    new URL('./notificationWorker.ts', import.meta.url).pathname, 'utf8')
+  assert.match(worker, /export function senderNameFor\(senderEmail: string \| null, isAdmin: boolean\)/)
+  assert.match(worker, /if \(isAdmin\) return 'CRNA Prep Hub Admin'/)
+  assert.match(worker, /return senderEmail \|\| 'A CRNA Prep Hub member'/)
+
+  // The prop survives -- it is display text, not identity.
   assert.ok(code.includes('userEmail: string'), 'the prop is retained')
+
+  // And the point of the whole suite: naming and ownership stay separate. An
+  // address may label a message; it may never decide whose it is.
+  assert.ok(
+    !/userEmail ===|=== userEmail|senderEmail ===/.test(code),
+    'no email comparison may appear in the client',
+  )
+  assert.match(code, /msg\.sender_id != null && msg\.sender_id === currentUserId/)
 })
 
 // --------------------------------------- 12: the id follows the session

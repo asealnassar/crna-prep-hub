@@ -300,7 +300,9 @@ export async function POST(request: NextRequest) {
     // conversation with, no message bodies other than the caller's own view.
     return NextResponse.json({ emails, threads: metas, groups })
   } catch (error) {
-    console.error('Participant route error:', error)
+    // This route reads message_text; never log a whole caught object, whose
+    // Postgres `details` could carry a row with it.
+    console.error('Participant route error:', (error as any)?.code, (error as any)?.message)
     return NextResponse.json({ error: 'Lookup failed' }, { status: 500 })
   }
 }

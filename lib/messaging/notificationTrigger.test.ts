@@ -58,9 +58,23 @@ const asUser = (token: string) =>
 type World = { aId: string; bId: string; controlId: string; adminId: string; adminTok: string }
 let world: World | null = null
 
+/**
+ * Broadcast-table counts when this suite began.
+ *
+ * These are GLOBAL production tables and their contents legitimately grow --
+ * three real tier broadcasts landed between one run of this suite and the
+ * next. Asserting a historical absolute made the suite fail on ordinary admin
+ * activity, so every check below is a delta against this snapshot instead.
+ */
+let entry: { broadcasts: number; batches: number } | null = null
+
 /** Also the cohort safety gate: a broadcast reaches whoever is in the tier. */
 async function setup(): Promise<World> {
   if (world) return world
+  if (!entry) {
+    const c = await counts()
+    entry = { broadcasts: c.broadcasts, batches: c.batches }
+  }
   const { data: rows } = await admin
     .from('user_profiles').select('id, email, subscription_tier')
     .in('email', [A_EMAIL, B_EMAIL, CONTROL_EMAIL, ADMIN_EMAIL])
@@ -307,8 +321,16 @@ test('7: every tagged fixture and job is removed', { skip }, async () => {
   assert.equal(by.get(CONTROL_EMAIL), 'free', 'the control account is untouched')
   assert.notEqual(by.get(ADMIN_EMAIL), TEST_TIER)
 
+  // Delta, not absolute. This suite never calls the broadcast email route, so
+  // its own effect on these tables is zero -- while real broadcast history
+  // before or during the run is none of its business and must survive.
   const c = await counts()
-  assert.equal(c.broadcasts, 3, 'email_broadcasts at baseline')
-  assert.equal(c.batches, 7, 'email_broadcast_batches at baseline')
+  assert.ok(entry, 'a suite-entry snapshot was taken')
+  assert.equal(c.broadcasts - entry!.broadcasts, 0, 'this suite must add no email_broadcasts rows')
+  assert.equal(c.batches - entry!.batches, 0, 'nor any email_broadcast_batches rows')
+  assert.ok(
+    c.broadcasts >= entry!.broadcasts && c.batches >= entry!.batches,
+    'and must never destroy real broadcast history',
+  )
   world = null
 })

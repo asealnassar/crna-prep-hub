@@ -20,7 +20,6 @@ function ClientProvidersInner({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      console.log('ClientProviders - Current user:', user?.email)
       setUser(user)
       setLoading(false)
     }
@@ -29,7 +28,6 @@ function ClientProvidersInner({ children }: { children: React.ReactNode }) {
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      console.log('Auth state changed:', session?.user?.email)
       setUser(session?.user ?? null)
     })
 

@@ -123,7 +123,8 @@ export async function authenticateRequest(): Promise<AuthedUser | null> {
       isUltimate: tier === 'ultimate',
     }
   } catch (error) {
-    console.error('API authentication failed:', error)
+    // Never the object: an auth error can carry session-shaped fields.
+    console.error('API authentication failed:', (error as any)?.code, (error as any)?.message)
     return null
   }
 }

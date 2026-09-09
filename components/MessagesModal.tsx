@@ -418,7 +418,9 @@ const [compose, setCompose] = useState({
       // exist, and nothing was reported -- so the send looked like it worked
       // and the text needed to retry it was already gone.
       if (insertError || !newMessage) {
-        console.error('Reply insert failed:', insertError)
+        // Code and message only. A Postgres error's `details` can echo the
+        // failing row, which here would be the message text.
+        console.error('Reply insert failed:', insertError?.code, insertError?.message)
         alert('Your reply could not be sent. Please try again.')
         return
       }
@@ -568,7 +570,11 @@ const composeMessage = async () => {
             break
           } catch (err) {
             // Network failure. Retry the email endpoint only — never the RPC.
-            console.error('Broadcast notification attempt failed:', err)
+            console.error(
+              'Broadcast notification attempt failed:',
+              (err as any)?.name,
+              (err as any)?.message,
+            )
           }
         }
 
@@ -659,13 +665,6 @@ const { data: newThreadId, error: createError } = await supabase.rpc('create_thr
         // was then cleared as though the conversation had been created.
         if (createError) throw createError
 
-        // Send email notification
-console.log('📧 About to call email API with:', {
-          recipientId,
-          senderName: isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
-          messagePreview: compose.message.substring(0, 150)
-        })
-        
         // The conversation is committed and its notification is already
         // queued by the trigger. Nothing to await, nothing to report: this
         // path stays silent on success, as it always has.
@@ -681,7 +680,9 @@ setCompose({
       setShowCompose(false)
       loadThreads()
     } catch (error) {
-      console.error('Error sending message:', error)
+      // Message only -- the thrown value may be a Postgres error whose
+      // `details` echoes the row that failed to insert.
+      console.error('Error sending message:', (error as any)?.code, (error as any)?.message)
       alert('Failed to send message')
     } finally {
       // One release site for every exit: the `!user` return, both validation

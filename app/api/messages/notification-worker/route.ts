@@ -154,7 +154,9 @@ async function handleWorkerRequest(request: NextRequest) {
     }, {})
     return NextResponse.json({ processed: results.length, ...tally })
   } catch (error) {
-    console.error('Notification worker error:', error)
+    // The worker holds a rendered preview in memory; log only the shape of
+    // the failure, never the object that might close over it.
+    console.error('Notification worker error:', (error as any)?.code, (error as any)?.message)
     return NextResponse.json({ error: 'Worker failed' }, { status: 500 })
   }
 }
