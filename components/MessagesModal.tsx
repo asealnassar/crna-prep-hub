@@ -265,18 +265,35 @@ const [compose, setCompose] = useState({
           (a, b) => (a.lastMessageTime > b.lastMessageTime ? a : b),
           members[0]
         )
+        // H-6: read progress, derived from the member threads instead of
+        // asserted. Grouping requires `!hasReply` -- no recipient has REPLIED
+        // -- which says nothing about whether anyone has READ. The row used to
+        // hardcode `recipientHasRead: true`, so a broadcast that 376 of its
+        // 377 recipients had never opened was filed under "Read" and could
+        // not appear under "Unread" at all.
+        //
+        // Both numbers come from `members`, never from the server's cluster
+        // size, so X can never exceed Y should the two ever disagree.
+        const recipientCount = members.length
+        const readCount = members.filter(m => m.recipientHasRead).length
+        const replyNote =
+          g.replies > 0
+            ? `${g.replies} ${g.replies === 1 ? 'reply' : 'replies'}`
+            : 'No replies yet'
         return {
           id: g.group_id,
           isGroup: true,
           subject: g.subject,
-          otherParticipantEmail:
-            g.replies > 0
-              ? `${g.recipients} recipients · ${g.replies} ${g.replies === 1 ? 'reply' : 'replies'}`
-              : `${g.recipients} recipients · No replies yet`,
+          readCount,
+          recipientCount,
+          otherParticipantEmail: `${readCount} / ${recipientCount} read · ${replyNote}`,
           lastMessage: newest?.lastMessage ?? '',
           lastMessageTime: g.last_message_at || newest?.lastMessageTime,
           unreadCount: 0,
-          recipientHasRead: true,
+          // Read only when every recipient has read it, so 99 / 100 still
+          // surfaces under "Unread". The existing filter needs no change: it
+          // already keys on recipientHasRead.
+          recipientHasRead: readCount === recipientCount,
         }
       })
 
