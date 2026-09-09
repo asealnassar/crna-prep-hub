@@ -292,13 +292,17 @@ test('D4: the messaging RPCs are unchanged and still work', { skip }, async () =
 
 // ===================================================== E. nothing else was built
 
-test('E1: no worker route exists yet', { skip: false }, () => {
+test('E1: no UNPLANNED worker route exists', { skip: false }, () => {
+  // notification-worker/route.ts was listed here until Phase 3 deliberately
+  // created it. The remaining paths are speculative ones nothing has claimed,
+  // so this still catches a second worker appearing by accident. E2 below is
+  // the assertion that now carries the weight: the worker exists but is
+  // unreachable, because no cron configuration schedules it.
   for (const p of [
-    'app/api/messages/notification-worker/route.ts',
     'app/api/messages/notifications/route.ts',
     'app/api/cron/notifications/route.ts',
   ]) {
-    assert.ok(!existsSync(p), `${p} must not exist in Phase 1`)
+    assert.ok(!existsSync(p), `${p} must not exist`)
   }
 })
 
