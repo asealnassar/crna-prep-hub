@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'crypto'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { authenticateRequest, readAccessToken } from '@/lib/apiAuth'
+import { pageAll, fetchByIdChunks, chunkIds, ID_CHUNK } from '@/lib/messaging/pagination'
 
 /**
  * Thread metadata for the caller's inbox.
@@ -20,12 +21,17 @@ import { authenticateRequest, readAccessToken } from '@/lib/apiAuth'
  *    thread to find each counterpart; that fan-out is replaced by the
  *    per-thread metadata returned here.
  *
+ * 3. Query-string length. Paging was not enough: `.range()` re-sends the
+ *    whole id list on every page, so once the caller held more than ~396
+ *    threads every `.in()` here was rejected at the HTTP layer and this route
+ *    returned 500 for its largest inboxes. The id lists are chunked now. See
+ *    lib/messaging/pagination.ts.
+ *
  * Broadcast grouping is computed here too, and is PRESENTATION ONLY. It never
  * informs authorization, delivery, ownership or email idempotency.
  */
 
-/** PostgREST truncates an unbounded select; every list read below pages. */
-const PAGE = 900
+export const maxDuration = 60
 
 /** A fan-out must be at least this many threads. Two same-subject messages
  *  sent by hand are never treated as a broadcast. */
@@ -35,19 +41,6 @@ const MIN_GROUP_SIZE = 3
  *  insert straddling a second (or minute) boundary without merging separate
  *  sends of the same content days apart. */
 const GROUP_WINDOW_MS = 10 * 60 * 1000
-
-async function pageAll<T>(
-  build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>
-): Promise<T[]> {
-  const out: T[] = []
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await build(from, from + PAGE - 1)
-    if (error) throw new Error(error.message)
-    const rows = data ?? []
-    out.push(...rows)
-    if (rows.length < PAGE) return out
-  }
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -83,24 +76,26 @@ export async function POST(request: NextRequest) {
 
     // 2. Everyone in those threads, and everyone who has posted in them. This
     //    set — never the request body — bounds what may be resolved.
-    const participants = await pageAll<{ thread_id: string; user_id: string }>((from, to) =>
-      userClient
-        .from('thread_participants')
-        .select('thread_id, user_id')
-        .in('thread_id', threadIds)
-        .range(from, to)
+    const participants = await fetchByIdChunks<{ thread_id: string; user_id: string }>(
+      threadIds,
+      (chunk, from, to) =>
+        userClient
+          .from('thread_participants')
+          .select('thread_id, user_id')
+          .in('thread_id', chunk)
+          .range(from, to)
     )
-    const messages = await pageAll<{
+    const messages = await fetchByIdChunks<{
       thread_id: string
       sender_id: string
       message_text: string
       created_at: string
       id: string
-    }>((from, to) =>
+    }>(threadIds, (chunk, from, to) =>
       userClient
         .from('thread_messages')
         .select('id, thread_id, sender_id, message_text, created_at')
-        .in('thread_id', threadIds)
+        .in('thread_id', chunk)
         .order('created_at', { ascending: true })
         .range(from, to)
     )
@@ -122,35 +117,41 @@ export async function POST(request: NextRequest) {
 
     const ids = Array.from(authorized)
     const emails: Record<string, { email: string }> = {}
-    for (let i = 0; i < ids.length; i += PAGE) {
+    // Chunked by id count, not by page size: 900 ids overruns the query string.
+    for (const chunk of chunkIds(ids, ID_CHUNK)) {
       const { data, error } = await adminClient
         .from('user_profiles')
         .select('id, email')
-        .in('id', ids.slice(i, i + PAGE))
+        .in('id', chunk)
       if (error) throw new Error(error.message)
       for (const p of data ?? []) if (p.id && p.email) emails[p.id] = { email: p.email }
     }
 
     // 4. Threads and read state, both paginated.
-    const threadRows = await pageAll<{
+    const threadRows = await fetchByIdChunks<{
       id: string
       subject: string
       created_by: string
       created_at: string
       updated_at: string
-    }>((from, to) =>
+    }>(threadIds, (chunk, from, to) =>
       adminClient
         .from('message_threads')
         .select('id, subject, created_by, created_at, updated_at')
-        .in('id', threadIds)
+        .in('id', chunk)
         .range(from, to)
     )
-    const readRows = await pageAll<{ message_id: string; user_id: string; read_at: string | null }>(
-      (from, to) =>
+    const readRows = await fetchByIdChunks<{
+      message_id: string
+      user_id: string
+      read_at: string | null
+    }>(
+      messages.map((m) => m.id),
+      (chunk, from, to) =>
         adminClient
           .from('message_read_status')
           .select('message_id, user_id, read_at')
-          .in('message_id', messages.map((m) => m.id).slice(0, 100000))
+          .in('message_id', chunk)
           .range(from, to)
     )
 

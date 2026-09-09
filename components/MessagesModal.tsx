@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
+import { pageAll, fetchByIdChunks, uniqueIds } from '@/lib/messaging/pagination'
 
 interface MessagesModalProps {
   userEmail: string
@@ -16,6 +17,10 @@ export default function MessagesModal({ userEmail, isAdmin }: MessagesModalProps
   const { setMessagesUnreadCount: setGlobalMessagesUnreadCount, sidebarCollapsed } =
     useSidebarCollapsed()
   const [threads, setThreads] = useState<any[]>([])
+  /** A read failed. Distinct from an empty inbox, and never rendered as one. */
+  const [loadFailed, setLoadFailed] = useState(false)
+  /** Threads loaded, metadata did not: names/read state/grouping are degraded. */
+  const [metaDegraded, setMetaDegraded] = useState(false)
   const [selectedThread, setSelectedThread] = useState<any>(null)
   const [messages, setMessages] = useState<any[]>([])
   const [replyText, setReplyText] = useState('')
@@ -184,18 +189,28 @@ const [compose, setCompose] = useState({
     emails: Record<string, { email: string }>
     threads: any[]
     groups: any[]
+    ok: boolean
   }> => {
+    // A failure here degrades labels, read state and grouping. It must never
+    // be mistaken for "this inbox has no metadata", so it is reported as
+    // `ok: false` and the thread list is kept.
+    const empty = { emails: {}, threads: [], groups: [], ok: false }
     try {
       const res = await fetch('/api/messages/participants', { method: 'POST' })
-      if (!res.ok) return { emails: {}, threads: [], groups: [] }
+      if (!res.ok) {
+        console.error('Inbox metadata request failed:', res.status)
+        return empty
+      }
       const data = await res.json()
       return {
         emails: data.emails ?? {},
         threads: data.threads ?? [],
         groups: data.groups ?? [],
+        ok: true,
       }
-    } catch {
-      return { emails: {}, threads: [], groups: [] }
+    } catch (error) {
+      console.error('Inbox metadata request error:', (error as any)?.name, (error as any)?.message)
+      return empty
     }
   }
 
@@ -203,34 +218,58 @@ const [compose, setCompose] = useState({
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
-    const { data: myParticipations } = await supabase
-      .from('thread_participants')
-      .select('thread_id')
-      .eq('user_id', user.id)
-      .is('deleted_at', null)
+    // Both reads below are size-limited by PostgREST, and both limits had been
+    // reached: the participant select capped at 1000 of 1097 rows, and the
+    // 1097-id `.in()` was rejected outright at the HTTP layer. The rejection
+    // carried no error code and the error was not destructured, so a full
+    // inbox rendered as "No messages yet". See lib/messaging/pagination.ts.
+    let threadIds: string[]
+    let threadsData: any[]
+    try {
+      const myParticipations = await pageAll<{ thread_id: string }>((from, to) =>
+        supabase
+          .from('thread_participants')
+          .select('thread_id')
+          .eq('user_id', user.id)
+          .is('deleted_at', null)
+          .range(from, to)
+      )
 
-    if (!myParticipations || myParticipations.length === 0) {
-      setThreads([])
-      setGlobalMessagesUnreadCount(0)
-      return
-    }
+      // Hidden threads stay hidden: `deleted_at IS NULL` above is unchanged.
+      threadIds = uniqueIds(myParticipations.map(p => p.thread_id))
 
-    const threadIds = myParticipations.map(p => p.thread_id)
+      if (threadIds.length === 0) {
+        setLoadFailed(false)
+        setMetaDegraded(false)
+        setThreads([])
+        setGlobalMessagesUnreadCount(0)
+        return
+      }
 
-    const { data: threadsData } = await supabase
-      .from('message_threads')
-      .select('*')
-      .in('id', threadIds)
-      .order('updated_at', { ascending: false })
-
-    if (!threadsData) {
-      setThreads([])
-      setGlobalMessagesUnreadCount(0)
+      const rows = await fetchByIdChunks<any>(threadIds, (chunk, from, to) =>
+        supabase
+          .from('message_threads')
+          .select('*')
+          .in('id', chunk)
+          .range(from, to)
+      )
+      // Ordering was PostgREST's; across chunks it has to be ours. Unchanged
+      // for the reader: newest conversation first.
+      threadsData = rows.sort((a: any, b: any) =>
+        String(b.updated_at).localeCompare(String(a.updated_at))
+      )
+    } catch (error) {
+      // A failed read is not an empty inbox. Leave whatever is on screen and
+      // say so, rather than replacing real conversations with a blank state.
+      console.error('Inbox load failed:', (error as any)?.code, (error as any)?.message)
+      setLoadFailed(true)
       return
     }
 
     // Single request: addresses, per-thread state and broadcast groups.
     const meta = await fetchInboxMeta()
+    setLoadFailed(false)
+    setMetaDegraded(!meta.ok)
     const metaByThread = new Map<string, any>(meta.threads.map((t: any) => [t.thread_id, t]))
 
     const processedThreads = threadsData.map((thread: any) => {
@@ -870,6 +909,31 @@ setCompose({
                     return true // 'all'
                   })
 
+                // A failed read must never borrow the empty-inbox state. This
+                // is checked before the filters so it cannot be mistaken for
+                // "no results" either.
+                if (loadFailed) {
+                  return (
+                    <div className="p-12 text-center">
+                      <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center ring-1 ring-amber-100/50">
+                        <svg className="w-8 h-8 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                        </svg>
+                      </div>
+                      <p className="text-sm font-medium text-gray-900 mb-1">
+                        Messages couldn&apos;t be loaded
+                      </p>
+                      <p className="text-xs text-gray-500 mb-4">Please try again</p>
+                      <button
+                        onClick={() => loadThreads()}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 transition-all duration-150 shadow-sm hover:shadow"
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  )
+                }
+
                 if (filteredThreads.length === 0) {
                   return (
                     <div className="p-12 text-center">
@@ -912,6 +976,15 @@ setCompose({
 
                 return (
                   <div className="py-1">
+                    {/* Threads loaded but metadata did not. The conversations
+                        stay on screen -- degraded, not erased. */}
+                    {metaDegraded && (
+                      <div className="mx-3 mb-2 px-3 py-2 rounded-lg bg-amber-50 ring-1 ring-amber-100">
+                        <p className="text-xs text-amber-800">
+                          Some conversation details couldn&apos;t be loaded.
+                        </p>
+                      </div>
+                    )}
                     {filteredThreads.map((thread) => (
                       <div
                         key={thread.id}
