@@ -111,6 +111,7 @@ export const FORMAT_LABELS: Record<QuestionFormat, string> = {
 /** What the interviewer chose to do on a given turn. */
 export type TurnAction = 'ask_follow_up' | 'next_primary' | 'final_report'
 
+
 export type TurnKind = 'opening' | 'primary' | 'follow_up' | 'final_report'
 
 export type DifficultyLevel = 1 | 2 | 3 | 4 | 5
@@ -197,6 +198,16 @@ export interface InterviewState {
   mode: InterviewMode
   type: InterviewType
   customTopic: string
+  /**
+   * Chosen by the applicant at setup, before the first question, and fixed for
+   * the life of the session. False removes `ask_follow_up` from the response
+   * schema entirely, so the model has no way to ask one however much the
+   * answer invites it.
+   *
+   * Sessions created before this field existed ran with follow-ups on; see
+   * normalizeState for how they are read back.
+   */
+  followUpsEnabled: boolean
   /** 0 before the first question has been asked, then 1..maxPrimaryQuestions. */
   primaryQuestionNumber: number
   maxPrimaryQuestions: number

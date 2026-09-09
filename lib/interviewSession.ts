@@ -36,10 +36,33 @@ export type InterviewGrant = {
   user_id: string
   turns_used: number
   completed: boolean
+  /**
+   * The applicant's setup choice, and the ONLY authority on it for the life of
+   * the session. Undefined only while the column migration has not been
+   * applied; callers treat that as "fall back to the serialized state".
+   */
+  follow_ups_enabled?: boolean | null
 }
 
 /** Postgres "relation does not exist" — the migration has not been run yet. */
 const MISSING_TABLE = '42P01'
+/**
+ * Postgres "column does not exist" / PostgREST's schema-cache equivalent.
+ *
+ * Lets follow_ups_enabled be read and written before its migration is applied:
+ * the statement is retried without the column instead of failing. Without this
+ * the deploy would be order-dependent in BOTH directions -- code first and the
+ * INSERT names an unknown column, migration first and the NOT NULL rejects an
+ * INSERT that omits it -- and a failed createGrant hands the client a null
+ * grantId, which makes its very next turn a 403.
+ */
+const MISSING_COLUMN = ['42703', 'PGRST204', 'PGRST116']
+
+function isMissingColumn(error: any): boolean {
+  if (!error) return false
+  if (MISSING_COLUMN.includes(error.code)) return true
+  return /follow_ups_enabled/.test(error.message || '')
+}
 /** Postgres/PostgREST "function does not exist", same cause. */
 const MISSING_FUNCTION = ['42883', 'PGRST202']
 
@@ -55,13 +78,27 @@ export async function createGrant(
   admin: SupabaseClient,
   userId: string,
   mode: string,
-  type: string
+  type: string,
+  followUpsEnabled: boolean
 ): Promise<string | null> {
-  const { data, error } = await admin
-    .from('interview_grants')
-    .insert({ user_id: userId, mode, interview_type: type })
-    .select('id')
-    .single()
+  const row = {
+    user_id: userId,
+    mode,
+    interview_type: type,
+    // Written once, here, and never updated. Every later turn reads it back
+    // rather than trusting what the browser echoes.
+    follow_ups_enabled: followUpsEnabled,
+  }
+  const insert = (payload: Record<string, unknown>) =>
+    admin.from('interview_grants').insert(payload).select('id').single()
+
+  let { data, error } = await insert(row)
+
+  if (error && isMissingColumn(error)) {
+    console.warn('interview_grants.follow_ups_enabled missing — grant not locking the choice')
+    const { follow_ups_enabled, ...legacy } = row
+    ;({ data, error } = await insert(legacy))
+  }
 
   if (error) {
     if (error.code === MISSING_TABLE) {
@@ -88,11 +125,17 @@ export async function checkGrant(
     return { ok: false, status: 403, error: 'This interview session is no longer valid. Please start a new interview.' }
   }
 
-  const { data, error } = await admin
-    .from('interview_grants')
-    .select('id, user_id, turns_used, completed')
-    .eq('id', grantId)
-    .maybeSingle()
+  // The column list is chosen at runtime, so the client cannot infer the row
+  // shape; asserted to the shape this function actually reads.
+  const select = (columns: string) =>
+    admin.from('interview_grants').select(columns).eq('id', grantId).maybeSingle() as unknown as
+      Promise<{ data: InterviewGrant | null; error: any }>
+
+  let { data, error } = await select('id, user_id, turns_used, completed, follow_ups_enabled')
+
+  if (error && isMissingColumn(error)) {
+    ;({ data, error } = await select('id, user_id, turns_used, completed'))
+  }
 
   if (error) {
     if (error.code === MISSING_TABLE) {
@@ -116,7 +159,7 @@ export async function checkGrant(
     return { ok: false, status: 403, error: 'This interview has reached its maximum length. Please start a new one.' }
   }
 
-  return { ok: true, grant: data as InterviewGrant }
+  return { ok: true, grant: data }
 }
 
 /**

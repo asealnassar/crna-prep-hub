@@ -8,8 +8,8 @@ import type {
   QuestionCategory,
   ScenarioEvaluation,
   TurnAction,
-} from './types'
-import { ALL_FORMATS, CLINICAL_FORMATS, EMOTIONAL_FORMATS } from './types'
+} from './types.ts'
+import { ALL_FORMATS, CLINICAL_FORMATS, EMOTIONAL_FORMATS } from './types.ts'
 
 export const MAX_PRIMARY_QUESTIONS = 10
 export const MAX_FOLLOW_UPS = 3
@@ -49,12 +49,21 @@ export function createInitialState(opts: {
   mode: InterviewMode
   type: InterviewType
   customTopic?: string
+  /**
+   * Required. There is deliberately no default: the applicant answers
+   * "Include follow-up questions?" at setup, every time, and a caller that
+   * cannot say what they chose has no business starting an interview. The
+   * route passes a strict boolean, so an omitted or malformed field starts
+   * the shorter interview rather than silently opting someone in.
+   */
+  followUpsEnabled: boolean
 }): InterviewState {
   return {
     version: 1,
     mode: opts.mode,
     type: opts.type,
     customTopic: opts.customTopic || '',
+    followUpsEnabled: opts.followUpsEnabled,
     primaryQuestionNumber: 0,
     maxPrimaryQuestions: MAX_PRIMARY_QUESTIONS,
     followUpCount: 0,
@@ -91,6 +100,12 @@ export function normalizeState(raw: any, fallback: InterviewState): InterviewSta
     mode: raw.mode === 'real' ? 'real' : 'practice',
     type: isType(raw.type) ? raw.type : fallback.type,
     customTopic: typeof raw.customTopic === 'string' ? raw.customTopic : '',
+    // Made once, at setup, and then owned by the session: read back from the
+    // state the client echoes, never re-asked and never re-defaulted
+    // mid-interview. A state predating this field comes from a session started
+    // when follow-ups were automatic, so it reads as enabled -- resuming one
+    // must not silently change how it behaves.
+    followUpsEnabled: typeof raw.followUpsEnabled === 'boolean' ? raw.followUpsEnabled : true,
     primaryQuestionNumber: clampInt(raw.primaryQuestionNumber, 0, maxPrimary, 0),
     maxPrimaryQuestions: maxPrimary,
     followUpCount: clampInt(raw.followUpCount, 0, maxFollowUps, 0),
@@ -125,6 +140,8 @@ export function normalizeState(raw: any, fallback: InterviewState): InterviewSta
  * tightens and loosens as its category changes.
  */
 export function followUpCapFor(state: InterviewState): number {
+  // The applicant's setup choice sits above every other cap.
+  if (!state.followUpsEnabled) return 0
   if (state.currentCategory === 'emotional' || state.currentCategory === 'behavioral') {
     return Math.min(state.maxFollowUps, MAX_FOLLOW_UPS_EMOTIONAL)
   }
@@ -135,6 +152,16 @@ export function followUpCapFor(state: InterviewState): number {
  * The only place that decides what the interviewer may do next. Returned as a
  * dynamic enum in the response schema, so the model physically cannot pick an
  * action the state machine has ruled out (e.g. a fourth follow-up).
+ *
+ * WHETHER `ask_follow_up` is offered at all is the applicant's decision, taken
+ * once at setup. When they declined, it never enters this list, so the schema
+ * the model answers against has no such action in it -- the choice is enforced
+ * structurally, not asked for in the prompt and not merely hidden in the UI.
+ *
+ * When they accepted, the interviewer decides adaptively as it always did,
+ * within the per-scenario cap and the interview-wide budget. Either way the
+ * primary counter advances on `next_primary` alone, so a follow-up never
+ * consumes a planned question.
  */
 export function allowedActions(state: InterviewState): TurnAction[] {
   if (state.complete) return ['final_report']
@@ -142,7 +169,8 @@ export function allowedActions(state: InterviewState): TurnAction[] {
   if (state.primaryQuestionNumber === 0) return ['next_primary']
 
   const actions: TurnAction[] = []
-  // Both gates must pass: this scenario's cap and the interview-wide budget.
+  // Three gates: the setup choice (via followUpCapFor, which returns 0 when
+  // the applicant declined), this scenario's cap, and the interview budget.
   if (state.followUpCount < followUpCapFor(state) && state.followUpBudget > 0) {
     actions.push('ask_follow_up')
   }

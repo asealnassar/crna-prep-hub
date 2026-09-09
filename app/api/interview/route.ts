@@ -71,10 +71,22 @@ export async function POST(request: Request) {
     // general-purpose LLM proxy for anyone with an account, outside the
     // interview allowance entirely. It had no callers left in the codebase.
 
+    // The applicant's setup answer. Strictly boolean: a missing, null, string
+    // or otherwise malformed value is NOT read as false, because "no answer"
+    // and "no follow-ups" are different things and the product rule is that
+    // every new interview must actually choose. Enforced below, once we know
+    // this request is starting one.
+    const followUpsChoice: unknown = body?.followUpsEnabled
+    const followUpsChosen = followUpsChoice === true || followUpsChoice === false
+
     const fallbackState = createInitialState({
       mode: body?.mode === 'real' ? 'real' : 'practice',
       type: body?.type || 'mixed',
       customTopic: body?.customTopic || '',
+      // Placeholder for continuations, where normalizeState discards this
+      // fallback entirely. A start with no valid choice is rejected before
+      // this value can reach anything.
+      followUpsEnabled: followUpsChosen ? (followUpsChoice as boolean) : false,
     })
     state = normalizeState(body?.state, fallbackState)
 
@@ -108,6 +120,18 @@ export async function POST(request: Request) {
     let usageCount: number | null = null
     let grantId: string | null = null
 
+    // Before the allowance check and before any model call, so a start without
+    // a choice costs nothing.
+    if (startingInterview && !followUpsChosen) {
+      return NextResponse.json(
+        {
+          error:
+            'Choose whether to include follow-up questions before starting the interview.',
+        },
+        { status: 400 }
+      )
+    }
+
     if (startingInterview) {
       // A new interview is the only thing the allowance gates.
       if (!auth.isUltimate) {
@@ -131,6 +155,19 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: check.error }, { status: check.status })
       }
       grantId = check.grant?.id ?? null
+
+      // THE grant is the authority on follow-ups, not the state the browser
+      // echoed back. A client that edits followUpsEnabled -- in either
+      // direction -- is overwritten here, before the state reaches
+      // allowedActions, the response schema or the prompt. The choice is
+      // locked for the life of the session.
+      //
+      // Left alone only when the grant cannot answer: no grant row (table not
+      // migrated) or no column yet. normalizeState has already resolved those
+      // to the legacy reading.
+      if (typeof check.grant?.follow_ups_enabled === 'boolean') {
+        state = { ...state, followUpsEnabled: check.grant.follow_ups_enabled }
+      }
 
       // Reserve the turn before the model is called, so a refusal costs
       // nothing. The database enforces the cap inside the UPDATE, which is
@@ -187,7 +224,13 @@ export async function POST(request: Request) {
       if (!auth.isUltimate) {
         usageCount = await chargeInterview(admin, auth.userId)
       }
-      grantId = await createGrant(admin, auth.userId, nextState.mode, nextState.type)
+      grantId = await createGrant(
+        admin,
+        auth.userId,
+        nextState.mode,
+        nextState.type,
+        nextState.followUpsEnabled
+      )
     }
 
     // A finished interview cannot be reopened for further model calls.

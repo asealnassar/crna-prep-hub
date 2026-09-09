@@ -51,6 +51,18 @@ export default function Interview() {
   const [interviewType, setInterviewType] = useState('')
   const [interviewMode, setInterviewMode] = useState<InterviewMode>('practice')
   const [customTopic, setCustomTopic] = useState('')
+  /**
+   * "Include follow-up questions?" -- required at setup, with NO default.
+   *
+   * null means the applicant has not answered yet, which is why this is a
+   * tri-state and not a boolean: a boolean would have to start at true or
+   * false, and either one is a silent answer on their behalf. Nothing reads
+   * this back from localStorage, a profile column, or the previous interview;
+   * it is reset to null whenever a new session begins, so every interview asks
+   * again. Once an interview starts, the value lives in the engine state and
+   * this is no longer consulted.
+   */
+  const [followUpsChoice, setFollowUpsChoice] = useState<boolean | null>(null)
   const [interviewEnded, setInterviewEnded] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [recentQuestions, setRecentQuestions] = useState<string[]>([])
@@ -407,6 +419,18 @@ export default function Interview() {
    * update would flush, and the next turn must already carry it.
    */
   const grantIdRef = useRef<string | null>(null)
+  /**
+   * One submit action, at most one turn.
+   *
+   * `loading` cannot be the guard: it is React state, so two clicks dispatched
+   * in the same tick both read the pre-render value `false` and both run --
+   * the button's `disabled={loading}` stops nothing in a real double-click, and
+   * the Enter handler consults no guard at all. Two turns would each burn a
+   * reserved turn and advance the interview twice. A ref mutates synchronously,
+   * so the second caller sees it set before reaching its first await.
+   * `loading` stays what it was: the disabled state and the spinner.
+   */
+  const turnInFlight = useRef(false)
 
   /** Single place that talks to the engine, so both turn paths stay in sync. */
   const requestTurn = async (
@@ -424,6 +448,14 @@ export default function Interview() {
         mode: interviewMode,
         type: interviewType,
         customTopic,
+        // Sent as the applicant answered it, INCLUDING null. Coercing null to
+        // false here would answer for them and defeat the server's check --
+        // the start is meant to fail loudly when no choice was made.
+        //
+        // Read only on the opening turn, where it seeds the session. Every
+        // later turn is governed by the grant row, so re-sending this cannot
+        // switch an interview already in progress.
+        followUpsEnabled: followUpsChoice,
         // Proves this turn belongs to an interview the server authorised.
         grantId: grantIdRef.current,
       }),
@@ -436,6 +468,12 @@ export default function Interview() {
   const startInterview = async () => {
     if (!canInterview || !interviewType) return
     if (interviewType === 'custom' && !customTopic.trim()) { alert('Please enter a custom topic'); return }
+    // Belt and braces with the disabled button: an unanswered choice blocks the
+    // start rather than being read as a No.
+    if (followUpsChoice === null) {
+      setTurnError('Choose whether to include follow-up questions before starting.')
+      return
+    }
 
     const recent = await loadRecentQuestions(interviewType)
     setRecentQuestions(recent)
@@ -481,7 +519,10 @@ export default function Interview() {
   }
 
   const sendMessage = async () => {
-    if (!input.trim() || loading || interviewEnded) return
+    if (!input.trim() || interviewEnded) return
+    // Acquired before the first await, released in `finally` on every path.
+    if (turnInFlight.current) return
+    turnInFlight.current = true
     const answer = input
     const previousMessages = messages
     const newMessages = [...messages, { role: 'user', content: answer }]
@@ -504,7 +545,6 @@ export default function Interview() {
       const data = await requestTurn(newMessages, engineState, recentQuestions)
       if (!data?.state) {
         rollback(data?.message || 'Something went wrong. Send your answer again.')
-        setLoading(false)
         return
       }
 
@@ -521,11 +561,18 @@ export default function Interview() {
       }
     } catch (error) {
       rollback('Connection problem. Send your answer again.')
+    } finally {
+      // Every exit releases the gate: the bad-response return, the throw, and
+      // the success path.
+      turnInFlight.current = false
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   const resetInterview = () => {
+    turnInFlight.current = false
+    // Cleared, never carried over: the next interview asks again from scratch.
+    setFollowUpsChoice(null)
     stopDictation()
     resetDictationBuffer()
     setStarted(false)
@@ -774,6 +821,70 @@ export default function Interview() {
                       </div>
                     )}
 
+                    {/*
+                      Required, and deliberately unanswered until the applicant
+                      answers it. Nothing preselects an option and nothing
+                      restores a previous interview's answer -- a follow-up
+                      changes what the interview IS, so it is asked every time.
+                    */}
+                    <div className="mt-6">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-900">
+                          Include follow-up questions?
+                        </span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            followUpsChoice === null
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-slate-100 text-slate-500'
+                          }`}
+                        >
+                          {followUpsChoice === null ? 'Required' : 'Selected'}
+                        </span>
+                      </div>
+                      <p className="mb-3 text-[13px] text-slate-500">
+                        The interviewer may press further on an answer before moving on. Either way
+                        you still get all {maxQuestions} main questions.
+                      </p>
+                      <div
+                        role="radiogroup"
+                        aria-label="Include follow-up questions?"
+                        aria-required="true"
+                        className="grid grid-cols-2 gap-3"
+                      >
+                        {[
+                          { value: true, label: 'Yes', hint: 'Interviewer may probe deeper' },
+                          { value: false, label: 'No', hint: 'Main questions only' },
+                        ].map((opt) => {
+                          const selected = followUpsChoice === opt.value
+                          return (
+                            <button
+                              key={String(opt.value)}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              onClick={() => setFollowUpsChoice(opt.value)}
+                              className={`rounded-xl border px-4 py-3 text-left transition ${
+                                selected
+                                  ? 'border-violet-400 bg-violet-50 ring-2 ring-violet-100'
+                                  : followUpsChoice === null
+                                    ? 'border-amber-200 bg-white hover:border-violet-300'
+                                    : 'border-slate-200 bg-white hover:border-violet-300'
+                              }`}
+                            >
+                              <span className="block text-sm font-semibold text-slate-900">{opt.label}</span>
+                              <span className="block text-xs text-slate-500">{opt.hint}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {followUpsChoice === null && (
+                        <p className="mt-2 text-xs font-medium text-amber-700">
+                          Choose Yes or No to start the interview.
+                        </p>
+                      )}
+                    </div>
+
                     {turnError && (
                       <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                         {turnError}
@@ -798,7 +909,7 @@ export default function Interview() {
                       ) : canInterview ? (
                         <button
                           onClick={startInterview}
-                          disabled={!interviewType || (interviewType === 'custom' && !customTopic.trim()) || loading}
+                          disabled={!interviewType || (interviewType === 'custom' && !customTopic.trim()) || followUpsChoice === null || loading}
                           className="flex h-[54px] w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-500 text-base font-semibold text-white shadow-lg shadow-violet-500/20 transition hover:from-violet-700 hover:to-indigo-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
                         >
                           {loading ? 'Starting…' : startLabel}
@@ -1197,7 +1308,7 @@ export default function Interview() {
                         <Mic className="h-[18px] w-[18px]" />
                       </button>
                       <button
-                        onClick={sendMessage}
+                        onClick={() => sendMessage()}
                         disabled={loading}
                         className="flex h-[46px] shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-500 px-5 text-sm font-semibold text-white transition hover:from-violet-700 hover:to-indigo-600 disabled:opacity-50"
                       >

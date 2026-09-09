@@ -124,6 +124,10 @@ export function buildSystemPrompt(
   const followUpsLeft = Math.max(0, followUpCap - state.followUpCount)
   const onLastPrimary = state.primaryQuestionNumber >= state.maxPrimaryQuestions
   const mustFinish = actions.length === 1 && actions[0] === 'final_report'
+  // The applicant declined follow-ups at setup. Nothing below should mention
+  // them: the schema forbids the action, so reasoning about it is wasted and
+  // an instruction to consider one would only conflict with the choice.
+  const followUpsOff = !state.followUpsEnabled
 
   const parts: string[] = []
 
@@ -142,8 +146,8 @@ In list fields (did_well, to_tighten, missed_concepts, and the report lists) wri
 Mode: ${state.mode === 'real' ? 'REAL INTERVIEW' : 'PRACTICE'}
 Interview type: ${describeType(state)}
 Primary questions asked: ${state.primaryQuestionNumber} of ${state.maxPrimaryQuestions}
-Follow-ups used on the current scenario: ${state.followUpCount} of ${followUpCap} (${followUpsLeft} remaining)
-Follow-up budget for the whole interview: ${state.followUpBudget} left, with ${Math.max(0, state.maxPrimaryQuestions - state.primaryQuestionNumber)} primary questions still to come
+${followUpsOff ? 'This interview has no follow-up questions.' : `Follow-ups used on the current scenario: ${state.followUpCount} of ${followUpCap} (${followUpsLeft} remaining)
+Follow-up budget for the whole interview: ${state.followUpBudget} left, with ${Math.max(0, state.maxPrimaryQuestions - state.primaryQuestionNumber)} primary questions still to come`}
 Current scenario: ${state.currentScenario || '(none yet)'}
 Current category: ${state.currentCategory || '(none yet)'}
 Difficulty of the last question asked: ${state.difficultyLevel}
@@ -158,9 +162,12 @@ ${state.askedPrimaryQuestions.length ? state.askedPrimaryQuestions.map((q, i) =>
 Randomization seed: ${opts.seed}
 The counters above are computed by the system. Do not restate, recount, or contradict them.`)
 
-  parts.push(buildTurnInstructions(state, { opening, actions, followUpCap, followUpsLeft, onLastPrimary, mustFinish }))
+  parts.push(buildTurnInstructions(state, { opening, actions, followUpCap, followUpsLeft, onLastPrimary, mustFinish, followUpsOff }))
 
-  if (!opening) parts.push(FOLLOW_UP_DOCTRINE)
+  // Restored to every non-opening turn of a follow-ups-enabled interview: the
+  // interviewer is choosing adaptively again, so it needs the criteria. A
+  // session that declined follow-ups never sees it.
+  if (!opening && !followUpsOff) parts.push(FOLLOW_UP_DOCTRINE)
 
   parts.push(buildModeRules(state))
   parts.push(buildTypeRules(state))
@@ -168,7 +175,7 @@ The counters above are computed by the system. Do not restate, recount, or contr
 ${LADDER}
 
 Calibrate the next primary question around level ${state.suggestedDifficulty}; you may move one level either way if this applicant's last answer justifies it.
-Follow-ups are the main way you climb: a strong answer at level 2 earns a level 3 or 4 follow-up on the same scenario.
+${followUpsOff ? 'Subsequent primary questions are how you climb: a strong answer at level 2 earns a level 3 or 4 primary question next.' : 'Follow-ups are the main way you climb: a strong answer at level 2 earns a level 3 or 4 follow-up on the same scenario.'}
 When the applicant is struggling, step back down and find where their understanding actually stops. Do not keep pushing to the molecular level on someone who is failing at level 2 — locating the gap is the point, not proving it exists.
 Emotional and behavioral questions do not use this ladder; there, depth means probing for specifics, consequences, and genuine reflection.`)
 
@@ -241,6 +248,7 @@ function buildTurnInstructions(
     followUpsLeft: number
     onLastPrimary: boolean
     mustFinish: boolean
+    followUpsOff: boolean
   }
 ): string {
   if (ctx.opening) {
@@ -254,10 +262,18 @@ Set evaluation and final_report to null. Set question_asked to the question itse
     `=== THIS TURN ===`,
     `The applicant has just answered. Choose exactly one action. Allowed this turn: ${ctx.actions.join(' | ')}`,
     ``,
-    `"ask_follow_up" — stay on the current scenario and press further. Set evaluation to null; you are not done judging this scenario yet. display_text = the follow-up question only.`,
-    `"next_primary" — this scenario is finished. Set evaluation to a complete assessment of the WHOLE scenario (the primary question plus every follow-up on it), and set display_text to the next primary question only, with no feedback in it.`,
-    `IMPORTANT on next_primary: question_asked, scenario_label, category and question_format all describe the NEW question you are asking in display_text — never the scenario you just finished evaluating. The evaluation object is the only field that looks backwards. Mislabelling the format here makes the system think a format is still unused and you will be asked to repeat it.`,
   ]
+
+  if (!ctx.followUpsOff) {
+    lines.push(
+      `"ask_follow_up" — stay on the current scenario and press further. Set evaluation to null; you are not done judging this scenario yet. display_text = the follow-up question only.`
+    )
+  }
+
+  lines.push(
+    `"next_primary" — this scenario is finished. Set evaluation to a complete assessment of the WHOLE scenario (the primary question plus every follow-up on it), and set display_text to the next primary question only, with no feedback in it.`,
+    `IMPORTANT on next_primary: question_asked, scenario_label, category and question_format all describe the NEW question you are asking in display_text — never the scenario you just finished evaluating. The evaluation object is the only field that looks backwards. Mislabelling the format here makes the system think a format is still unused and you will be asked to repeat it.`
+  )
 
   if (ctx.actions.includes('final_report')) {
     lines.push(
@@ -267,7 +283,7 @@ Set evaluation and final_report to null. Set question_asked to the question itse
 
   lines.push('')
 
-  if (ctx.followUpsLeft === 0 && !ctx.mustFinish) {
+  if (!ctx.followUpsOff && ctx.followUpsLeft === 0 && !ctx.mustFinish) {
     lines.push(
       `You have used all ${ctx.followUpCap} follow-ups available on this scenario. The schema no longer offers "ask_follow_up" — close the scenario out now.`
     )
