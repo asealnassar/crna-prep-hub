@@ -19,7 +19,18 @@ export type School = {
 export type UserProfile = {
   id: string
   email: string
-  subscription_tier: 'free' | 'premium' | 'ultimate'
+  /**
+   * 'security-test' is test infrastructure, not a product tier: it holds only
+   * throwaway accounts so the broadcast-boundary suite can call the real
+   * send_tier_broadcast without reaching a member. It is deliberately absent
+   * from ALLOWED_TIERS in the broadcast email route, so the cohort cannot
+   * reach Resend, and from the admin tier selector, so it cannot be chosen.
+   *
+   * Kept as a closed union rather than widened to `string`: every gate in the
+   * app treats an unrecognised tier as the least privileged case, and that
+   * only stays true if adding a value remains a deliberate edit.
+   */
+  subscription_tier: 'free' | 'premium' | 'ultimate' | 'security-test'
   stripe_customer_id: string | null
   has_used_free_interview: boolean
   created_at: string
