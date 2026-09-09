@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { makeSessionFor } from './liveSession.test-helper.ts'
 import { readFileSync } from 'node:fs'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
@@ -45,17 +46,17 @@ const admin: SupabaseClient = enabled
   ? createClient(URL!, SERVICE!, { auth: { autoRefreshToken: false, persistSession: false } })
   : (null as any)
 
-/** A session for a throwaway account without creating or typing a password. */
-async function sessionFor(email: string): Promise<string> {
-  const { data, error } = await admin.auth.admin.generateLink({ type: 'magiclink', email })
-  if (error) throw new Error(`generateLink(${email}): ${error.message}`)
-  const c = createClient(URL!, ANON!, { auth: { persistSession: false, autoRefreshToken: false } })
-  const { data: s, error: v } = await c.auth.verifyOtp({
-    token_hash: (data as any).properties.hashed_token, type: 'magiclink',
-  })
-  if (v) throw new Error(`verifyOtp(${email}): ${v.message}`)
-  return s.session!.access_token
-}
+/**
+ * A session for a throwaway account, shared with every other live suite.
+ *
+ * The magic-link exchange used to be duplicated in each of the three live
+ * files. Because node --test runs them in parallel processes, a full run fired
+ * nine OTP verifications at three accounts within a second or two and Supabase
+ * throttled them -- failures that moved between suites on each rerun. The
+ * helper caches one token per account across processes; see
+ * liveSession.test-helper.ts.
+ */
+const sessionFor = makeSessionFor(admin, URL!, ANON!)
 
 const asUser = (token: string) =>
   createClient(URL!, ANON!, {
@@ -67,6 +68,7 @@ const asAnon = () => createClient(URL!, ANON!, { auth: { persistSession: false }
 
 type World = {
   A: string; B: string; adminId: string
+  aToken: string; bToken: string
   aClient: SupabaseClient; bClient: SupabaseClient
   threadAB: string; messageAB: string
 }
@@ -92,10 +94,15 @@ async function setup(): Promise<World> {
   await admin.from('message_read_status')
     .insert({ message_id: m!.id, user_id: adminId, delivered_at: new Date().toISOString() })
 
+  // One authentication per account for the whole run, shared across suites.
+  const [aToken, bToken] = await Promise.all([sessionFor(A_EMAIL), sessionFor(B_EMAIL)])
+
   world = {
     A, B, adminId: adminId as string,
-    aClient: asUser(await sessionFor(A_EMAIL)),
-    bClient: asUser(await sessionFor(B_EMAIL)),
+    aToken,
+    bToken,
+    aClient: asUser(aToken),
+    bClient: asUser(bToken),
     threadAB: t!.id, messageAB: m!.id,
   }
   return world
@@ -379,13 +386,14 @@ async function receivesRealtime(token: string | null, threadId: string, body: st
 
 test('20: a participant receives realtime messages for their own thread', { skip }, async () => {
   const w = await setup()
-  const got = await receivesRealtime(await sessionFor(A_EMAIL), w.threadAB, `${TAG} rt-allowed`)
+  // w.aToken, not a fresh sessionFor: the same account, already authenticated.
+  const got = await receivesRealtime(w.aToken, w.threadAB, `${TAG} rt-allowed`)
   assert.ok(got, 'a participant must still receive live updates')
 })
 
 test('21: a non-participant receives no realtime payload', { skip }, async () => {
   const w = await setup()
-  const got = await receivesRealtime(await sessionFor(B_EMAIL), w.threadAB, `${TAG} rt-denied`)
+  const got = await receivesRealtime(w.bToken, w.threadAB, `${TAG} rt-denied`)
   assert.equal(got, null, 'realtime must obey the same boundary as SELECT')
 })
 

@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { makeSessionFor } from './liveSession.test-helper.ts'
 import { readFileSync } from 'node:fs'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
@@ -34,16 +35,9 @@ const admin: SupabaseClient = enabled
   ? createClient(URL!, SERVICE!, { auth: { autoRefreshToken: false, persistSession: false } })
   : (null as any)
 
-async function sessionFor(email: string): Promise<string> {
-  const { data, error } = await admin.auth.admin.generateLink({ type: 'magiclink', email })
-  if (error) throw new Error(`generateLink(${email}): ${error.message}`)
-  const c = createClient(URL!, ANON!, { auth: { persistSession: false, autoRefreshToken: false } })
-  const { data: s, error: v } = await c.auth.verifyOtp({
-    token_hash: (data as any).properties.hashed_token, type: 'magiclink',
-  })
-  if (v) throw new Error(`verifyOtp(${email}): ${v.message}`)
-  return s.session!.access_token
-}
+/** Shared with the other live suites -- one authentication per account across
+ *  every parallel test process. See liveSession.test-helper.ts. */
+const sessionFor = makeSessionFor(admin, URL!, ANON!)
 const asUser = (t: string) => createClient(URL!, ANON!, {
   auth: { autoRefreshToken: false, persistSession: false },
   global: { headers: { Authorization: `Bearer ${t}` } },
