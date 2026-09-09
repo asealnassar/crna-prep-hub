@@ -507,15 +507,23 @@ test('22: the approved multi-select partial-failure alert is intact', () => {
   assert.match(composeSrc, /alert\('Failed to send message'\)/, 'existing compose failure copy kept')
 })
 
-test('23: no new user-facing copy was introduced in compose', () => {
-  const alerts = [...composeSrc.matchAll(/alert\(([^\n]*)/g)].map((m) => m[1])
+test('23: compose shows only approved copy', () => {
+  // H-3B introduced no copy of its own; the first four strings plus the tier
+  // summary are what it inherited. M-5 Phase 1 then added the two approved
+  // notification strings, which is why they are listed rather than excluded.
+  // Anything outside this set is new copy nobody signed off.
+  const alerts = [...composeSrc.matchAll(/alert\(\s*([\s\S]{0,80})/g)].map((m) =>
+    m[1].replace(/\s+/g, ' ').trim(),
+  )
   const known = [
     "'Subject and message are required'",
     "'Please select at least one recipient'",
     "'Admin user not found'",
     "'Failed to send message'",
     '`Message sent to ${count} users in ${compose.selectedTier} tier${emailSummary}`',
-    'failed.length === 0',
+    // M-5 Phase 1, approved:
+    "'Message sent, but the email notification could not be delivered.'",
+    'failed.length === 0 && emailFailed === 0',
   ]
   for (const a of alerts) {
     assert.ok(
@@ -523,4 +531,5 @@ test('23: no new user-facing copy was introduced in compose', () => {
       `unexpected new copy in compose: ${a}`,
     )
   }
+  assert.ok(alerts.length >= 6, 'the allowlist must actually be matching alerts')
 })

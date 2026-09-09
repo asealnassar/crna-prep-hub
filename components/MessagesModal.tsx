@@ -490,6 +490,42 @@ const [compose, setCompose] = useState({
     }
   }
 
+/**
+   * M-5: one awaited notification attempt for one recipient.
+   *
+   * Returns whether the email workflow was accepted. Both compose paths used
+   * to fire this and walk away: a fire-and-forget fetch is cancelled when the
+   * tab closes, and a non-2xx resolves normally rather than throwing, so a
+   * bare `.catch()` reported rate limits, 403s and 502s as success. That is
+   * how a 114-recipient send once delivered about 19 emails with nothing
+   * recorded anywhere.
+   *
+   * It never touches the in-app message. `false` means "the email did not
+   * go" -- never "create the message again".
+   */
+  const notifyRecipient = async (recipientId: string, senderName: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/messages/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientId,
+          senderName,
+          messagePreview:
+            compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : ''),
+        }),
+      })
+      if (!res.ok) {
+        console.error('Notification rejected with status', res.status, 'for', recipientId)
+        return false
+      }
+      return true
+    } catch (err) {
+      console.error('Notification request failed for', recipientId, err)
+      return false
+    }
+  }
+
 const composeMessage = async () => {
     // The gate, taken before any await. Validation stays ahead of it, so an
     // incomplete form returns without ever holding the lock.
@@ -611,6 +647,11 @@ if (isAdmin) {
           // database policy would surface, silently.
           const failed: string[] = []
           let sent = 0
+          // M-5: email outcomes are counted apart from message outcomes, so a
+          // delivered conversation is never reported as a failed one, and a
+          // failed email is never reported as a delivered one.
+          let emailed = 0
+          let emailFailed = 0
           for (const recipientId of compose.selectedUserIds) {
             const { error: threadError } = await supabase.rpc('create_thread_with_message', {
               p_subject: compose.subject,
@@ -626,20 +667,30 @@ if (isAdmin) {
             }
             sent++
 
-            fetch('/api/messages/notify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                recipientId: recipientId,
-                senderName: 'CRNA Prep Hub Admin',
-                messagePreview: compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : '')
-              })
-            }).catch(err => console.error('Email notification failed:', err))
+            // Awaited inside the existing sequential loop, deliberately: one
+            // request in flight at a time. The previous loop fired every
+            // recipient's notification at once, which is what met the
+            // provider's rate limiting. Promise.all would keep that burst.
+            // This mirrors how the broadcast route paces itself -- batches
+            // sent one after another, never concurrently.
+            if (await notifyRecipient(recipientId, 'CRNA Prep Hub Admin')) emailed++
+            else emailFailed++
           }
 
-alert(failed.length === 0
-            ? `Message sent to ${sent} user(s)`
-            : `Message sent to ${sent} of ${compose.selectedUserIds.length} user(s). ${failed.length} could not be delivered.`)
+const totalSelected = compose.selectedUserIds.length
+          const messagePart =
+            failed.length === 0
+              ? `Messages sent to ${sent} users.`
+              : `Messages sent to ${sent} of ${totalSelected} users. ${failed.length} could not be delivered.`
+          const emailPart =
+            emailFailed === 0
+              ? `Email notifications sent to ${emailed}.`
+              : `Email notifications sent to ${emailed}; ${emailFailed} failed.`
+          alert(
+            failed.length === 0 && emailFailed === 0
+              ? `Messages and email notifications sent to ${sent} users.`
+              : `${messagePart} ${emailPart}`
+          )
           setCompose({
             subject: '',
             message: '',
@@ -683,22 +734,16 @@ console.log('📧 About to call email API with:', {
           messagePreview: compose.message.substring(0, 150)
         })
         
-        fetch('/api/messages/notify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            recipientId: recipientId,
-            senderName: isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
-            messagePreview: compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : '')
-          })
-        }).then(res => {
-          console.log('📬 Email API responded with status:', res.status)
-          return res.json()
-        }).then(data => {
-          console.log('✅ Email API result:', data)
-        }).catch(err => {
-          console.error('❌ Email notification failed:', err)
-        })
+        // The conversation above is already committed. A failed email is
+        // reported as exactly that, never as a failed message, and nothing
+        // here re-creates the thread.
+        const notified = await notifyRecipient(
+          recipientId,
+          isAdmin ? 'CRNA Prep Hub Admin' : userEmail
+        )
+        if (!notified) {
+          alert('Message sent, but the email notification could not be delivered.')
+        }
       }
 setCompose({
         subject: '',
