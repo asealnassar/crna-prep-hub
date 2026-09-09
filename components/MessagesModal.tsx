@@ -736,6 +736,18 @@ setCompose({
     }
   }
 
+  /**
+   * M-1: which of the three screens a phone is looking at.
+   *
+   * Derived, never stored. showCompose and selectedThread already encode the
+   * whole navigation state and the right pane already branches on them in this
+   * exact precedence, so a fourth piece of state could only drift out of step
+   * with them. Below `lg` the two panes become mutually exclusive; at `lg` and
+   * above both carry `lg:flex` and this value has no effect.
+   */
+  const mobileView: 'compose' | 'thread' | 'inbox' =
+    showCompose ? 'compose' : selectedThread ? 'thread' : 'inbox'
+
   const formatTime = (timestamp: string) => {
     const date = new Date(timestamp)
     const now = new Date()
@@ -760,13 +772,30 @@ setCompose({
         />
       )}
 
-      <div className={`fixed bottom-0 left-64 h-[85vh] w-[920px] bg-white shadow-xl z-50 transform transition-all duration-300 ease-out rounded-tl-3xl rounded-tr-3xl border border-gray-200/80 ${
+      {/* M-1: full screen below `lg`, the existing desktop panel at and above
+          it. `lg` is the Sidebar's own boundary -- it translates itself
+          off-screen below that -- so `left-64` now appears exactly when the
+          sidebar it compensates for does. It used to apply at every width,
+          reserving 256px for a sidebar that was not on screen and pushing
+          87% of the panel out of a 375px viewport.
+
+          Desktop width is `left-64 right-0 max-w-[920px]` rather than a hard
+          `w-[920px]`: with both edges pinned the box fills what is available
+          and the max-width caps it, so it is 920px from 1176px upward exactly
+          as before, and merely narrower between 1024 and 1175px instead of
+          hanging off the right edge. No viewport units, so a scrollbar cannot
+          push it over.
+
+          z-[60] on mobile clears the sidebar hamburger (z-50), which the
+          full-screen panel deliberately covers while Messages is open;
+          `lg:z-50` keeps desktop stacking untouched. */}
+      <div className={`fixed inset-0 w-full h-[100dvh] z-[60] rounded-none lg:inset-auto lg:top-auto lg:bottom-0 lg:left-64 lg:right-0 lg:w-auto lg:max-w-[920px] lg:h-[85vh] lg:z-50 lg:rounded-tl-3xl lg:rounded-tr-3xl bg-white shadow-xl transform transition-all duration-300 ease-out border border-gray-200/80 ${
         isOpen ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'
       }`}>
         
-        <div className="h-full flex overflow-hidden rounded-tl-3xl rounded-tr-3xl">
+        <div className="h-full flex overflow-hidden rounded-none lg:rounded-tl-3xl lg:rounded-tr-3xl">
           {/* LEFT SIDEBAR - Conversations List */}
-          <div className="w-[340px] border-r border-gray-200/60 flex flex-col bg-gradient-to-b from-gray-50/50 to-white shadow-sm">
+          <div className={`${mobileView === 'inbox' ? 'flex' : 'hidden'} lg:flex w-full lg:w-[340px] border-r border-gray-200/60 flex-col bg-gradient-to-b from-gray-50/50 to-white shadow-sm`}>
             {/* Header */}
             <div className="h-[72px] px-5 flex items-center justify-between border-b border-gray-200/60 bg-white/80 backdrop-blur-sm">
               <h2 className="font-semibold text-gray-900 text-[17px] tracking-tight">Messages</h2>
@@ -971,11 +1000,23 @@ setCompose({
           </div>
 
           {/* RIGHT PANEL - Chat Thread or Compose */}
-          <div className="flex-1 flex flex-col bg-white">
+          <div className={`${mobileView === 'inbox' ? 'hidden' : 'flex'} lg:flex flex-1 flex-col bg-white`}>
             {showCompose ? (
               /* COMPOSE VIEW */
               <div className="flex-1 flex flex-col">
-                <div className="h-[72px] px-6 flex items-center border-b border-gray-200/60 bg-white/80 backdrop-blur-sm">
+                <div className="h-[72px] px-6 flex items-center gap-3 border-b border-gray-200/60 bg-white/80 backdrop-blur-sm">
+                  {/* M-1: mirrors the thread Back. Same call the existing
+                      Cancel button makes, so send/cancel behaviour is
+                      unchanged. */}
+                  <button
+                    onClick={() => setShowCompose(false)}
+                    aria-label="Back to conversations"
+                    className="lg:hidden -ml-2 p-2.5 hover:bg-gray-100 rounded-xl transition-all duration-150 text-gray-600 flex-shrink-0"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                    </svg>
+                  </button>
                   <h2 className="font-semibold text-gray-900 text-[17px] tracking-tight">New Message</h2>
                 </div>
                 
@@ -1113,6 +1154,18 @@ className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none
                 {/* Chat Header */}
                 <div className="h-[72px] px-6 flex items-center justify-between border-b border-gray-200/60 bg-white/80 backdrop-blur-sm">
                   <div className="flex items-center gap-3">
+                    {/* M-1: on a phone the list is not on screen, so this is
+                        the only way back to it. Desktop keeps both panes and
+                        never shows this. */}
+                    <button
+                      onClick={() => setSelectedThread(null)}
+                      aria-label="Back to conversations"
+                      className="lg:hidden -ml-2 p-2.5 hover:bg-gray-100 rounded-xl transition-all duration-150 text-gray-600 flex-shrink-0"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                      </svg>
+                    </button>
                     <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold shadow-sm ring-1 ring-black/5">
                       {(threads.find(t => t.id === selectedThread.id)?.otherParticipantEmail || '?')[0].toUpperCase()}
                     </div>
