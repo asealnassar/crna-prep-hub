@@ -13,7 +13,8 @@ type View = 'compose'
 
 export default function MessagesModal({ userEmail, isAdmin }: MessagesModalProps) {
   const [isOpen, setIsOpen] = useState(false)
-  const { setMessagesUnreadCount: setGlobalMessagesUnreadCount } = useSidebarCollapsed()
+  const { setMessagesUnreadCount: setGlobalMessagesUnreadCount, sidebarCollapsed } =
+    useSidebarCollapsed()
   const [threads, setThreads] = useState<any[]>([])
   const [selectedThread, setSelectedThread] = useState<any>(null)
   const [messages, setMessages] = useState<any[]>([])
@@ -789,7 +790,7 @@ setCompose({
           z-[60] on mobile clears the sidebar hamburger (z-50), which the
           full-screen panel deliberately covers while Messages is open;
           `lg:z-50` keeps desktop stacking untouched. */}
-      <div className={`fixed inset-0 w-full h-[100dvh] z-[60] rounded-none lg:inset-auto lg:top-auto lg:bottom-0 lg:left-64 lg:right-0 lg:w-auto lg:max-w-[920px] lg:h-[85vh] lg:z-50 lg:rounded-tl-3xl lg:rounded-tr-3xl bg-white shadow-xl transform transition-all duration-300 ease-out border border-gray-200/80 ${
+      <div className={`fixed inset-0 w-full h-[100dvh] z-[60] rounded-none lg:inset-auto lg:top-auto lg:bottom-0 ${sidebarCollapsed ? 'lg:left-20' : 'lg:left-64'} lg:right-0 lg:w-auto lg:max-w-[920px] lg:h-[85vh] lg:z-50 lg:rounded-tl-3xl lg:rounded-tr-3xl bg-white shadow-xl transform transition-all duration-300 ease-out border border-gray-200/80 ${
         isOpen ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'
       }`}>
         
