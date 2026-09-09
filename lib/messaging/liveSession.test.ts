@@ -308,7 +308,10 @@ test('13: the live assertions are intact -- nothing removed or mocked', () => {
 
   const jobs = read('lib/messaging/notificationJobs.test.ts')
   assert.match(jobs, /admin SELECT must be refused/)
-  assert.match(jobs, /Phase 1 must not enqueue anything/)
+  // Was /Phase 1 must not enqueue anything/, which D1-D3 legitimately removed
+  // when Phase 2's trigger made it false. Re-anchored on an assertion that
+  // still exists, so this keeps proving the suite carries real checks.
+  assert.match(jobs, /the worker must be able to record an obligation/)
 
   const restore = read('lib/messaging/restoreOnReply.test.ts')
   assert.match(restore, /bClient/, 'the member session is still used')

@@ -173,6 +173,15 @@ export async function handleMessageNotification(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid message id' }, { status: 400 })
     }
 
+    // Optional: the thread create_thread_with_message just created. Compose has
+    // this and cannot have the message id -- the RPC returns only the thread.
+    // It is used ONLY to look the message up server-side; a client-supplied
+    // message id is never trusted for Compose.
+    const threadId = typeof body?.threadId === 'string' ? body.threadId : ''
+    if (threadId && !UUID_RE.test(threadId)) {
+      return NextResponse.json({ error: 'Invalid thread id' }, { status: 400 })
+    }
+
     // 2. Sender identity from the verified session only.
     const isAdmin = isAdminEmail(auth.email)
     const senderName = isAdmin ? 'CRNA Prep Hub Admin' : (auth.email || 'A CRNA Prep Hub member')
@@ -228,6 +237,12 @@ export async function handleMessageNotification(request: NextRequest) {
 
     // 5. Preview text from the stored message wherever one exists, so the
     //    browser cannot fabricate the body of an email we send.
+    // resolvedMessageId is the provider idempotency key's only source. It is
+    // assigned in exactly two places below, each identifying one exact row. It
+    // is never derived from "the newest message": that can name a different
+    // message than the one this notification is for, and a key built on the
+    // wrong message makes the provider suppress a real email.
+    let resolvedMessageId: string | null = null
     let preview = ''
     if (messageId) {
       // Named message: it must have been written by the caller and must sit in
@@ -247,8 +262,47 @@ export async function handleMessageNotification(request: NextRequest) {
       ) {
         return NextResponse.json({ error: 'Message not found for this conversation' }, { status: 403 })
       }
+      resolvedMessageId = messageId
       preview = String(named.message_text ?? '')
+    } else if (threadId) {
+      // Compose. create_thread_with_message inserts exactly ONE message into a
+      // brand-new thread, so "the caller's message in this thread" names that
+      // row exactly -- by construction, not by ordering.
+      //
+      // Anything other than one row means a reply landed between the RPC and
+      // this request. Rather than choose, the key is dropped: no key risks a
+      // duplicate, a wrong key suppresses a real email, and the first is much
+      // the smaller harm.
+      if (!sharedThreadIds.includes(threadId)) {
+        return NextResponse.json(
+          { error: 'Message not found for this conversation' },
+          { status: 403 },
+        )
+      }
+      const { data: authored } = await adminClient
+        .from('thread_messages')
+        .select('id, message_text')
+        .eq('thread_id', threadId)
+        .eq('sender_id', auth.userId)
+        .limit(2)
+
+      if ((authored ?? []).length === 1) {
+        resolvedMessageId = authored![0].id
+        preview = String(authored![0].message_text ?? '')
+      } else {
+        // Thread id and a count only -- no message text, no address, no token.
+        console.warn(
+          'Notification idempotency: thread',
+          threadId,
+          'has',
+          (authored ?? []).length,
+          'caller-authored messages; sending without an idempotency key',
+        )
+      }
     } else if (sharedThreadIds.length > 0) {
+      // PREVIEW ONLY. It deliberately does not select `id`: this query is
+      // ordered, so the row it returns is not provably the message this
+      // notification is for, and it must never reach resolvedMessageId.
       const { data: lastMessage } = await adminClient
         .from('thread_messages')
         .select('message_text')
@@ -278,12 +332,20 @@ export async function handleMessageNotification(request: NextRequest) {
       return NextResponse.json({ error: 'Recipient not found' }, { status: 404 })
     }
 
-    const { error: sendError } = await resend.emails.send({
-      from: NOTIFICATION_FROM,
-      to: recipient.email,
-      subject: NOTIFICATION_SUBJECT,
-      html: buildNotificationEmail(senderName, preview),
-    })
+    // The same key the durable worker will use, so the two systems cannot both
+    // deliver the same message. Omitted entirely when the exact message could
+    // not be proven -- today's behaviour, unchanged.
+    const idempotencyKey = resolvedMessageId ? `message-notification-${resolvedMessageId}` : null
+
+    const { error: sendError } = await resend.emails.send(
+      {
+        from: NOTIFICATION_FROM,
+        to: recipient.email,
+        subject: NOTIFICATION_SUBJECT,
+        html: buildNotificationEmail(senderName, preview),
+      },
+      idempotencyKey ? { idempotencyKey } : undefined,
+    )
 
     // The Resend SDK resolves with { data, error } rather than throwing on an
     // API rejection, so an unchecked await reported rate limits and quota

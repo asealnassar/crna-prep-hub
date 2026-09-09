@@ -503,7 +503,11 @@ const [compose, setCompose] = useState({
    * It never touches the in-app message. `false` means "the email did not
    * go" -- never "create the message again".
    */
-  const notifyRecipient = async (recipientId: string, senderName: string): Promise<boolean> => {
+  const notifyRecipient = async (
+    recipientId: string,
+    senderName: string,
+    threadId?: string | null,
+  ): Promise<boolean> => {
     try {
       const res = await fetch('/api/messages/notify', {
         method: 'POST',
@@ -511,6 +515,10 @@ const [compose, setCompose] = useState({
         body: JSON.stringify({
           recipientId,
           senderName,
+          // The thread the RPC just created, NOT a message id. The server looks
+          // the message up itself: Compose cannot know the message id, and a
+          // client-supplied one would not be trusted for it anyway.
+          ...(threadId ? { threadId } : {}),
           messagePreview:
             compose.message.substring(0, 150) + (compose.message.length > 150 ? '...' : ''),
         }),
@@ -653,7 +661,7 @@ if (isAdmin) {
           let emailed = 0
           let emailFailed = 0
           for (const recipientId of compose.selectedUserIds) {
-            const { error: threadError } = await supabase.rpc('create_thread_with_message', {
+            const { data: newThreadId, error: threadError } = await supabase.rpc('create_thread_with_message', {
               p_subject: compose.subject,
               p_recipient_ids: [recipientId],
               p_message_text: compose.message
@@ -673,7 +681,7 @@ if (isAdmin) {
             // provider's rate limiting. Promise.all would keep that burst.
             // This mirrors how the broadcast route paces itself -- batches
             // sent one after another, never concurrently.
-            if (await notifyRecipient(recipientId, 'CRNA Prep Hub Admin')) emailed++
+            if (await notifyRecipient(recipientId, 'CRNA Prep Hub Admin', newThreadId)) emailed++
             else emailFailed++
           }
 
@@ -717,7 +725,7 @@ setCompose({
             return
           }
         }
-const { error: createError } = await supabase.rpc('create_thread_with_message', {
+const { data: newThreadId, error: createError } = await supabase.rpc('create_thread_with_message', {
           p_subject: compose.subject,
           p_recipient_ids: [recipientId],
           p_message_text: compose.message
@@ -739,7 +747,8 @@ console.log('📧 About to call email API with:', {
         // here re-creates the thread.
         const notified = await notifyRecipient(
           recipientId,
-          isAdmin ? 'CRNA Prep Hub Admin' : userEmail
+          isAdmin ? 'CRNA Prep Hub Admin' : userEmail,
+          newThreadId
         )
         if (!notified) {
           alert('Message sent, but the email notification could not be delivered.')

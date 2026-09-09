@@ -339,7 +339,13 @@ test('18: no fire-and-forget notify remains anywhere', () => {
 })
 
 test('19: both compose paths call the helper and await it', () => {
-  assert.match(compose, /if \(await notifyRecipient\(recipientId, 'CRNA Prep Hub Admin'\)\) emailed\+\+/)
+  // The trailing argument is the thread id Option C added so the server can
+  // resolve the exact message for its idempotency key. The await and the
+  // counters -- what this test is actually about -- are unchanged.
+  assert.match(
+    compose,
+    /if \(await notifyRecipient\(recipientId, 'CRNA Prep Hub Admin'(, [A-Za-z]+)?\)\) emailed\+\+/,
+  )
   assert.match(compose, /else emailFailed\+\+/)
   assert.match(compose, /const notified = await notifyRecipient\(/)
   assert.match(compose, /alert\('Message sent, but the email notification could not be delivered\.'\)/)
