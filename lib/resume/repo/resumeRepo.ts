@@ -36,7 +36,15 @@ const SECTION_COLUMNS =
 
 export type RepoResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly reason: string; readonly detail: string }
+  | {
+      readonly ok: false
+      readonly reason: string
+      readonly detail: string
+      /** Set only on 'stale-revision': the revision the database actually
+       *  holds, so a caller can resync without a second round trip that could
+       *  race with yet another writer. */
+      readonly storedRevision?: number
+    }
 
 function failure(reason: string, detail: unknown): RepoResult<never> {
   // Code and message only. A PostgREST error's `details` can echo the row that
@@ -116,17 +124,27 @@ export async function readWriteState(
  * common refusals into a specific message before spending a round trip. The
  * authority is the compare-and-swap inside the function, and this code trusts
  * the function's answer over its own.
+ *
+ * WHY `expectedRevision` IS A PARAMETER AND NOT `resume.revision`. The two are
+ * different numbers as soon as anything is edited. Every model mutator bumps
+ * `resume.revision` -- that field counts CONTENT versions, and three edits make
+ * it stored+3. What the compare-and-swap needs is the revision the caller last
+ * READ, which only the caller knows. Passing the resume's own field would make
+ * the first edit self-conflict and every later edit conflict harder. The caller
+ * gets this number from the read that produced the document, or from the
+ * revision the previous save returned.
  */
 export async function saveResume(
   db: SupabaseClient,
   resume: ResumeV2,
+  expectedRevision: number,
   actingUserId: string
 ): Promise<RepoResult<{ revision: number }>> {
   const payload = toSavePayload(resume)
 
   const { data, error } = await db.rpc('save_resume_v2', {
     p_resume_id: resume.id,
-    p_expected_revision: resume.revision,
+    p_expected_revision: expectedRevision,
     p_resume: payload.resume,
     p_sections: payload.sections,
   })
@@ -137,7 +155,14 @@ export async function saveResume(
     return { ok: false, reason: 'save-failed', detail: 'unrecognised response' }
   }
   if (!result.ok) {
-    return { ok: false, reason: result.reason ?? 'save-failed', detail: result.detail ?? '' }
+    return {
+      ok: false,
+      reason: result.reason ?? 'save-failed',
+      detail: result.detail ?? '',
+      ...(typeof result.stored_revision === 'number'
+        ? { storedRevision: result.stored_revision }
+        : {}),
+    }
   }
   // `actingUserId` is not sent: ownership is RLS's answer, not a claim the
   // client makes. It stays in the signature so callers cannot forget who they
@@ -164,18 +189,15 @@ interface SaveRpcResult {
  */
 export async function previewWrite(
   db: SupabaseClient,
-  resume: ResumeV2,
+  resumeId: string,
+  expectedRevision: number,
   actingUserId: string
 ): Promise<RepoResult<WriteDecision>> {
-  const state = await readWriteState(db, resume.id)
+  const state = await readWriteState(db, resumeId)
   if (!state.ok) return state
   return {
     ok: true,
-    value: decideWrite({
-      stored: state.value,
-      actingUserId,
-      expectedRevision: resume.revision,
-    }),
+    value: decideWrite({ stored: state.value, actingUserId, expectedRevision }),
   }
 }
 
