@@ -1,6 +1,6 @@
-import type { InterviewState, TurnAction } from './types'
-import { ALL_FORMATS } from './types'
-import { allowedActions, isOpeningTurn } from './state'
+import type { InterviewState, TurnAction } from './types.ts'
+import { ALL_FORMATS } from './types.ts'
+import { allowedActions, isOpeningTurn } from './state.ts'
 
 const scoreField = { type: 'number', description: '0 to 10' }
 

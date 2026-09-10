@@ -108,11 +108,21 @@ export const FORMAT_LABELS: Record<QuestionFormat, string> = {
   none: 'Unclassified',
 }
 
-/** What the interviewer chose to do on a given turn. */
-export type TurnAction = 'ask_follow_up' | 'next_primary' | 'final_report'
+/**
+ * What the interviewer chose to do on a given turn.
+ *
+ * `reprompt_current` is NOT a follow-up. A follow-up says "you answered; now go
+ * deeper" and is adaptive, budgeted, and subject to the applicant's setup
+ * choice. A reprompt says "you haven't answered yet" and is one neutral attempt
+ * to get an answer to the SAME primary question -- so it moves no counter, it
+ * spends no follow-up budget, and it is available even when the applicant
+ * declined follow-ups. Kept as its own action precisely so those two things
+ * cannot be confused by the state machine.
+ */
+export type TurnAction = 'ask_follow_up' | 'next_primary' | 'final_report' | 'reprompt_current'
 
 
-export type TurnKind = 'opening' | 'primary' | 'follow_up' | 'final_report'
+export type TurnKind = 'opening' | 'primary' | 'follow_up' | 'final_report' | 'reprompt'
 
 export type DifficultyLevel = 1 | 2 | 3 | 4 | 5
 
@@ -213,6 +223,25 @@ export interface InterviewState {
   maxPrimaryQuestions: number
   /** Follow-ups already used on the current primary question. */
   followUpCount: number
+  /**
+   * Neutral non-answer reprompts spent on the current primary scenario, capped
+   * at MAX_REPROMPTS. Reset when a new primary question is asked, so the
+   * allowance is per scenario rather than per interview. Deliberately separate
+   * from followUpCount: the two mean different things and are budgeted
+   * differently.
+   */
+  repromptCount: number
+  /**
+   * Neutral reprompts left for the WHOLE interview, alongside the per-scenario
+   * allowance. Both must permit a reprompt for one to happen.
+   *
+   * This exists to keep the interview inside the database's turn ceiling, which
+   * is deliberately not being raised: ten primaries plus eight follow-ups plus
+   * the opening is 19 turns against a hard limit of 24, so at most four
+   * reprompts fit. Unlike repromptCount it does NOT reset between questions.
+   */
+  repromptBudget: number
+  maxRepromptBudget: number
   maxFollowUps: number
   /** Follow-ups left for the WHOLE interview. Keeps total length bounded. */
   followUpBudget: number

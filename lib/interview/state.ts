@@ -12,6 +12,27 @@ import type {
 import { ALL_FORMATS, CLINICAL_FORMATS, EMOTIONAL_FORMATS } from './types.ts'
 
 export const MAX_PRIMARY_QUESTIONS = 10
+/**
+ * Neutral non-answer reprompts per primary scenario. One.
+ *
+ * After it is spent, the applicant's next response is their answer for that
+ * scenario however evasive it is -- which is what stops a real interviewer's
+ * single "take your best shot" from turning into an interrogation loop. This
+ * is not a follow-up allowance and does not touch FOLLOW_UP_BUDGET.
+ */
+export const MAX_REPROMPTS = 1
+/**
+ * Neutral reprompts available across the WHOLE interview.
+ *
+ * Four, and the number is not arbitrary: consume_interview_turn() refuses the
+ * 25th model call of an interview, and the existing worst case already spends
+ * 19 of those (one opening, ten primary answers, eight follow-ups). Four
+ * reprompts bring that to 23 and leave a turn of margin, so this feature needs
+ * no migration and cannot cut an interview off mid-flight. Raising it past 5
+ * REQUIRES raising MAX_TURNS_PER_INTERVIEW and the literal 24 inside the SQL
+ * function together -- see supabase/migrations/20260830_002_interview_grants.sql.
+ */
+export const MAX_REPROMPTS_PER_INTERVIEW = 4
 export const MAX_FOLLOW_UPS = 3
 /**
  * Behavioral answers don't reward deep laddering the way clinical ones do —
@@ -67,6 +88,9 @@ export function createInitialState(opts: {
     primaryQuestionNumber: 0,
     maxPrimaryQuestions: MAX_PRIMARY_QUESTIONS,
     followUpCount: 0,
+    repromptCount: 0,
+    repromptBudget: MAX_REPROMPTS_PER_INTERVIEW,
+    maxRepromptBudget: MAX_REPROMPTS_PER_INTERVIEW,
     maxFollowUps: MAX_FOLLOW_UPS,
     followUpBudget: FOLLOW_UP_BUDGET,
     maxFollowUpBudget: FOLLOW_UP_BUDGET,
@@ -95,6 +119,14 @@ export function normalizeState(raw: any, fallback: InterviewState): InterviewSta
   const maxPrimary = clampInt(raw.maxPrimaryQuestions, 1, 25, MAX_PRIMARY_QUESTIONS)
   const maxFollowUps = clampInt(raw.maxFollowUps, 0, 5, MAX_FOLLOW_UPS)
   const maxBudget = clampInt(raw.maxFollowUpBudget, 0, 60, FOLLOW_UP_BUDGET)
+  // Capped at the constant, not at whatever the client claims: the turn ceiling
+  // this protects is enforced in SQL and cannot be negotiated from the browser.
+  const maxRepromptBudget = clampInt(
+    raw.maxRepromptBudget,
+    0,
+    MAX_REPROMPTS_PER_INTERVIEW,
+    MAX_REPROMPTS_PER_INTERVIEW
+  )
   return {
     version: 1,
     mode: raw.mode === 'real' ? 'real' : 'practice',
@@ -109,10 +141,15 @@ export function normalizeState(raw: any, fallback: InterviewState): InterviewSta
     primaryQuestionNumber: clampInt(raw.primaryQuestionNumber, 0, maxPrimary, 0),
     maxPrimaryQuestions: maxPrimary,
     followUpCount: clampInt(raw.followUpCount, 0, maxFollowUps, 0),
+    // A state predating these fields has spent no reprompts, which is also the
+    // safe reading: the worst case is one extra neutral nudge, never a loop.
+    repromptCount: clampInt(raw.repromptCount, 0, MAX_REPROMPTS, 0),
+    repromptBudget: clampInt(raw.repromptBudget, 0, maxRepromptBudget, maxRepromptBudget),
+    maxRepromptBudget,
     maxFollowUps,
     followUpBudget: clampInt(raw.followUpBudget, 0, maxBudget, maxBudget),
     maxFollowUpBudget: maxBudget,
-    turnKind: ['opening', 'primary', 'follow_up', 'final_report'].includes(raw.turnKind)
+    turnKind: ['opening', 'primary', 'follow_up', 'final_report', 'reprompt'].includes(raw.turnKind)
       ? raw.turnKind
       : 'opening',
     currentScenario: str(raw.currentScenario),
@@ -149,6 +186,23 @@ export function followUpCapFor(state: InterviewState): number {
 }
 
 /**
+ * May the interviewer spend a neutral reprompt on the scenario in play?
+ *
+ * Real Interview mode only for now: Practice already stops after every
+ * scenario to hand back a full review, so an applicant who says "I don't know"
+ * there gets coached immediately rather than left hanging. See the report
+ * accompanying this change for the shared-mode option.
+ */
+export function canReprompt(state: InterviewState): boolean {
+  if (state.complete) return false
+  if (state.primaryQuestionNumber === 0) return false
+  if (state.mode !== 'real') return false
+  // Both gates: this scenario's allowance and the interview-wide budget.
+  if (state.repromptCount >= MAX_REPROMPTS) return false
+  return state.repromptBudget > 0
+}
+
+/**
  * The only place that decides what the interviewer may do next. Returned as a
  * dynamic enum in the response schema, so the model physically cannot pick an
  * action the state machine has ruled out (e.g. a fourth follow-up).
@@ -169,9 +223,33 @@ export function allowedActions(state: InterviewState): TurnAction[] {
   if (state.primaryQuestionNumber === 0) return ['next_primary']
 
   const actions: TurnAction[] = []
-  // Three gates: the setup choice (via followUpCapFor, which returns 0 when
-  // the applicant declined), this scenario's cap, and the interview budget.
-  if (state.followUpCount < followUpCapFor(state) && state.followUpBudget > 0) {
+  // A neutral reprompt is gated only by its own per-scenario allowance. It is
+  // deliberately NOT gated on followUpsEnabled or the follow-up budget: an
+  // applicant who declined follow-ups still deserves one "take your best shot"
+  // before the interviewer moves on, because that is not depth-probing, it is
+  // getting an answer to the question already asked.
+  if (canReprompt(state)) actions.push('reprompt_current')
+
+  // The turn straight after a reprompt CLOSES the scenario. Whatever they say
+  // is their answer, however evasive -- that is what makes one nudge one nudge.
+  //
+  // Withdrawing ask_follow_up here is what stops the loop in practice, not just
+  // on paper: with the reprompt spent but a follow-up still on the table, the
+  // model reaches for the follow-up and presses again -- observed live, twice,
+  // producing "I'm not going to tell you what to do... start with your very
+  // first action", which is a second reprompt wearing a follow-up's costume and
+  // charged to the follow-up budget. A doctrine line cannot beat an action the
+  // schema still offers.
+  const answeringAfterReprompt = state.turnKind === 'reprompt'
+
+  // Four gates: not closing out a reprompt, the setup choice (via
+  // followUpCapFor, which returns 0 when the applicant declined), this
+  // scenario's cap, and the interview budget.
+  if (
+    !answeringAfterReprompt &&
+    state.followUpCount < followUpCapFor(state) &&
+    state.followUpBudget > 0
+  ) {
     actions.push('ask_follow_up')
   }
   if (state.primaryQuestionNumber < state.maxPrimaryQuestions) {
@@ -205,7 +283,16 @@ export function applyTurn(state: InterviewState, turn: ModelTurn): InterviewStat
 
   const evaluation = normalizeEvaluation(turn.evaluation, state)
 
-  if (turn.action === 'ask_follow_up') {
+  if (turn.action === 'reprompt_current') {
+    // The ONLY counter this moves. Not the primary number -- the same question
+    // is still on the table. Not followUpCount or followUpBudget -- nothing was
+    // answered, so there is nothing to go deeper into. Not the evaluation list
+    // -- the scenario is not closed. Not even the difficulty, which describes
+    // the question that was already asked and has not changed.
+    next.repromptCount = Math.min(state.repromptCount + 1, MAX_REPROMPTS)
+    next.repromptBudget = Math.max(0, state.repromptBudget - 1)
+    next.turnKind = 'reprompt'
+  } else if (turn.action === 'ask_follow_up') {
     next.followUpCount = Math.min(state.followUpCount + 1, followUpCapFor(state))
     next.followUpBudget = Math.max(0, state.followUpBudget - 1)
     next.turnKind = 'follow_up'
@@ -214,6 +301,10 @@ export function applyTurn(state: InterviewState, turn: ModelTurn): InterviewStat
     if (evaluation) next.evaluations.push(evaluation)
     next.primaryQuestionNumber = Math.min(state.primaryQuestionNumber + 1, state.maxPrimaryQuestions)
     next.followUpCount = 0
+    // Per scenario, not per interview: the allowance returns with the question.
+    // repromptBudget deliberately does NOT reset -- it is what bounds the
+    // interview's total turn count.
+    next.repromptCount = 0
     next.turnKind = 'primary'
     next.currentScenario = str(turn.scenario_label) || next.currentScenario
     next.currentCategory = isCategory(turn.category) ? turn.category : next.currentCategory

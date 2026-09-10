@@ -412,8 +412,12 @@ function coerceTurn(parsed: any, state: InterviewState): ModelTurn {
     question_format: coerceFormat(parsed?.question_format),
     concepts_tested: Array.isArray(parsed?.concepts_tested) ? parsed.concepts_tested : [],
     difficulty_level: parsed?.difficulty_level ?? state.suggestedDifficulty,
-    // An evaluation only counts on a turn that actually closes a scenario.
-    evaluation: action === 'ask_follow_up' ? null : (parsed?.evaluation ?? null),
+    // An evaluation only counts on a turn that actually closes a scenario. A
+    // reprompt closes nothing -- the applicant has not answered yet.
+    evaluation:
+      action === 'ask_follow_up' || action === 'reprompt_current'
+        ? null
+        : (parsed?.evaluation ?? null),
     final_report: action === 'final_report' ? (parsed?.final_report ?? null) : null,
     internal_note: typeof parsed?.internal_note === 'string' ? parsed.internal_note : '',
   }

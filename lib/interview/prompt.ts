@@ -1,6 +1,6 @@
-import type { InterviewState } from './types'
-import { allowedActions, followUpCapFor, isOpeningTurn, unusedClinicalFormats, unusedEmotionalFormats } from './state'
-import { FORMAT_LABELS } from './types'
+import type { InterviewState } from './types.ts'
+import { allowedActions, followUpCapFor, isOpeningTurn, unusedClinicalFormats, unusedEmotionalFormats, MAX_REPROMPTS } from './state.ts'
+import { FORMAT_LABELS } from './types.ts'
 
 const LADDER = `Level 1 - Foundational ICU knowledge (what a drug or intervention is for).
 Level 2 - Clinical application (why you would choose it in this patient).
@@ -46,7 +46,27 @@ Do not invent institution-specific policies, protocols, or "our hospital does X"
 const QUESTION_STYLE = `Questions must sound like a real interviewer talking, not an exam prompt.
 Too verbose: "Considering all possible hemodynamic consequences and relevant physiological mechanisms, please discuss in detail how you would approach..."
 Right: "Your patient's MAP is 52 despite fluids. What do you do?"
-Ask one thing at a time and let follow-ups create the depth. Two or three sentences maximum. No preamble about what category the question belongs to and no announcing what is coming next.`
+No preamble about what category the question belongs to and no announcing what is coming next.
+
+ONE CENTRAL ASK. This is the rule that most often gets broken.
+
+Separate the CONTEXT from the ASK. The context may be as detailed as the scenario needs — vitals, settings, labs, the whole picture. The ask that follows it should be one thing.
+
+  Good: "You are caring for an intubated patient on volume control. The low-pressure alarm sounds, exhaled tidal volume falls, ETCO2 is dropping and SpO2 is declining. What are you going to do in the next one to two minutes?"
+  Bad:  "Interpret what is happening, explain the physiology, list five causes, tell me how you would troubleshoot each one, explain what you would do if it is a disconnection, and tell me what you would expect the ETCO2 waveform to show."
+
+  Good: "Tell me what you know about norepinephrine."
+  Bad:  "Tell me about norepinephrine: what receptors it works on, what it does to blood pressure and heart rate, a reasonable starting dose range, and what you are monitoring for after you start it."
+
+  Good: "Interpret this ABG and tell me what you would do next."
+  Good: "Tell me about a time you disagreed with a provider."
+  Bad:  "What are the determinants of MAP, how can you raise it, what drugs would you use, and what are you monitoring?"
+
+A second component is allowed ONLY when it is inseparable from the first — "interpret this and what would you do" is one clinical thought, "define it, dose it, and list its side effects" is three questions wearing one coat. If you can imagine an interviewer pausing for an answer between the parts, they are separate questions: ask the first one.
+
+Never build a primary question as a list of asks: define X, explain the mechanism, give the dosing, list the side effects, explain the monitoring, compare the alternatives. That is a checklist, not an interview.
+
+This is not a licence to be vague. "Tell me about shock" is too thin to answer well. Keep the context rich and the ask singular.`
 
 const CLINICAL_FORMATS_GUIDE = `=== CLINICAL QUESTION FORMATS ===
 A real CRNA panel does not ask ten deteriorating-patient scenarios in a row. Vary the FORM of the question, not only the topic. Report the one you used in question_format.
@@ -70,6 +90,8 @@ abg_labs — acid-base and compensation, electrolytes, lactate, renal function, 
   "pH 7.21, CO2 28, bicarb 11. What is this, and what is driving it?"
 cardiac_ecg — rhythm identification, treatment priority, conduction physiology, ischemia, output consequences.
 equipment — arterial and central lines, PA catheters, CRRT, ECMO, IABP or Impella.
+
+The list beside each format is the TERRITORY that format covers, not a set of things to ask in one breath. "pharmacology — indication, dose, receptor, mechanism, onset and offset, interactions" means any one of those is a fair pharmacology question. Asking for all six at once is the checklist failure described under QUESTION STYLE.
 
 Rules for choosing a format:
 - Prefer one you have not used yet. The state block lists what is used and what is left. Do not work down the list mechanically — pick the format that best tests what you want to learn next, weighted toward unused ones.
@@ -128,6 +150,7 @@ export function buildSystemPrompt(
   // them: the schema forbids the action, so reasoning about it is wasted and
   // an instruction to consider one would only conflict with the choice.
   const followUpsOff = !state.followUpsEnabled
+  const canReprompt = actions.includes('reprompt_current')
 
   const parts: string[] = []
 
@@ -146,7 +169,7 @@ In list fields (did_well, to_tighten, missed_concepts, and the report lists) wri
 Mode: ${state.mode === 'real' ? 'REAL INTERVIEW' : 'PRACTICE'}
 Interview type: ${describeType(state)}
 Primary questions asked: ${state.primaryQuestionNumber} of ${state.maxPrimaryQuestions}
-${followUpsOff ? 'This interview has no follow-up questions.' : `Follow-ups used on the current scenario: ${state.followUpCount} of ${followUpCap} (${followUpsLeft} remaining)
+${followUpsOff ? 'This interview has no follow-up questions. Do NOT compensate by widening the primary questions: a question asked here is asked exactly as focused as it would be in any other interview, and you simply move on afterward. A shorter interview is what they chose, not a reason to bundle four asks into one.' : `Follow-ups used on the current scenario: ${state.followUpCount} of ${followUpCap} (${followUpsLeft} remaining)
 Follow-up budget for the whole interview: ${state.followUpBudget} left, with ${Math.max(0, state.maxPrimaryQuestions - state.primaryQuestionNumber)} primary questions still to come`}
 Current scenario: ${state.currentScenario || '(none yet)'}
 Current category: ${state.currentCategory || '(none yet)'}
@@ -159,10 +182,10 @@ Scores so far: ${formatScores(state)}
 Concepts already tested this session: ${state.testedConcepts.length ? state.testedConcepts.join('; ') : '(none)'}
 Primary questions already asked this session:
 ${state.askedPrimaryQuestions.length ? state.askedPrimaryQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n') : '(none)'}
-Randomization seed: ${opts.seed}
+${state.mode === 'real' ? `Neutral reprompts used on the current scenario: ${state.repromptCount} of ${MAX_REPROMPTS}, with ${state.repromptBudget} left for the whole interview${canReprompt ? '' : ' (none available — their next reply is their answer)'}\n` : ''}Randomization seed: ${opts.seed}
 The counters above are computed by the system. Do not restate, recount, or contradict them.`)
 
-  parts.push(buildTurnInstructions(state, { opening, actions, followUpCap, followUpsLeft, onLastPrimary, mustFinish, followUpsOff }))
+  parts.push(buildTurnInstructions(state, { opening, actions, followUpCap, followUpsLeft, onLastPrimary, mustFinish, followUpsOff, canReprompt: actions.includes('reprompt_current'), repromptsUnavailable: state.mode === 'real' && !actions.includes('reprompt_current') }))
 
   // Restored to every non-opening turn of a follow-ups-enabled interview: the
   // interviewer is choosing adaptively again, so it needs the criteria. A
@@ -239,6 +262,39 @@ Critically: do NOT reveal the correct answer, correct them, or teach before they
 A follow-up must build on what the applicant just said. If you cannot connect it to their words, it is a new question, not a follow-up.
 Never label follow-ups out loud. No "follow-up 4B", no "sub-question". Just ask it the way a person would.`
 
+const NON_ANSWER_DOCTRINE = `=== IF THEY DID NOT ANSWER ===
+A real interviewer does not respond to "I don't know" by producing an entirely new question. They give one neutral nudge, then move on. That is what "reprompt_current" is for, and you get exactly one per scenario.
+
+Spend it ONLY on a clear non-answer:
+- "I don't know", "unsure", "no idea", "I'm not sure" and nothing else
+- asking YOU for the answer: "what do you think?", "what would you do?", "you tell me"
+- a reply with no relationship to the question asked
+- an obvious refusal to engage
+
+Do NOT spend it because the answer was:
+- wrong — a confidently incorrect answer is an ANSWER, and a revealing one. Score it.
+- incomplete — they gave you part of it. That is an answer.
+- brief — two accurate sentences can be a complete answer.
+- weak, disorganised, or poorly reasoned — all answers. Score them.
+This is not a correctness detector. When you are unsure whether it was a non-answer, it was an answer: move on.
+
+The reprompt itself:
+- re-orient them to the same question, nothing more
+- give no part of the answer, no hint toward it, and no teaching
+- no feedback, no verdict, no indication of whether anything they said was right
+- never mention scoring
+- keep it to one or two sentences, in the voice of an interviewer who wants to hear them think
+
+Good: "I'd like you to take your best shot. Start with what the ABG tells you."
+Good: "Let's stay with the question. What do you know about norepinephrine?"
+Good: "Even if you're unsure, tell me how you would begin thinking through it."
+Bad:  "That's alright — remember that a low pH with a high CO2 means respiratory acidosis, so what would you do?" (that is the answer)
+Bad:  "Not quite. Try again." (that is feedback)
+
+You also have a small fixed number of reprompts for the entire interview, shown in the state block. When it reaches zero there are no more nudges at all, in any scenario. Spend them on applicants who are stuck, not on every thin answer.
+
+After one reprompt, whatever they say next is their answer for this scenario, however evasive. The schema will not offer you "ask_follow_up" on that turn either — pressing again through a follow-up is the same loop by another name. Close it out and move on. Two non-answers is itself information: let it show in the evaluation rather than asking a third time.`
+
 function buildTurnInstructions(
   state: InterviewState,
   ctx: {
@@ -249,6 +305,8 @@ function buildTurnInstructions(
     onLastPrimary: boolean
     mustFinish: boolean
     followUpsOff: boolean
+    canReprompt: boolean
+    repromptsUnavailable: boolean
   }
 ): string {
   if (ctx.opening) {
@@ -267,6 +325,12 @@ Set evaluation and final_report to null. Set question_asked to the question itse
   if (!ctx.followUpsOff) {
     lines.push(
       `"ask_follow_up" — stay on the current scenario and press further. Set evaluation to null; you are not done judging this scenario yet. display_text = the follow-up question only.`
+    )
+  }
+
+  if (ctx.canReprompt) {
+    lines.push(
+      `"reprompt_current" — they did not actually answer. ONE neutral attempt to get an answer to the question already on the table. Set evaluation to null and leave display_text as the reprompt alone.`
     )
   }
 
@@ -295,6 +359,15 @@ Set evaluation and final_report to null. Set question_asked to the question itse
   }
   if (ctx.mustFinish) {
     lines.push(`The interview is over. Produce the final evaluation and report now.`)
+  }
+  if (ctx.canReprompt) lines.push('', NON_ANSWER_DOCTRINE)
+  // No nudge left, but a follow-up still on the table. The post-reprompt turn
+  // withdraws ask_follow_up structurally; this case cannot be, because only you
+  // can tell a non-answer from a thin one -- so it is said plainly instead.
+  else if (ctx.repromptsUnavailable && ctx.actions.includes('ask_follow_up')) {
+    lines.push(
+      `You have no neutral reprompts left. If they did not really answer, do NOT reach for "ask_follow_up" to press them again — a follow-up goes DEEPER into an answer they gave, and using one to re-ask the same question is the loop you are meant to avoid. Close the scenario out and let the non-answer show in the evaluation.`
+    )
   }
 
   return lines.join('\n')
