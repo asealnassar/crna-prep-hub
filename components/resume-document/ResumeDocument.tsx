@@ -1,4 +1,5 @@
 import { DOCUMENT_CSS, cssVariablesFor } from '@/lib/resume/document/css'
+import { fontFaceCss } from '@/lib/resume/document/fonts'
 import { planDocument } from '@/lib/resume/document/plan'
 import type { DocumentBlock, DocumentPlan } from '@/lib/resume/document/plan'
 import { splitPlan, templateFor } from '@/lib/resume/document/templates'
@@ -30,6 +31,7 @@ export default function ResumeDocument({
   plan,
   template,
   includeStyles = true,
+  fontCss,
 }: {
   /** The resume to render. Ignored when `plan` is supplied. */
   resume?: ResumeV2
@@ -38,6 +40,13 @@ export default function ResumeDocument({
   /** Template id or definition. Anything unrecognised falls back to Classic. */
   template?: string | TemplateDefinition | null
   includeStyles?: boolean
+  /**
+   * The @font-face block. Defaults to referencing `/fonts/*.woff2`, which is
+   * right for the preview. The export path passes the same files inlined as
+   * data URIs, because Chromium is given HTML with no origin to resolve a URL
+   * against. Same files either way -- only the delivery differs.
+   */
+  fontCss?: string
 }) {
   const definition = resolveTemplate(template, resume)
   const document = plan ?? (resume ? planDocument(resume) : EMPTY_PLAN)
@@ -54,7 +63,9 @@ export default function ResumeDocument({
       data-template={definition.id}
       style={cssVariablesFor(definition) as React.CSSProperties}
     >
-      {includeStyles && <style dangerouslySetInnerHTML={{ __html: DOCUMENT_CSS }} />}
+      {includeStyles && (
+        <style dangerouslySetInnerHTML={{ __html: `${fontCss ?? fontFaceCss()}\n${DOCUMENT_CSS}` }} />
+      )}
       <article className="rd-page">
         <DocumentHeader plan={document} />
         {/* Main column FIRST in the DOM. The stylesheet places the sidebar to

@@ -49,6 +49,16 @@ export const DOCUMENT_CSS = `
   line-height: var(--rd-leading);
   color: var(--rd-ink);
   background: #ffffff;
+  /* LIGATURES OFF, AND THIS IS NOT COSMETIC. A font that renders "fi" as one
+     glyph stores that ligature in the PDF's text layer, and extraction gives
+     back "certication", "qualied", "eciency". A resume is read by software
+     before it is read by a person, so every one of those is a keyword an
+     applicant tracking system fails to match. The round-trip test caught this
+     on a certification list; at resume sizes the visual difference is
+     imperceptible. Belt and braces: the feature settings cover renderers that
+     ignore the shorthand. */
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "clig" 0, "dlig" 0;
 }
 
 /* US Letter with half-inch margins. The preview shows the same box the PDF

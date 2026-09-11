@@ -15,6 +15,7 @@ import {
 import type { PaneState } from '@/lib/resume/studio/panes'
 import type { ResumeSectionType, ResumeV2 } from '@/lib/resume/model/types'
 import SaveIndicator from '../../components/dashboard/SaveIndicator'
+import DownloadPdfButton from '../export/DownloadPdfButton'
 import EditorPane from './EditorPane'
 import MobileToggle from './MobileToggle'
 import PreviewPane from './PreviewPane'
@@ -180,7 +181,12 @@ export default function StudioClient({ initialResume }: { initialResume: ResumeV
                 onReload={() => window.location.reload()}
               />
             </div>
-            {visible.toggleable && <MobileToggle state={panes} onChange={setPanes} />}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Exports the STORED resume, so an edit still in flight would
+                  not be in the file. Disabled until the document is settled. */}
+              <DownloadPdfButton resumeId={initialResume.id} disabled={hasUnsavedWork(save)} />
+              {visible.toggleable && <MobileToggle state={panes} onChange={setPanes} />}
+            </div>
           </div>
 
           <div className={visible.edit && visible.preview ? 'grid grid-cols-2 gap-6 items-start' : ''}>

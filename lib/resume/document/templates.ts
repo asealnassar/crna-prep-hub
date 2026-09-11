@@ -24,6 +24,7 @@
 
 import type { ResumeSectionType, ResumeTemplate } from '../model/types.ts'
 import type { DocumentBlock, DocumentPlan } from './plan.ts'
+import { SANS_STACK, SERIF_STACK } from './fonts.ts'
 
 export type TemplateLayout = 'single-column' | 'sidebar'
 export type HeadingStyle = 'ruled' | 'caps' | 'inline'
@@ -64,8 +65,13 @@ export interface TemplateDefinition {
   readonly tokens: TemplateTokens
 }
 
-const SERIF = "'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif"
-const SANS = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+/**
+ * The faces this project ships, not a wish-list of what a machine might have.
+ * See lib/resume/document/fonts.ts: naming a font you do not ship is how a
+ * preview and its PDF stop matching.
+ */
+const SERIF = SERIF_STACK
+const SANS = SANS_STACK
 
 /**
  * Centred name, ruled headings, dates under the title, serif. What a CRNA

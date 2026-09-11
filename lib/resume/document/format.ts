@@ -101,3 +101,32 @@ export function paragraphsOf(text: string): string[] {
     .map((block) => block.replace(/\s*\n\s*/g, ' ').trim())
     .filter((block) => block !== '')
 }
+
+/**
+ * Characters that render identically but extract wrongly.
+ *
+ * Inter maps U+2019 (right single quotation mark) and U+02BC (modifier letter
+ * apostrophe) to ONE glyph, so a PDF containing "O’Neill" extracts as
+ * "OʼNeill". It looks correct to a person and is invisible to an applicant
+ * tracking system searching for the surname -- which, for a document read by
+ * software before it is read by anyone, is the failure that matters. Measured
+ * with the round-trip test, not assumed.
+ *
+ * Only the single quotes are rewritten. Double quotes, em dashes, en dashes and
+ * ellipses were checked and extract as themselves, so they are left alone: this
+ * changes the applicant's text as little as the evidence requires.
+ */
+const AMBIGUOUS_GLYPHS: readonly (readonly [RegExp, string])[] = [
+  [/[\u2018\u2019\u02bb\u02bc]/g, "'"],
+]
+
+/**
+ * Text as it should reach the page: legible to a person, unambiguous to a
+ * parser. Applied where strings enter the document plan, so the preview and the
+ * PDF are normalised identically.
+ */
+export function atsText(value: string): string {
+  let out = value
+  for (const [pattern, replacement] of AMBIGUOUS_GLYPHS) out = out.replace(pattern, replacement)
+  return out
+}

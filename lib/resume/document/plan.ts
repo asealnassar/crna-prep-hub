@@ -31,8 +31,8 @@ import type {
   ShadowingEntry, VolunteerEntry,
 } from '../model/types.ts'
 import {
-  contactPieces, formatDateRange, formatGpa, formatName, formatResumeDate,
-  join, paragraphsOf,
+  atsText, contactPieces, formatDateRange, formatGpa, formatName,
+  formatResumeDate, join, paragraphsOf,
 } from './format.ts'
 
 /** One titled item: a job, a degree, a certification, an award. */
@@ -79,10 +79,16 @@ const EMPTY_ENTRY: Omit<DocumentEntry, 'id'> = {
 
 function entry(id: string, over: Partial<Omit<DocumentEntry, 'id'>>): DocumentEntry {
   const built = { id, ...EMPTY_ENTRY, ...over }
+  // Normalised here, once, so every one of the fifteen mappers gets it and no
+  // future mapper can forget. See `atsText`.
   return {
     ...built,
-    notes: built.notes.filter((n) => n.trim() !== ''),
-    detail: built.detail.filter((d) => d.trim() !== ''),
+    title: atsText(built.title),
+    subtitle: atsText(built.subtitle),
+    meta: atsText(built.meta),
+    location: atsText(built.location),
+    notes: built.notes.map(atsText).filter((n) => n.trim() !== ''),
+    detail: built.detail.map(atsText).filter((d) => d.trim() !== ''),
   }
 }
 
@@ -96,7 +102,7 @@ function isEntryEmpty(e: DocumentEntry): boolean {
 
 /** The rendered form of authored text: what was accepted, never the proposal. */
 function accepted(text: AuthoredText): string[] {
-  return isBlankAuthoredText(text) ? [] : paragraphsOf(text.accepted)
+  return isBlankAuthoredText(text) ? [] : paragraphsOf(text.accepted).map(atsText)
 }
 
 // ---------------------------------------------------------------------------
@@ -302,8 +308,8 @@ export function planDocument(resume: ResumeV2): DocumentPlan {
   }
 
   return {
-    name: formatName(resume.contact),
-    contact: contactPieces(resume.contact),
+    name: atsText(formatName(resume.contact)),
+    contact: contactPieces(resume.contact).map(atsText),
     blocks,
   }
 }

@@ -1,0 +1,83 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
+import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
+import { BLOCKED_BODY, resumeV2Access } from '@/lib/resume/gate'
+import { readResume } from '@/lib/resume/repo/resumeRepo'
+import { ChromiumUnavailableError, exportResumePdf, pdfFilename } from '@/lib/resume/export/pdf'
+
+/**
+ * Server-rendered PDF for one resume.
+ *
+ * Gated like every other V2 surface, and scoped by the caller's own JWT, so the
+ * resume it prints is one RLS already agreed they may read. A resume belonging
+ * to someone else does not 403 here; it does not exist.
+ *
+ * Chromium is the expensive part. `maxDuration` allows for a cold start, which
+ * on this path is seconds rather than milliseconds -- the acknowledged price of
+ * an export that can be tested. See lib/resume/export/pdf.ts.
+ */
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
+export async function POST(request: NextRequest) {
+  const auth = await authenticateRequest()
+  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const access = resumeV2Access({ isAdmin: isAdminEmail(auth.email) })
+  if (!access.allowed) return NextResponse.json(BLOCKED_BODY, { status: access.status })
+
+  const token = await readAccessToken()
+  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Malformed JSON.' }, { status: 400 })
+  }
+  const id = (body as { id?: unknown } | null)?.id
+  if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return NextResponse.json({ error: 'A valid id is required.' }, { status: 400 })
+  }
+
+  const db = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    }
+  )
+
+  const read = await readResume(db, id)
+  if (!read.ok) {
+    console.error('resume-v2 pdf export: read failed', read.reason, read.detail)
+    return NextResponse.json({ error: 'read-failed' }, { status: 500 })
+  }
+  const resume = read.value.resume
+  if (!resume) return NextResponse.json({ error: 'not-found' }, { status: 404 })
+
+  try {
+    const pdf = await exportResumePdf(resume)
+    return new NextResponse(new Uint8Array(pdf), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${pdfFilename(resume)}"`,
+        'Content-Length': String(pdf.length),
+        // A resume is personal and regenerated cheaply enough. Never cached by
+        // an intermediary.
+        'Cache-Control': 'private, no-store',
+      },
+    })
+  } catch (error) {
+    // Never the error object: a Puppeteer failure can carry the page's content,
+    // and this page is somebody's resume.
+    const unavailable = error instanceof ChromiumUnavailableError
+    console.error('resume-v2 pdf export failed:', unavailable ? error.message : (error as Error)?.name)
+    return NextResponse.json(
+      { error: unavailable ? 'export-unavailable' : 'export-failed' },
+      { status: unavailable ? 503 : 500 }
+    )
+  }
+}
