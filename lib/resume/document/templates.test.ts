@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { TEMPLATES, TEMPLATE_LIST, splitPlan, templateFor } from './templates.ts'
+import { TEMPLATES, TEMPLATE_LIST, readingOrder, splitPlan, templateFor } from './templates.ts'
 import type { TemplateDefinition } from './templates.ts'
 import { planDocument } from './plan.ts'
 import { createResume, emptyContact } from '../model/resume.ts'
@@ -198,4 +198,59 @@ test('splitting does not mutate the plan', () => {
   const before = JSON.stringify(plan)
   for (const t of TEMPLATE_LIST) splitPlan(plan, t)
   assert.equal(JSON.stringify(plan), before)
+})
+
+// ------------------------------------------------- reading order (ATS)
+
+test('reading order carries every block exactly once', () => {
+  const plan = planDocument(fullResume())
+  for (const template of TEMPLATE_LIST) {
+    const order = readingOrder(plan, template)
+    assert.equal(order.length, plan.blocks.length, template.id)
+    assert.deepEqual(
+      order.map((b) => b.sectionId).sort(),
+      plan.blocks.map((b) => b.sectionId).sort(),
+      template.id
+    )
+  }
+})
+
+test('a single-column template reads in the applicant’s own order', () => {
+  const plan = planDocument(fullResume())
+  for (const template of TEMPLATE_LIST) {
+    if (template.layout !== 'single-column') continue
+    assert.deepEqual(
+      readingOrder(plan, template).map((b) => b.sectionType),
+      plan.blocks.map((b) => b.sectionType),
+      template.id
+    )
+  }
+})
+
+test('a two-column resume still extracts as a resume, not as a list of licences', () => {
+  const plan = planDocument(fullResume())
+  const modern = TEMPLATES.modern
+  const order = readingOrder(plan, modern)
+
+  const sidebarTypes = new Set<string>(modern.sidebarSections)
+  const firstSidebar = order.findIndex((b) => sidebarTypes.has(b.sectionType))
+  const lastNarrative = order.map((b) => sidebarTypes.has(b.sectionType)).lastIndexOf(false)
+
+  assert.ok(firstSidebar > 0, 'the document opens with a sidebar block')
+  assert.ok(
+    lastNarrative < firstSidebar,
+    'narrative sections must all precede the credential sidebar in the DOM'
+  )
+  assert.equal(order[0].sectionType, 'summary', 'the first thing read should be who they are')
+})
+
+test('narrative order inside the main column is untouched by the split', () => {
+  const plan = planDocument(fullResume())
+  const modern = TEMPLATES.modern
+  const sidebarTypes = new Set<string>(modern.sidebarSections)
+  const expected = plan.blocks.filter((b) => !sidebarTypes.has(b.sectionType)).map((b) => b.sectionType)
+  const actual = readingOrder(plan, modern)
+    .filter((b) => !sidebarTypes.has(b.sectionType))
+    .map((b) => b.sectionType)
+  assert.deepEqual(actual, expected)
 })

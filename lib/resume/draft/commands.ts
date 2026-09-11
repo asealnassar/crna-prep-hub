@@ -32,6 +32,19 @@ const STATUSES: readonly ResumeStatus[] = ['draft', 'complete']
 
 export type DraftCommand =
   | { readonly kind: 'create'; readonly title: string }
+  | {
+      readonly kind: 'patch'
+      readonly id: string
+      readonly expectedRevision: number
+      /**
+       * Still `unknown` here on purpose. A patch's field names are only
+       * meaningful against the section they address, and which section is which
+       * type is something only the stored row knows -- so the route reads the
+       * resume first and then hands these to `parsePatches`. This layer checks
+       * the envelope; that one checks the contents.
+       */
+      readonly patches: readonly unknown[]
+    }
   | { readonly kind: 'duplicate'; readonly sourceId: string }
   | { readonly kind: 'rename'; readonly id: string; readonly title: string; readonly expectedRevision: number }
   | { readonly kind: 'set-status'; readonly id: string; readonly status: ResumeStatus; readonly expectedRevision: number }
@@ -93,6 +106,15 @@ export function parseCommand(body: unknown): ParseResult {
       const status = STATUSES.find((s) => s === b.status)
       if (!status) return { ok: false, error: 'Unknown status.' }
       return { ok: true, command: { kind: 'set-status', id, status, expectedRevision } }
+    }
+
+    case 'patch': {
+      const id = asId(b.id)
+      if (!id) return { ok: false, error: 'A valid id is required.' }
+      const expectedRevision = asRevision(b.expectedRevision)
+      if (expectedRevision === null) return { ok: false, error: 'A valid expectedRevision is required.' }
+      if (!Array.isArray(b.patches)) return { ok: false, error: 'Expected a list of edits.' }
+      return { ok: true, command: { kind: 'patch', id, expectedRevision, patches: b.patches } }
     }
 
     case 'delete': {

@@ -57,11 +57,15 @@ export default function ResumeDocument({
       {includeStyles && <style dangerouslySetInnerHTML={{ __html: DOCUMENT_CSS }} />}
       <article className="rd-page">
         <DocumentHeader plan={document} />
+        {/* Main column FIRST in the DOM. The stylesheet places the sidebar to
+            its left with explicit grid coordinates, so what an ATS extracts
+            reads as a resume rather than opening with licence numbers. See
+            `readingOrder` in lib/resume/document/templates.ts. */}
         <div className="rd-columns">
+          <div className="rd-main">{main.map(renderBlock)}</div>
           {sidebar.length > 0 && (
             <aside className="rd-aside">{sidebar.map(renderBlock)}</aside>
           )}
-          <div className="rd-main">{main.map(renderBlock)}</div>
         </div>
       </article>
     </div>

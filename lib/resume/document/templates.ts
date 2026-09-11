@@ -171,3 +171,20 @@ export function splitPlan(plan: DocumentPlan, template: TemplateDefinition): Spl
     sidebar: plan.blocks.filter((b) => inSidebar.has(b.sectionType)),
   }
 }
+
+/**
+ * Every block in DOM order, which is not the same as visual order.
+ *
+ * A two-column template puts credentials beside the narrative, but an ATS and
+ * anyone copying text out of the PDF read the DOM, not the grid. Emitting the
+ * sidebar first -- as the visual left-hand column would suggest -- makes an
+ * extracted resume open with a list of licence numbers before it says who the
+ * applicant is. So the main column is emitted first and the stylesheet places
+ * the sidebar to its left with explicit grid coordinates.
+ *
+ * For a single-column template this is simply the applicant's own order.
+ */
+export function readingOrder(plan: DocumentPlan, template: TemplateDefinition): DocumentBlock[] {
+  const { main, sidebar } = splitPlan(plan, template)
+  return [...main, ...sidebar]
+}

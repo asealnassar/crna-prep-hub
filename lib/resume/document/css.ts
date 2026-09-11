@@ -93,6 +93,13 @@ export const DOCUMENT_CSS = `
   gap: var(--rd-section-gap);
   align-items: start;
 }
+/* Placed explicitly rather than by source order. The main column is FIRST in
+   the DOM so extracted text reads as a resume -- name, summary, experience --
+   and these coordinates put the sidebar back on the left visually. Without
+   them, a two-column template would hand an ATS a list of licence numbers
+   before it said who the applicant was. */
+.rd-root[data-layout="sidebar"] .rd-aside { grid-column: 1; grid-row: 1; }
+.rd-root[data-layout="sidebar"] .rd-main { grid-column: 2; grid-row: 1; }
 .rd-aside { min-width: 0; }
 .rd-main { min-width: 0; }
 

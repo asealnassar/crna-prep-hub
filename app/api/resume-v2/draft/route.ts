@@ -5,6 +5,8 @@ import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAut
 import { BLOCKED_BODY, resumeV2Access } from '@/lib/resume/gate'
 import { MAX_BODY_BYTES, parseCommand, planDuplicate } from '@/lib/resume/draft/commands'
 import type { DraftCommand } from '@/lib/resume/draft/commands'
+import { parsePatches } from '@/lib/resume/studio/parse'
+import { applyPatches } from '@/lib/resume/studio/patch'
 import { DEFAULT_SECTION_TYPES, createResume, setStatus, setTitle } from '@/lib/resume/model/resume'
 import {
   createResumeRows, deleteResume, listResumes, readResume, saveResume,
@@ -208,6 +210,27 @@ async function runCommand(caller: Caller, command: DraftCommand): Promise<NextRe
       const saved = await saveResume(db, updated, command.expectedRevision, userId)
       if (!saved.ok) return failed(saved)
       return NextResponse.json({ revision: saved.value.revision })
+    }
+
+    case 'patch': {
+      // Read first, then apply. The client's patches name fields and ids; the
+      // document they are applied to is one the server read for itself, so
+      // nothing the browser sent is ever stored verbatim.
+      const read = await readResume(db, command.id)
+      if (!read.ok) return failed(read)
+      const current = read.value.resume
+      if (!current) return NextResponse.json({ error: 'not-found' }, { status: 404 })
+
+      // Field names mean different things in different sections, so the parser
+      // needs to know each addressed section's type before it can check them.
+      const typeOf = new Map(current.sections.map((s) => [s.id, s.type]))
+      const parsed = parsePatches(command.patches, (sectionId) => typeOf.get(sectionId) ?? null)
+      if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
+
+      const updated = applyPatches(current, parsed.patches, { now: now() })
+      const saved = await saveResume(db, updated, command.expectedRevision, userId)
+      if (!saved.ok) return failed(saved)
+      return NextResponse.json({ revision: saved.value.revision, applied: parsed.patches.length })
     }
 
     case 'delete': {
