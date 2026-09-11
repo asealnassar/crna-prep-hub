@@ -17,7 +17,7 @@ import type { ResumeSectionType, ResumeV2 } from '@/lib/resume/model/types'
 import type { StrengthResult } from '@/lib/resume/score/types'
 import { PREVIEW_WATERMARK, needsPreviewWatermark } from '@/lib/resume/entitlement'
 import SaveIndicator from '../../components/dashboard/SaveIndicator'
-import DownloadPdfButton from '../export/DownloadPdfButton'
+import ExportMenu from '../export/ExportMenu'
 import StrengthPanel from '../strength/StrengthPanel'
 import EditorPane from './EditorPane'
 import MobileToggle from './MobileToggle'
@@ -203,7 +203,7 @@ export default function StudioClient({
             <div className="flex flex-wrap items-center gap-3">
               {/* Exports the STORED resume, so an edit still in flight would
                   not be in the file. Disabled until the document is settled. */}
-              <DownloadPdfButton
+              <ExportMenu
                 resumeId={initialResume.id}
                 tier={tier}
                 disabled={hasUnsavedWork(save)}

@@ -10,6 +10,7 @@ import { canFinalize } from '@/lib/resume/entitlement'
 import { groupByStatus, nextStatus } from '@/lib/resume/draft/summary'
 import type { ResumeSummary } from '@/lib/resume/draft/summary'
 import ResumeCard from './ResumeCard'
+import UploadTile from '../import/UploadTile'
 import SaveIndicator from './SaveIndicator'
 
 /**
@@ -301,6 +302,10 @@ export default function DashboardClient({ tier }: { tier: string }) {
               {error}
             </div>
           )}
+
+          <div className="mb-6">
+            <UploadTile onImported={() => void load()} />
+          </div>
 
           {loading ? (
             <p className="text-indigo-200">Loading…</p>

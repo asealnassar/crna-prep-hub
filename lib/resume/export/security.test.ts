@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
 const ROUTE = read('../../../app/api/resume-v2/export/pdf/route.ts')
 const PDF = read('./pdf.ts')
-const BUTTON = read('../../../app/resume-studio/components/export/DownloadPdfButton.tsx')
+const BUTTON = read('../../../app/resume-studio/components/export/ExportMenu.tsx')
 
 /** Source with comments removed: these check what the code does, not what it says. */
 const code = (text: string) =>
