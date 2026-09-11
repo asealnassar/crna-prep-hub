@@ -14,9 +14,11 @@ import {
 } from '@/lib/resume/studio/panes'
 import type { PaneState } from '@/lib/resume/studio/panes'
 import type { ResumeSectionType, ResumeV2 } from '@/lib/resume/model/types'
+import type { StrengthResult } from '@/lib/resume/score/types'
 import { PREVIEW_WATERMARK, needsPreviewWatermark } from '@/lib/resume/entitlement'
 import SaveIndicator from '../../components/dashboard/SaveIndicator'
 import DownloadPdfButton from '../export/DownloadPdfButton'
+import StrengthPanel from '../strength/StrengthPanel'
 import EditorPane from './EditorPane'
 import MobileToggle from './MobileToggle'
 import PreviewPane from './PreviewPane'
@@ -59,6 +61,15 @@ export default function StudioClient({
     () => new Set(initialResume.sections.slice(0, 1).map((s) => s.id))
   )
   const [pendingType, setPendingType] = useState<ResumeSectionType | ''>('')
+
+  // Resume Strength is on demand. `scoredAtRevision` is the document revision
+  // the visible result describes, so staleness is "you have edited since this
+  // was checked" rather than a comparison between two different counters.
+  // The database stores the headline score only, so a previously computed score
+  // is shown as a number with its staleness until the applicant asks again --
+  // the per-category reasoning is recomputed, not persisted.
+  const [strength, setStrength] = useState<StrengthResult | null>(null)
+  const [scoredAtRevision, setScoredAtRevision] = useState<number | null>(null)
   const [tick, setTick] = useState(0)
 
   const queue = useRef<StudioPatch[]>([])
@@ -203,7 +214,20 @@ export default function StudioClient({
 
           <div className={visible.edit && visible.preview ? 'grid grid-cols-2 gap-6 items-start' : ''}>
             {visible.edit && (
-              <div className="min-w-0">
+              <div className="min-w-0 space-y-6">
+                <StrengthPanel
+                  resumeId={initialResume.id}
+                  currentRevision={resume.revision}
+                  result={strength}
+                  scoredAtRevision={scoredAtRevision}
+                  storedScore={initialResume.strength}
+                  hasUnsavedWork={hasUnsavedWork(save)}
+                  onResult={(result, revision) => {
+                    setStrength(result)
+                    setScoredAtRevision(revision)
+                  }}
+                />
+
                 <EditorPane
                   resume={resume}
                   openSections={openSections}

@@ -245,6 +245,35 @@ interface CreateRpcResult {
   revision?: number
 }
 
+/**
+ * Stores a computed Resume Strength.
+ *
+ * A SCOPED UPDATE, not a save. Going through `save_resume_v2` would bump the
+ * revision, and the revision is exactly what decides whether a score is stale --
+ * so storing a score would immediately mark it out of date. Writing only the
+ * three strength columns leaves the document's revision where it was.
+ *
+ * One statement, so it is atomic without an RPC, and RLS scopes it to the
+ * owner. `strength_revision` records which revision the number describes.
+ */
+export async function saveStrength(
+  db: SupabaseClient,
+  resumeId: string,
+  strength: { readonly score: number; readonly computedAt: string; readonly computedAtRevision: number }
+): Promise<RepoResult<null>> {
+  const { error } = await db
+    .from(RESUMES)
+    .update({
+      strength_score: strength.score,
+      strength_computed_at: strength.computedAt,
+      strength_revision: strength.computedAtRevision,
+    })
+    .eq('id', resumeId)
+    .eq('schema_version', V2_SCHEMA_VERSION)
+  if (error) return failure('strength-save-failed', error)
+  return { ok: true, value: null }
+}
+
 /** Deletes a resume. The FK cascade removes its sections and any score row. */
 export async function deleteResume(
   db: SupabaseClient,
