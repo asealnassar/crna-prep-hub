@@ -24,7 +24,9 @@ import {
   addSection, findSection, moveSection, removeSection, reorderSections,
   replaceSection, setContact, setSectionVisibility, setTemplate, setTitle,
 } from '../model/resume.ts'
-import { createAuthoredText, editSource } from '../model/authoredText.ts'
+import {
+  acceptProposal, createAuthoredText, editSource, propose, restoreOriginal, restoreUserText,
+} from '../model/authoredText.ts'
 import type { AuthoredText } from '../model/authoredText.ts'
 import { createClinicalPosition } from '../model/sections.ts'
 import { parseResumeDate, parseResumeDateRange } from '../model/dates.ts'
@@ -94,6 +96,69 @@ export type StudioPatch =
     }
   | { readonly op: 'bullet-add'; readonly sectionId: string; readonly positionId: string }
   | { readonly op: 'bullet-remove'; readonly sectionId: string; readonly positionId: string; readonly index: number }
+  /**
+   * An AI proposal the applicant accepted.
+   *
+   * Goes through `propose` then `acceptProposal` rather than `editSource`, so
+   * the text is marked 'ai-accepted' and the applicant's own words stay
+   * recoverable. `editSource` would claim they wrote it -- which would be a
+   * lie, and would also feed it back as grounding on the next call.
+   *
+   * The route re-verifies the text against a freshly built fact sheet before
+   * applying this. A proposal is verified when it is offered and again when it
+   * lands, because the two are different requests.
+   */
+  | {
+      readonly op: 'ai-accept-summary'
+      readonly sectionId: string
+      readonly text: string
+      readonly model: string
+      readonly groundedIn: readonly string[]
+    }
+  | {
+      readonly op: 'ai-accept-bullet'
+      readonly sectionId: string
+      readonly positionId: string
+      readonly index: number
+      readonly text: string
+      readonly model: string
+      readonly groundedIn: readonly string[]
+    }
+  /**
+   * Undoing an AI acceptance. `scope: 'user'` restores the applicant's own last
+   * words -- the control that matters for text written in the Studio.
+   * `scope: 'original'` restores the first text ever supplied, which is only
+   * meaningful for imported prose; the UI hides it otherwise, because for a
+   * field created blank it would erase rather than restore.
+   */
+  | {
+      readonly op: 'ai-accept-field'
+      readonly sectionId: string
+      readonly entryId: string
+      readonly field: string
+      readonly text: string
+      readonly model: string
+      readonly groundedIn: readonly string[]
+    }
+  | {
+      readonly op: 'ai-restore-field'
+      readonly sectionId: string
+      readonly entryId: string
+      readonly field: string
+      readonly scope: 'original' | 'user'
+    }
+  | {
+      readonly op: 'ai-restore-summary'
+      readonly sectionId: string
+      readonly scope: 'original' | 'user'
+    }
+  | {
+      readonly op: 'ai-restore-bullet'
+      readonly sectionId: string
+      readonly positionId: string
+      readonly index: number
+      readonly scope: 'original' | 'user'
+    }
   | {
       readonly op: 'bullet-text'
       readonly sectionId: string
@@ -349,6 +414,88 @@ export function applyPatch(resume: ResumeV2, patch: StudioPatch, ctx: PatchConte
       if (!touched) return resume
       return replaceIfChanged(resume, { ...section, positions: next } as ResumeSectionV2, now)
     }
+
+    case 'ai-accept-summary': {
+      const section = findSection(resume, patch.sectionId)
+      if (!section || section.type !== 'summary') return resume
+      const accepted = acceptProposal(
+        propose(section.text, {
+          text: patch.text, model: patch.model,
+          groundedIn: [...patch.groundedIn], createdAt: now,
+        }),
+        now
+      )
+      return replaceIfChanged(resume, { ...section, text: accepted }, now)
+    }
+
+    case 'ai-accept-bullet':
+      return mapPosition(resume, patch.sectionId, patch.positionId, now, (p) => {
+        // Accepting into a bullet that is no longer there is an ordinary race.
+        if (patch.index < 0 || patch.index >= p.bullets.length) return p
+        const accepted = acceptProposal(
+          propose(p.bullets[patch.index], {
+            text: patch.text, model: patch.model,
+            groundedIn: [...patch.groundedIn], createdAt: now,
+          }),
+          now
+        )
+        return { ...p, bullets: p.bullets.map((b, i) => (i === patch.index ? accepted : b)) }
+      })
+
+    case 'ai-accept-field':
+    case 'ai-restore-field': {
+      const section = findSection(resume, patch.sectionId)
+      if (!section) return resume
+      // The descriptor is the allowlist, exactly as it is for a typed edit: a
+      // field it does not call 'authored' cannot be AI-written, whatever the
+      // request says. That is what keeps AI off names, dates and licence
+      // numbers without a second list of exceptions to maintain.
+      const descriptor = fieldFor(section.type, patch.field)
+      if (!descriptor || descriptor.kind !== 'authored') return resume
+
+      const list = entriesOf(section)
+      if (!list) return resume
+
+      let touched = false
+      const next = list.map((entry) => {
+        if (entry.id !== patch.entryId) return entry
+        touched = true
+        const current = (entry[patch.field] ?? createAuthoredText('')) as AuthoredText
+        const updated = patch.op === 'ai-accept-field'
+          ? acceptProposal(
+              propose(current, {
+                text: patch.text, model: patch.model,
+                groundedIn: [...patch.groundedIn], createdAt: now,
+              }),
+              now
+            )
+          : patch.scope === 'original'
+            ? restoreOriginal(current, now)
+            : restoreUserText(current, now)
+        return { ...entry, [patch.field]: updated }
+      })
+      if (!touched) return resume
+      return replaceIfChanged(resume, withEntries(section, next), now)
+    }
+
+    case 'ai-restore-summary': {
+      const section = findSection(resume, patch.sectionId)
+      if (!section || section.type !== 'summary') return resume
+      const restored = patch.scope === 'original'
+        ? restoreOriginal(section.text, now)
+        : restoreUserText(section.text, now)
+      return replaceIfChanged(resume, { ...section, text: restored }, now)
+    }
+
+    case 'ai-restore-bullet':
+      return mapPosition(resume, patch.sectionId, patch.positionId, now, (p) => {
+        if (patch.index < 0 || patch.index >= p.bullets.length) return p
+        const current = p.bullets[patch.index]
+        const restored = patch.scope === 'original'
+          ? restoreOriginal(current, now)
+          : restoreUserText(current, now)
+        return { ...p, bullets: p.bullets.map((b, i) => (i === patch.index ? restored : b)) }
+      })
 
     case 'bullet-add':
       return mapPosition(resume, patch.sectionId, patch.positionId, now, (p) => ({

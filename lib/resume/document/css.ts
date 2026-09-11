@@ -64,6 +64,7 @@ export const DOCUMENT_CSS = `
 /* US Letter with half-inch margins. The preview shows the same box the PDF
    will use, so "it looked different when I downloaded it" cannot happen. */
 .rd-page {
+  position: relative;
   width: 8.5in;
   min-height: 11in;
   padding: 0.5in;
@@ -175,6 +176,53 @@ export const DOCUMENT_CSS = `
 .rd-paragraph { margin: 0 0 4pt; }
 .rd-paragraph:last-child { margin-bottom: 0; }
 
+/* --- preview watermark ------------------------------------------------ */
+
+/*
+ * Shown to every tier that cannot export. The preview itself is complete and
+ * untouched -- not blurred, not truncated, not paywalled behind a fold -- so
+ * the applicant can see exactly what they are building. What they cannot do is
+ * take a clean copy of it away.
+ *
+ * IT MUST SURVIVE PRINT. Browser print is the obvious way round an export
+ * gate, so these rules live outside @media screen and are re-asserted inside
+ * @media print with print-color-adjust, which is what stops a browser
+ * helpfully dropping "background" colours from the printed page. A watermark
+ * that vanishes on Ctrl+P would be worse than none: it would look like a gate
+ * while being none.
+ */
+.rd-watermark {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  align-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.rd-watermark span {
+  display: block;
+  white-space: nowrap;
+  transform: rotate(-28deg);
+  font-family: var(--rd-font);
+  font-size: 15pt;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: rgba(17, 24, 39, 0.13);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+/* The document keeps its own stacking context beneath the mark. */
+.rd-root[data-watermarked="true"] .rd-columns,
+.rd-root[data-watermarked="true"] .rd-header {
+  position: relative;
+  z-index: 1;
+}
+
 /* --- print ------------------------------------------------------------ */
 
 @page { size: letter; margin: 0.5in; }
@@ -187,6 +235,20 @@ export const DOCUMENT_CSS = `
     margin: 0;
   }
   .rd-root { font-size: var(--rd-body); }
+
+  /* Re-asserted, and forced. Print → Save as PDF must not be a clean export. */
+  .rd-watermark {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .rd-watermark span {
+    color: rgba(17, 24, 39, 0.18) !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
 }
 
 /* Page-break control. An entry split across a page boundary and a heading

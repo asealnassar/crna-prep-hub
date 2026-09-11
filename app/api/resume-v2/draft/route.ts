@@ -5,8 +5,16 @@ import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAut
 import { BLOCKED_BODY, resumeV2Access } from '@/lib/resume/gate'
 import { MAX_BODY_BYTES, parseCommand, planDuplicate } from '@/lib/resume/draft/commands'
 import type { DraftCommand } from '@/lib/resume/draft/commands'
+import { decideCreateResume, decideFinalize } from '@/lib/resume/entitlement'
 import { parsePatches } from '@/lib/resume/studio/parse'
 import { applyPatches } from '@/lib/resume/studio/patch'
+import type { StudioPatch } from '@/lib/resume/studio/patch'
+import {
+  factSheetForEntryField, factSheetForPosition, factSheetForSummary,
+} from '@/lib/resume/ai/factSheet'
+import { narrativeTextOf } from '@/lib/resume/ai/request'
+import { verifyGrounding } from '@/lib/resume/ai/verify'
+import type { ResumeV2 } from '@/lib/resume/model/types'
 import { DEFAULT_SECTION_TYPES, createResume, setStatus, setTitle } from '@/lib/resume/model/resume'
 import {
   createResumeRows, deleteResume, listResumes, readResume, saveResume,
@@ -38,7 +46,7 @@ import type { RepoResult } from '@/lib/resume/repo/resumeRepo'
 /** Ids and timestamps are generated here so the pure planners stay deterministic. */
 const now = () => new Date().toISOString()
 
-type Caller = { userId: string; db: SupabaseClient }
+type Caller = { userId: string; db: SupabaseClient; tier: string }
 
 /**
  * Authenticates, applies the gate, and builds the caller-scoped client.
@@ -66,7 +74,7 @@ async function admit(): Promise<Caller | NextResponse> {
       global: { headers: { Authorization: `Bearer ${token}` } },
     }
   )
-  return { userId: auth.userId, db }
+  return { userId: auth.userId, db, tier: auth.tier }
 }
 
 /** Repository reasons that mean "the caller is out of date", not "we broke". */
@@ -81,6 +89,11 @@ function statusForReason(reason: string): number {
     case 'not-authenticated': return 401
     default: return 500
   }
+}
+
+/** A tier refusal: seen, named, and actionable — unlike the V2 dev gate's 404. */
+function refused(decision: { code: string; message: string }): NextResponse {
+  return NextResponse.json({ error: decision.code, message: decision.message }, { status: 403 })
 }
 
 function failed(result: Extract<RepoResult<unknown>, { ok: false }>): NextResponse {
@@ -145,10 +158,21 @@ export async function POST(request: NextRequest) {
 }
 
 async function runCommand(caller: Caller, command: DraftCommand): Promise<NextResponse> {
-  const { db, userId } = caller
+  const { db, userId, tier } = caller
 
   switch (command.kind) {
     case 'create': {
+      // V1's cap lived in a landing-page conditional, so navigating straight to
+      // /create walked past it. Here the count is taken server-side and the UI
+      // gate is a courtesy. Two simultaneous creates could both pass, costing
+      // at worst one extra resume; this is a product limit, not a security
+      // boundary, and the alternative is a count inside the create function
+      // with the limit hard-coded in SQL as a second source of truth.
+      const existing = await listResumes(db, userId)
+      if (!existing.ok) return failed(existing)
+      const room = decideCreateResume({ tier, currentCount: existing.value.length })
+      if (!room.allowed) return refused(room)
+
       const resume = createResume({
         id: randomUUID(),
         userId,
@@ -156,15 +180,19 @@ async function runCommand(caller: Caller, command: DraftCommand): Promise<NextRe
         sectionIds: DEFAULT_SECTION_TYPES.map(() => randomUUID()),
         now: now(),
       })
-      // NOTE: no resume-count limit is applied. Blueprint decision 1 (the Free
-      // limit) is undecided and its enforcement is Phase 8's job; this is the
-      // seam it will use.
       const created = await createResumeRows(db, resume)
       if (!created.ok) return failed(created)
       return NextResponse.json({ id: created.value.id, revision: created.value.revision }, { status: 201 })
     }
 
     case 'duplicate': {
+      // A copy is a resume. Counting it is the difference between a limit and
+      // a suggestion.
+      const existing = await listResumes(db, userId)
+      if (!existing.ok) return failed(existing)
+      const room = decideCreateResume({ tier, currentCount: existing.value.length })
+      if (!room.allowed) return refused(room)
+
       const read = await readResume(db, command.sourceId)
       if (!read.ok) return failed(read)
       const source = read.value.resume
@@ -193,6 +221,15 @@ async function runCommand(caller: Caller, command: DraftCommand): Promise<NextRe
 
     case 'rename':
     case 'set-status': {
+      // Marking a resume complete is the other half of the monetisation gate.
+      // Only the forward direction is gated: someone whose plan lapsed may
+      // still move a finished resume back to draft, which costs nothing and
+      // leaves them able to keep working.
+      if (command.kind === 'set-status' && command.status === 'complete') {
+        const entitled = decideFinalize(tier)
+        if (!entitled.allowed) return refused(entitled)
+      }
+
       const read = await readResume(db, command.id)
       if (!read.ok) return failed(read)
       const current = read.value.resume
@@ -227,6 +264,19 @@ async function runCommand(caller: Caller, command: DraftCommand): Promise<NextRe
       const parsed = parsePatches(command.patches, (sectionId) => typeOf.get(sectionId) ?? null)
       if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
 
+      // "Unverified proposals never persist." A proposal was verified when it
+      // was offered, but that was a different request against a resume that may
+      // since have changed -- and a client can call this route directly with
+      // any text it likes. So an accepted proposal is checked again, here,
+      // against a fact sheet built from the row just read.
+      const unverified = firstUnverifiedAccept(current, parsed.patches)
+      if (unverified) {
+        return NextResponse.json(
+          { error: 'ungrounded-proposal', message: unverified },
+          { status: 422 }
+        )
+      }
+
       const updated = applyPatches(current, parsed.patches, { now: now() })
       const saved = await saveResume(db, updated, command.expectedRevision, userId)
       if (!saved.ok) return failed(saved)
@@ -241,4 +291,51 @@ async function runCommand(caller: Caller, command: DraftCommand): Promise<NextRe
       return NextResponse.json({ ok: true })
     }
   }
+}
+
+/**
+ * Re-verifies every accepted AI proposal in a batch.
+ *
+ * Returns the first refusal's message, or null when everything traces to a
+ * supplied fact. The existing text is passed as already-present so rewriting a
+ * bullet the applicant already has does not read as a fresh invention.
+ */
+function firstUnverifiedAccept(resume: ResumeV2, patches: readonly StudioPatch[]): string | null {
+  for (const patch of patches) {
+    if (patch.op === 'ai-accept-summary') {
+      const section = resume.sections.find((s) => s.id === patch.sectionId)
+      if (!section || section.type !== 'summary') continue
+      const verdict = verifyGrounding(patch.text, factSheetForSummary(resume), {
+        existingText: section.text.accepted,
+      })
+      if (!verdict.ok) return verdict.violations[0].message
+      continue
+    }
+
+    if (patch.op === 'ai-accept-field') {
+      const section = resume.sections.find((s) => s.id === patch.sectionId)
+      if (!section) continue
+      const sheet = factSheetForEntryField(section, patch.entryId, patch.field)
+      // No sheet means the field is not one AI may write. Refusing is right:
+      // the only way to reach here is a client bypassing the editor.
+      if (!sheet) return 'That field cannot be written by the assistant.'
+      const verdict = verifyGrounding(patch.text, sheet, {
+        existingText: narrativeTextOf(section, patch.entryId, patch.field),
+      })
+      if (!verdict.ok) return verdict.violations[0].message
+      continue
+    }
+
+    if (patch.op === 'ai-accept-bullet') {
+      const section = resume.sections.find((s) => s.id === patch.sectionId)
+      if (!section || (section.type !== 'critical_care' && section.type !== 'other_clinical')) continue
+      const position = section.positions.find((p) => p.id === patch.positionId)
+      if (!position) continue
+      const verdict = verifyGrounding(patch.text, factSheetForPosition(position, section.type), {
+        existingText: position.bullets[patch.index]?.accepted,
+      })
+      if (!verdict.ok) return verdict.violations[0].message
+    }
+  }
+  return null
 }

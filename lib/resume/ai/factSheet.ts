@@ -30,10 +30,11 @@ import {
 } from '../model/facts.ts'
 import type { Fact, FactSheet } from '../model/facts.ts'
 import { isAiAuthored, isBlankAuthoredText } from '../model/authoredText.ts'
+import { descriptorFor } from '../studio/fields.ts'
 import type { AuthoredText } from '../model/authoredText.ts'
-import { formatDateRange } from '../document/format.ts'
+import { formatDateRange, formatResumeDate } from '../document/format.ts'
 import type {
-  ClinicalPosition, ResumeSectionV2, ResumeV2, ShadowingEntry,
+  ClinicalPosition, ResumeSectionType, ResumeSectionV2, ResumeV2,
 } from '../model/types.ts'
 
 /**
@@ -103,26 +104,6 @@ export function factSheetForPosition(
   return factSheet(`${sectionType}/${position.id}/bullets`, [positionFacts(position, sectionType)])
 }
 
-/** Facts for one shadowing experience. */
-export function shadowingFacts(entry: ShadowingEntry, sectionType = 'shadowing'): Fact[] {
-  const base = `${sectionType}/${entry.id}`
-  return [
-    ...factFromValue(entry.providerName, 'employer', `${base}/providerName`),
-    ...factFromValue(entry.credential, 'credential', `${base}/credential`),
-    ...factFromValue(entry.setting, 'unit_type', `${base}/setting`),
-    ...factFromValue(entry.facility, 'employer', `${base}/facility`),
-    // Hours are printed as supplied. "40+" is a real answer and is not a number
-    // to be tidied into 40.
-    ...factFromValue(entry.hours, 'applicant_metric', `${base}/hours`),
-    ...factFromValue(formatDateRange(entry.dates), 'date_range', `${base}/dates`),
-    ...factsFromAuthored(entry.reflection, 'applicant_note', `${base}/reflection`),
-  ]
-}
-
-export function factSheetForShadowing(entry: ShadowingEntry): FactSheet {
-  return factSheet(`shadowing/${entry.id}/reflection`, [shadowingFacts(entry)])
-}
-
 /**
  * The sheet for tightening the professional summary.
  *
@@ -173,17 +154,113 @@ export function factSheetForSummary(resume: ResumeV2): FactSheet {
   return factSheet('summary/text', [facts])
 }
 
-/** The sheet for any section the generic builders cover. */
-export function factSheetForSection(section: ResumeSectionV2): FactSheet {
-  if (section.type === 'critical_care' || section.type === 'other_clinical') {
-    return factSheet(`${section.type}/bullets`, [
-      section.positions.flatMap((p) => positionFacts(p, section.type)),
-    ])
+/**
+ * What a field of one entry is called in fact terms.
+ *
+ * The descriptor table already says which of an entry's fields are FACTUAL and
+ * which are NARRATIVE -- `kind: 'authored'` is the whole distinction. So the
+ * grounding for "improve this leadership detail" is simply every non-authored
+ * field beside it: the role, the organisation, the dates. Deriving it from the
+ * descriptor rather than from a per-section list is what makes a new section
+ * type grounded the moment it is declared, and is why there is one entry
+ * grounding path rather than one per section.
+ */
+const FACT_KIND_BY_FIELD: Record<string, Fact['kind']> = {
+  organization: 'organization',
+  institution: 'organization',
+  issuer: 'organization',
+  venue: 'organization',
+  facility: 'employer',
+  providerName: 'employer',
+  role: 'role',
+  setting: 'unit_type',
+  credential: 'credential',
+  degree: 'credential',
+  field: 'credential',
+  licenseType: 'credential',
+  name: 'credential',
+  state: 'location',
+  location: 'location',
+  hours: 'applicant_metric',
+}
+
+function factKindFor(fieldName: string, kind: string): Fact['kind'] {
+  if (kind === 'date' || kind === 'daterange') return 'date_range'
+  return FACT_KIND_BY_FIELD[fieldName] ?? 'applicant_note'
+}
+
+/**
+ * Facts for one entry of a list-shaped section.
+ *
+ * Narrative fields are excluded -- prose is not grounding, whoever wrote it.
+ * The one being rewritten reaches the prompt as the text to rewrite and the
+ * verifier as already-present, so listing it here as well would let a claim
+ * support itself.
+ */
+export function entryFacts(
+  sectionType: ResumeSectionType,
+  entry: Record<string, unknown>,
+  base: string
+): Fact[] {
+  const descriptor = descriptorFor(sectionType).entry
+  if (!descriptor) return []
+
+  const facts: Fact[] = []
+  for (const field of descriptor.fields) {
+    if (field.kind === 'authored') continue
+    const value = entry[field.name]
+    const path = `${base}/${field.name}`
+
+    if (field.kind === 'date') {
+      facts.push(...factFromValue(formatResumeDate(value as never), factKindFor(field.name, field.kind), path))
+      continue
+    }
+    if (field.kind === 'daterange') {
+      facts.push(...factFromValue(formatDateRange(value as never), factKindFor(field.name, field.kind), path))
+      continue
+    }
+    if (field.kind === 'gpa') {
+      // A GPA is not narrative grounding, and the applicant may have chosen not
+      // to show it at all.
+      continue
+    }
+    if (field.kind === 'boolean') {
+      // A true flag is a fact. A false one is the absence of a fact, not a fact
+      // that something did not happen.
+      if (value === true) facts.push(...factFromValue(field.label, 'responsibility', path))
+      continue
+    }
+    facts.push(...factFromValue(typeof value === 'string' ? value : '', factKindFor(field.name, field.kind), path))
   }
-  if (section.type === 'shadowing') {
-    return factSheet('shadowing/reflection', [section.experiences.flatMap((e) => shadowingFacts(e))])
-  }
-  return factSheet(`${section.type}`, [[]])
+  return facts
+}
+
+/**
+ * The sheet for a narrative field on one entry.
+ *
+ * Returns null when the section has no entries, the entry is gone, or the named
+ * field is not narrative -- so a request aimed at a licence number or an
+ * institution gets no grounding, and therefore no proposal. That single check
+ * is what keeps AI off factual identity fields everywhere at once.
+ */
+export function factSheetForEntryField(
+  section: ResumeSectionV2,
+  entryId: string,
+  fieldName: string
+): FactSheet | null {
+  const entryDescriptor = descriptorFor(section.type).entry
+  if (!entryDescriptor) return null
+
+  const field = entryDescriptor.fields.find((f) => f.name === fieldName)
+  if (!field || field.kind !== 'authored') return null
+
+  const list = (section as unknown as Record<string, Record<string, unknown>[]>)[entryDescriptor.listKey]
+  if (!Array.isArray(list)) return null
+  const entry = list.find((e) => e.id === entryId)
+  if (!entry) return null
+
+  const base = `${section.type}/${entryId}`
+  return factSheet(`${base}/${fieldName}`, [entryFacts(section.type, entry, base)])
 }
 
 /** Every fact value in the sheet, lower-cased, for the verifier's tracing. */

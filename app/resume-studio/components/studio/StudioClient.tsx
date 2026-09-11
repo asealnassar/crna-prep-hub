@@ -14,6 +14,7 @@ import {
 } from '@/lib/resume/studio/panes'
 import type { PaneState } from '@/lib/resume/studio/panes'
 import type { ResumeSectionType, ResumeV2 } from '@/lib/resume/model/types'
+import { PREVIEW_WATERMARK, needsPreviewWatermark } from '@/lib/resume/entitlement'
 import SaveIndicator from '../../components/dashboard/SaveIndicator'
 import DownloadPdfButton from '../export/DownloadPdfButton'
 import EditorPane from './EditorPane'
@@ -41,7 +42,14 @@ import PreviewPane from './PreviewPane'
 
 const ENDPOINT = '/api/resume-v2/draft'
 
-export default function StudioClient({ initialResume }: { initialResume: ResumeV2 }) {
+export default function StudioClient({
+  initialResume,
+  tier,
+}: {
+  initialResume: ResumeV2
+  /** Presentation only. Every gate it drives is enforced again server-side. */
+  tier: string
+}) {
   const { sidebarCollapsed } = useSidebarCollapsed()
 
   const [resume, setResume] = useState<ResumeV2>(initialResume)
@@ -184,7 +192,11 @@ export default function StudioClient({ initialResume }: { initialResume: ResumeV
             <div className="flex flex-wrap items-center gap-3">
               {/* Exports the STORED resume, so an edit still in flight would
                   not be in the file. Disabled until the document is settled. */}
-              <DownloadPdfButton resumeId={initialResume.id} disabled={hasUnsavedWork(save)} />
+              <DownloadPdfButton
+                resumeId={initialResume.id}
+                tier={tier}
+                disabled={hasUnsavedWork(save)}
+              />
               {visible.toggleable && <MobileToggle state={panes} onChange={setPanes} />}
             </div>
           </div>
@@ -205,7 +217,13 @@ export default function StudioClient({ initialResume }: { initialResume: ResumeV
             )}
             {visible.preview && (
               <div className="min-w-0 lg:sticky lg:top-6">
-                <PreviewPane resume={resume} />
+                {/* The preview is complete for every tier -- not blurred, not
+                    truncated. What a tier that cannot export gets is a mark
+                    across it, which survives browser print. */}
+                <PreviewPane
+                  resume={resume}
+                  watermark={needsPreviewWatermark(tier) ? PREVIEW_WATERMARK : null}
+                />
               </div>
             )}
           </div>

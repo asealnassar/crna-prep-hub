@@ -16,6 +16,7 @@ import SectionEditor from '../sections/SectionEditor'
  */
 export default function SectionCard({
   section,
+  resumeId,
   index,
   count,
   open,
@@ -24,6 +25,7 @@ export default function SectionCard({
   onToggleOpen,
 }: {
   section: ResumeSectionV2
+  resumeId: string
   index: number
   count: number
   open: boolean
@@ -115,7 +117,7 @@ export default function SectionCard({
             )}
           </div>
 
-          <SectionEditor section={section} newId={newId} emit={emit} />
+          <SectionEditor section={section} resumeId={resumeId} newId={newId} emit={emit} />
         </div>
       )}
     </div>

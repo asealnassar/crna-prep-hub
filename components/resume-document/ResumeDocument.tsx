@@ -32,6 +32,7 @@ export default function ResumeDocument({
   template,
   includeStyles = true,
   fontCss,
+  watermark,
 }: {
   /** The resume to render. Ignored when `plan` is supplied. */
   resume?: ResumeV2
@@ -47,6 +48,14 @@ export default function ResumeDocument({
    * against. Same files either way -- only the delivery differs.
    */
   fontCss?: string
+  /**
+   * Marks the preview for a tier that may not export.
+   *
+   * The document underneath is complete and unmodified -- the mark is an
+   * overlay, not a redaction. Absent for Ultimate, and absent on the export
+   * path, which only Ultimate can reach. See lib/resume/entitlement.ts.
+   */
+  watermark?: string | null
 }) {
   const definition = resolveTemplate(template, resume)
   const document = plan ?? (resume ? planDocument(resume) : EMPTY_PLAN)
@@ -61,12 +70,22 @@ export default function ResumeDocument({
       data-entry-layout={definition.entryLayout}
       data-density={definition.density}
       data-template={definition.id}
+      data-watermarked={watermark ? 'true' : 'false'}
       style={cssVariablesFor(definition) as React.CSSProperties}
     >
       {includeStyles && (
         <style dangerouslySetInnerHTML={{ __html: `${fontCss ?? fontFaceCss()}\n${DOCUMENT_CSS}` }} />
       )}
       <article className="rd-page">
+        {watermark && (
+          <div className="rd-watermark" aria-hidden="true" data-testid="rd-watermark">
+            {/* Repeated rather than tiled with a background image: a background
+                is the first thing a browser drops when printing. */}
+            {[0, 1, 2, 3, 4, 5].map((row) => (
+              <span key={row}>{watermark}</span>
+            ))}
+          </div>
+        )}
         <DocumentHeader plan={document} />
         {/* Main column FIRST in the DOM. The stylesheet places the sidebar to
             its left with explicit grid coordinates, so what an ATS extracts

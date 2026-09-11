@@ -6,6 +6,7 @@ import {
   DEFAULT_AUTOSAVE, hasUnsavedWork, initialState, nextAction, reduce,
 } from '@/lib/resume/draft/autosave'
 import type { AutosaveState } from '@/lib/resume/draft/autosave'
+import { canFinalize } from '@/lib/resume/entitlement'
 import { groupByStatus, nextStatus } from '@/lib/resume/draft/summary'
 import type { ResumeSummary } from '@/lib/resume/draft/summary'
 import ResumeCard from './ResumeCard'
@@ -27,7 +28,7 @@ import SaveIndicator from './SaveIndicator'
 
 const ENDPOINT = '/api/resume-v2/draft'
 
-export default function DashboardClient() {
+export default function DashboardClient({ tier }: { tier: string }) {
   const { sidebarCollapsed } = useSidebarCollapsed()
 
   const [resumes, setResumes] = useState<ResumeSummary[]>([])
@@ -239,6 +240,7 @@ export default function DashboardClient() {
       isEditing={activeId === resume.id}
       draftTitle={activeId === resume.id ? draftTitle : resume.title}
       busy={busyId === resume.id}
+      canFinalize={canFinalize(tier)}
       indicator={
         activeId === resume.id ? (
           <SaveIndicator

@@ -75,8 +75,20 @@ test('the database client carries the caller’s own JWT', () => {
 })
 
 test('a resume the caller may not read is not found, not forbidden', () => {
-  assert.ok(ROUTE_CODE.includes("'not-found'"), 'no not-found path')
-  assert.equal(/status:\s*403/.test(ROUTE_CODE), false, 'a 403 would confirm the resume exists')
+  // Ownership and entitlement are different answers on purpose. A resume that
+  // is not yours does not exist (404); a resume you may read but not export
+  // does exist, and saying so is the point (403). Conflating them would either
+  // leak which ids are real or hide the upgrade path behind a dead end.
+  assert.ok(ROUTE_BODY.includes("'not-found'"), 'no not-found path')
+  const notFound = ROUTE_BODY.indexOf("'not-found'")
+  const around = ROUTE_BODY.slice(notFound, notFound + 120)
+  assert.match(around, /status:\s*404/, 'an unreadable resume is not a 404')
+
+  // Exactly one 403, and it is the tier gate.
+  const forbidden = [...ROUTE_BODY.matchAll(/status:\s*403/g)]
+  assert.equal(forbidden.length, 1, 'more than one thing answers 403')
+  const gateAt = ROUTE_BODY.indexOf('decideExport')
+  assert.ok(gateAt >= 0 && gateAt < forbidden[0].index!, 'the 403 is not the entitlement refusal')
 })
 
 // ------------------------------- no arbitrary HTML or URLs to Chromium

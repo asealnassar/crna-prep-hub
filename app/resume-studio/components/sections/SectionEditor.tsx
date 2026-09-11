@@ -2,8 +2,10 @@
 
 import { descriptorFor } from '@/lib/resume/studio/fields'
 import type { ResumeSectionV2 } from '@/lib/resume/model/types'
+import type { AuthoredText } from '@/lib/resume/model/authoredText'
 import type { StudioPatch, FieldValue } from '@/lib/resume/studio/patch'
 import FieldInput from './FieldInput'
+import AiAssist from '../ai/AiAssist'
 
 /**
  * The editor for one section, chosen by the descriptor's shape.
@@ -20,10 +22,12 @@ const DANGER = 'px-2.5 py-1 text-xs font-semibold rounded-lg text-red-200 hover:
 
 export default function SectionEditor({
   section,
+  resumeId,
   newId,
   emit,
 }: {
   section: ResumeSectionV2
+  resumeId: string
   newId: () => string
   emit: (patch: StudioPatch) => void
 }) {
@@ -42,12 +46,23 @@ export default function SectionEditor({
           placeholder="Three or four sentences on who you are as a critical-care nurse."
           onChange={(e) => emit({ op: 'summary', sectionId: section.id, value: e.target.value })}
         />
+        <AiAssist
+          target={{ resumeId, sectionId: section.id }}
+          operation="tighten-summary"
+          label="Tighten with AI"
+          text={section.text}
+          emit={emit}
+          acceptPatch={(proposal, model, groundedIn) => ({
+            op: 'ai-accept-summary', sectionId: section.id, text: proposal, model, groundedIn,
+          })}
+          restorePatch={(scope) => ({ op: 'ai-restore-summary', sectionId: section.id, scope })}
+        />
       </div>
     )
   }
 
   if (section.type === 'critical_care' || section.type === 'other_clinical') {
-    return <PositionsEditor section={section} newId={newId} emit={emit} />
+    return <PositionsEditor section={section} resumeId={resumeId} newId={newId} emit={emit} />
   }
 
   const entry = descriptor.entry
@@ -75,6 +90,42 @@ export default function SectionEditor({
                     })
                   }
                 />
+
+                {/* The descriptor decides eligibility. A field it calls
+                    'authored' is narrative and may be written with help; a
+                    name, a date, an institution or a licence number is factual
+                    and never gets the affordance. That is one rule, applied
+                    everywhere, rather than a list of sections to remember. */}
+                {field.kind === 'authored' && (
+                  <AiAssist
+                    target={{
+                      resumeId,
+                      sectionId: section.id,
+                      targetId: String(item.id),
+                      field: field.name,
+                    }}
+                    operation="improve-text"
+                    label={`Improve ${field.label.toLowerCase()} with AI`}
+                    text={item[field.name] as AuthoredText | null}
+                    emit={emit}
+                    acceptPatch={(proposal, model, groundedIn) => ({
+                      op: 'ai-accept-field',
+                      sectionId: section.id,
+                      entryId: String(item.id),
+                      field: field.name,
+                      text: proposal,
+                      model,
+                      groundedIn,
+                    })}
+                    restorePatch={(scope) => ({
+                      op: 'ai-restore-field',
+                      sectionId: section.id,
+                      entryId: String(item.id),
+                      field: field.name,
+                      scope,
+                    })}
+                  />
+                )}
               </div>
             ))}
           </div>
@@ -122,10 +173,12 @@ export default function SectionEditor({
  */
 function PositionsEditor({
   section,
+  resumeId,
   newId,
   emit,
 }: {
   section: Extract<ResumeSectionV2, { type: 'critical_care' | 'other_clinical' }>
+  resumeId: string
   newId: () => string
   emit: (patch: StudioPatch) => void
 }) {
@@ -184,15 +237,47 @@ function PositionsEditor({
                     emit({ op: 'bullet-text', sectionId: section.id, positionId: position.id, index: i, value: e.target.value })
                   }
                 />
-                <button
-                  type="button" className={DANGER}
-                  onClick={() => emit({ op: 'bullet-remove', sectionId: section.id, positionId: position.id, index: i })}
-                >
-                  Remove
-                </button>
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button" className={DANGER}
+                    onClick={() => emit({ op: 'bullet-remove', sectionId: section.id, positionId: position.id, index: i })}
+                  >
+                    Remove
+                  </button>
+                  <AiAssist
+                    target={{ resumeId, sectionId: section.id, targetId: position.id, bulletIndex: i }}
+                    operation="improve-bullet"
+                    label="Improve"
+                    text={bullet}
+                    emit={emit}
+                    acceptPatch={(proposal, model, groundedIn) => ({
+                      op: 'ai-accept-bullet', sectionId: section.id, positionId: position.id,
+                      index: i, text: proposal, model, groundedIn,
+                    })}
+                    restorePatch={(scope) => ({
+                      op: 'ai-restore-bullet', sectionId: section.id, positionId: position.id,
+                      index: i, scope,
+                    })}
+                  />
+                </div>
               </li>
             ))}
           </ul>
+          {/* Accepting adds the bullet and fills it in one save. */}
+          <AiAssist
+            target={{ resumeId, sectionId: section.id, targetId: position.id }}
+            operation="generate-bullets"
+            label="Write bullets from these facts"
+            emit={emit}
+            acceptPatch={(proposal, model, groundedIn) => [
+              { op: 'bullet-add', sectionId: section.id, positionId: position.id },
+              {
+                op: 'ai-accept-bullet', sectionId: section.id, positionId: position.id,
+                index: position.bullets.length, text: proposal, model, groundedIn,
+              },
+            ]}
+          />
+
           <div className="flex gap-2 mt-3">
             <button
               type="button" className={BTN}

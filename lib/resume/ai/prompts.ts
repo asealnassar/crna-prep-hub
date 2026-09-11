@@ -53,17 +53,28 @@ export const PROHIBITED_CATEGORIES: readonly string[] = [
 export type AiOperation =
   | 'generate-bullets'
   | 'improve-bullet'
+  /** Any narrative field that is not a bullet: a reflection, a detail, a citation. */
+  | 'improve-text'
   | 'shorten'
   | 'achievement-focus'
   | 'tighten-summary'
   | 'strengthen-leadership'
   | 'strengthen-complexity'
 
+/** Every operation, exported so the request parser cannot keep a second list. */
+export const OPERATIONS: readonly AiOperation[] = [
+  'generate-bullets', 'improve-bullet', 'improve-text', 'shorten',
+  'achievement-focus', 'tighten-summary', 'strengthen-leadership',
+  'strengthen-complexity',
+]
+
 const OPERATION_BRIEF: Record<AiOperation, string> = {
   'generate-bullets':
     'Write resume bullets for this position using only the facts below.',
   'improve-bullet':
     'Rewrite the single bullet below so it reads more clearly and professionally.',
+  'improve-text':
+    'Rewrite the text below so it reads more clearly and professionally. Keep it to the same kind of thing it already is.',
   'shorten':
     'Make the text below shorter without losing any fact it already states.',
   'achievement-focus':

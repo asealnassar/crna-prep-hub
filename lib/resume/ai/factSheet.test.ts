@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  factSheetForPosition, factSheetForShadowing, factSheetForSummary, positionFacts,
+  entryFacts, factSheetForEntryField, factSheetForPosition, factSheetForSummary,
+  positionFacts,
 } from './factSheet.ts'
 import { createResume, emptyContact } from '../model/resume.ts'
 import { createAuthoredText, acceptProposal, propose } from '../model/authoredText.ts'
@@ -34,6 +35,12 @@ function position() {
 }
 
 const valuesOf = (facts: readonly { value: string }[]) => facts.map((f) => f.value)
+
+const shadowingEntry = () => ({
+  id: 'sh1', providerName: 'A. Nurse', credential: 'CRNA', setting: 'OR', facility: 'UH',
+  hours: '40+', dates: { start: { kind: 'absent' as const }, end: { kind: 'absent' as const }, isCurrent: false },
+  reflection: createAuthoredText(''),
+})
 
 // ------------------------------------------------- only supplied facts
 
@@ -139,20 +146,35 @@ test('a position’s sheet contains only that position', () => {
 
 test('the sheet names the field it is for', () => {
   assert.equal(factSheetForPosition(position(), 'critical_care').subject, 'critical_care/p1/bullets')
-  assert.match(factSheetForShadowing({
-    id: 'sh1', providerName: 'A. Nurse', credential: 'CRNA', setting: 'OR', facility: 'UH',
-    hours: '40+', dates: { start: { kind: 'absent' }, end: { kind: 'absent' }, isCurrent: false },
-    reflection: createAuthoredText(''),
-  }).subject, /^shadowing\/sh1\//)
+  const shadowing = {
+    ...createSection('shadowing', 'sh'),
+    experiences: [shadowingEntry()],
+  } as ResumeSectionV2
+  assert.equal(
+    factSheetForEntryField(shadowing, 'sh1', 'reflection')?.subject,
+    'shadowing/sh1/reflection'
+  )
 })
 
 test('hours are carried as supplied, not tidied into a number', () => {
-  const sheet = factSheetForShadowing({
-    id: 'sh1', providerName: 'A. Nurse', credential: 'CRNA', setting: 'OR', facility: 'UH',
-    hours: '40+', dates: { start: { kind: 'absent' }, end: { kind: 'absent' }, isCurrent: false },
-    reflection: createAuthoredText(''),
-  })
-  assert.ok(valuesOf(sheet.facts).includes('40+'), '"40+" was rewritten')
+  const shadowing = {
+    ...createSection('shadowing', 'sh'),
+    experiences: [shadowingEntry()],
+  } as ResumeSectionV2
+  const sheet = factSheetForEntryField(shadowing, 'sh1', 'reflection')
+  assert.ok(sheet)
+  assert.ok(valuesOf(sheet!.facts).includes('40+'), '"40+" was rewritten')
+})
+
+test('the narrative field being written is not its own grounding', () => {
+  // It reaches the prompt as the text being rewritten and the verifier as
+  // already-present. Listing it as a fact too would let a claim support itself.
+  const shadowing = {
+    ...createSection('shadowing', 'sh'),
+    experiences: [{ ...shadowingEntry(), reflection: createAuthoredText('I learned a great deal.') }],
+  } as ResumeSectionV2
+  const sheet = factSheetForEntryField(shadowing, 'sh1', 'reflection')
+  assert.equal(valuesOf(sheet!.facts).includes('I learned a great deal.'), false)
 })
 
 // ------------------------------------------------------- the summary

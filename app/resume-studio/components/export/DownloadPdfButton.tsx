@@ -1,7 +1,9 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
+import Link from 'next/link'
 import { filenameFromDisposition } from '@/lib/resume/export/filename'
+import { canExportPdf } from '@/lib/resume/entitlement'
 
 /**
  * Download PDF.
@@ -25,9 +27,12 @@ type State =
 
 export default function DownloadPdfButton({
   resumeId,
+  tier,
   disabled,
 }: {
   resumeId: string
+  /** Presentation only. The route refuses a non-Ultimate caller regardless. */
+  tier: string
   disabled?: boolean
 }) {
   const [state, setState] = useState<State>({ kind: 'idle' })
@@ -76,6 +81,25 @@ export default function DownloadPdfButton({
   }, [resumeId])
 
   const working = state.kind === 'working'
+
+  // Below Ultimate the button is replaced rather than disabled: a greyed-out
+  // control with no explanation reads as a bug, and the applicant needs to know
+  // this is a plan boundary, not a broken download. The server refuses anyway.
+  if (!canExportPdf(tier)) {
+    return (
+      <div className="flex flex-col items-start sm:items-end gap-1">
+        <Link
+          href="/pricing"
+          className="px-4 py-2 text-sm font-semibold rounded-xl border border-amber-300/50 bg-amber-400/15 text-amber-100 hover:bg-amber-400/25 transition"
+        >
+          Upgrade to download
+        </Link>
+        <p className="text-xs text-indigo-300">
+          Building and previewing are included. Ultimate adds the finished file.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col items-start sm:items-end gap-1">

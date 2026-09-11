@@ -40,5 +40,7 @@ export default async function StudioPage({ params }: { params: Promise<{ id: str
   const read = await readResume(db, id)
   if (!read.ok || !read.value.resume) notFound()
 
-  return <StudioClient initialResume={read.value.resume} />
+  // The tier comes from the verified session and is passed down for
+  // presentation only. Every gate it drives is enforced again server-side.
+  return <StudioClient initialResume={read.value.resume} tier={auth.tier} />
 }

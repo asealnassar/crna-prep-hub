@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import Link from 'next/link'
 import {
   lastEditedLabel, statusLabel, statusToggleLabel, templateLabel,
 } from '@/lib/resume/draft/summary'
@@ -18,6 +19,7 @@ export default function ResumeCard({
   isEditing,
   draftTitle,
   busy,
+  canFinalize,
   indicator,
   onStartRename,
   onTitleChange,
@@ -30,6 +32,8 @@ export default function ResumeCard({
   isEditing: boolean
   draftTitle: string
   busy: boolean
+  /** Presentation only; the draft route refuses a non-Ultimate finalise. */
+  canFinalize: boolean
   indicator: React.ReactNode
   onStartRename: () => void
   onTitleChange: (value: string) => void
@@ -96,14 +100,25 @@ export default function ResumeCard({
       {indicator}
 
       <div className="flex flex-wrap gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onToggleStatus}
-          disabled={busy}
-          className="px-3 py-1.5 text-sm font-medium rounded-lg border border-white/30 text-white hover:bg-white/10 transition disabled:opacity-50"
-        >
-          {statusToggleLabel(resume.status)}
-        </button>
+        {/* Marking complete is Ultimate's half of the gate. Reverting to draft
+            is not gated, so a lapsed plan never strands a finished resume. */}
+        {canFinalize || complete ? (
+          <button
+            type="button"
+            onClick={onToggleStatus}
+            disabled={busy}
+            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-white/30 text-white hover:bg-white/10 transition disabled:opacity-50"
+          >
+            {statusToggleLabel(resume.status)}
+          </button>
+        ) : (
+          <Link
+            href="/pricing"
+            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-amber-300/50 bg-amber-400/15 text-amber-100 hover:bg-amber-400/25 transition"
+          >
+            Upgrade to finalize
+          </Link>
+        )}
         <button
           type="button"
           onClick={onDuplicate}

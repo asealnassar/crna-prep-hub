@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
 import { BLOCKED_BODY, resumeV2Access } from '@/lib/resume/gate'
+import { decideExport } from '@/lib/resume/entitlement'
 import { readResume } from '@/lib/resume/repo/resumeRepo'
 import { ChromiumUnavailableError, exportResumePdf, pdfFilename } from '@/lib/resume/export/pdf'
 
@@ -25,6 +26,15 @@ export async function POST(request: NextRequest) {
 
   const access = resumeV2Access({ isAdmin: isAdminEmail(auth.email) })
   if (!access.allowed) return NextResponse.json(BLOCKED_BODY, { status: access.status })
+
+  // The monetisation gate. Free and Premium build and preview freely; taking
+  // the finished file away is Ultimate's. A 403 and not a 404 on purpose --
+  // unlike the V2 dev gate, this is a refusal the applicant is meant to see
+  // and act on. The tier comes from the verified session, never the request.
+  const entitled = decideExport(auth.tier)
+  if (!entitled.allowed) {
+    return NextResponse.json({ error: entitled.code, message: entitled.message }, { status: 403 })
+  }
 
   const token = await readAccessToken()
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

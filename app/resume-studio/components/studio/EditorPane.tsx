@@ -89,6 +89,7 @@ export default function EditorPane({
           <SectionCard
             key={section.id}
             section={section}
+            resumeId={resume.id}
             index={index}
             count={resume.sections.length}
             open={openSections.has(section.id)}

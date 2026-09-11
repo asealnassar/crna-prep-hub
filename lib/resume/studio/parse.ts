@@ -55,6 +55,22 @@ function index(value: unknown): number | null {
     : null
 }
 
+/**
+ * The fact ids a proposal claims it drew on. Audit metadata, not content: it is
+ * stored so "what was the model allowed to know?" has an answer later, and it
+ * is bounded and shape-checked like everything else that crosses this line.
+ */
+function factIds(value: unknown): string[] | null {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value) || value.length > 200) return null
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || item.length > 300) return null
+    out.push(item)
+  }
+  return out
+}
+
 function sectionType(value: unknown): ResumeSectionType | null {
   return SECTION_TYPES.find((t) => t === value) ?? null
 }
@@ -252,6 +268,67 @@ export function parsePatch(
       const i = index(p.index)
       return sectionId && positionId && i !== null
         ? { op: 'bullet-remove', sectionId, positionId, index: i }
+        : null
+    }
+    case 'ai-accept-summary': {
+      const sectionId = id(p.sectionId)
+      const text = str(p.text)
+      const model = str(p.model)
+      const groundedIn = factIds(p.groundedIn)
+      return sectionId && text !== null && model !== null && groundedIn
+        ? { op: 'ai-accept-summary', sectionId, text, model, groundedIn }
+        : null
+    }
+    case 'ai-accept-bullet': {
+      const sectionId = id(p.sectionId)
+      const positionId = id(p.positionId)
+      const i = index(p.index)
+      const text = str(p.text)
+      const model = str(p.model)
+      const groundedIn = factIds(p.groundedIn)
+      return sectionId && positionId && i !== null && text !== null && model !== null && groundedIn
+        ? { op: 'ai-accept-bullet', sectionId, positionId, index: i, text, model, groundedIn }
+        : null
+    }
+    case 'ai-accept-field': {
+      const sectionId = id(p.sectionId)
+      const entryId = id(p.entryId)
+      const text = str(p.text)
+      const model = str(p.model)
+      const groundedIn = factIds(p.groundedIn)
+      if (!sectionId || !entryId || typeof p.field !== 'string' || text === null ||
+          model === null || !groundedIn) return null
+      // Checked against the addressed section's own descriptor, so a narrative
+      // op aimed at a factual field never reaches the domain model.
+      const type = sectionTypeOf(sectionId)
+      if (!type) return null
+      const descriptor = fieldFor(type, p.field)
+      if (!descriptor || descriptor.kind !== 'authored') return null
+      return { op: 'ai-accept-field', sectionId, entryId, field: p.field, text, model, groundedIn }
+    }
+    case 'ai-restore-field': {
+      const sectionId = id(p.sectionId)
+      const entryId = id(p.entryId)
+      const scope = p.scope === 'original' || p.scope === 'user' ? p.scope : null
+      if (!sectionId || !entryId || typeof p.field !== 'string' || !scope) return null
+      const type = sectionTypeOf(sectionId)
+      if (!type) return null
+      const descriptor = fieldFor(type, p.field)
+      if (!descriptor || descriptor.kind !== 'authored') return null
+      return { op: 'ai-restore-field', sectionId, entryId, field: p.field, scope }
+    }
+    case 'ai-restore-summary': {
+      const sectionId = id(p.sectionId)
+      const scope = p.scope === 'original' || p.scope === 'user' ? p.scope : null
+      return sectionId && scope ? { op: 'ai-restore-summary', sectionId, scope } : null
+    }
+    case 'ai-restore-bullet': {
+      const sectionId = id(p.sectionId)
+      const positionId = id(p.positionId)
+      const i = index(p.index)
+      const scope = p.scope === 'original' || p.scope === 'user' ? p.scope : null
+      return sectionId && positionId && i !== null && scope
+        ? { op: 'ai-restore-bullet', sectionId, positionId, index: i, scope }
         : null
     }
     case 'bullet-text': {

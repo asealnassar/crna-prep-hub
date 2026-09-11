@@ -42,5 +42,5 @@ export default async function ResumeStudioPage() {
   const access = resumeV2Access({ isAdmin: isAdminEmail(auth?.email) })
   if (!access.allowed) notFound()
 
-  return <DashboardClient />
+  return <DashboardClient tier={auth?.tier ?? 'free'} />
 }
