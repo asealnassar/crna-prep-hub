@@ -325,7 +325,13 @@ export interface ResumeContact {
  */
 export interface ImportReference {
   readonly importId: string
-  readonly sourceFormat: 'pdf' | 'docx'
+  /**
+   * 'v1' is the legacy migration: the record came from this product's own V1
+   * builder rather than from a file anyone uploaded. Added rather than reusing
+   * 'pdf', because seventeen real records asserting they came from a PDF they
+   * never came from is the kind of quiet untruth this model exists to prevent.
+   */
+  readonly sourceFormat: 'pdf' | 'docx' | 'v1'
   readonly documentFingerprint: string
   readonly importedAt: string
   readonly originalRetained: boolean
