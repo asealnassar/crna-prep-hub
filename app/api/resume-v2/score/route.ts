@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
-import { BLOCKED_BODY, resumeV2Access } from '@/lib/resume/gate'
+import { BLOCKED_BODY, UNAUTHORIZED_BODY, resumeV2Access } from '@/lib/resume/gate'
+import { resumeBuilderMode } from '@/lib/resume/rollout'
 import { readResume, saveStrength } from '@/lib/resume/repo/resumeRepo'
 import {
   AI_RATE_LIMITS, RATE_LIMIT_CODE, checkAiRate, rateLedgerWindowMs,
@@ -42,8 +43,22 @@ export async function POST(request: NextRequest) {
   const auth = await authenticateRequest()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const access = resumeV2Access({ isAdmin: isAdminEmail(auth.email) })
-  if (!access.allowed) return NextResponse.json(BLOCKED_BODY, { status: access.status })
+  // `auth` is non-null here -- the 401 above returns first -- so the gate's
+  // sign-in branch is unreachable from a route handler. It is still handled
+  // rather than asserted away, because an assertion here would be a 404 for a
+  // signed-out caller in v2 mode, and that is the one refusal that should say
+  // plainly that signing in would help.
+  const access = resumeV2Access({
+    isAdmin: isAdminEmail(auth.email),
+    isAuthenticated: true,
+    mode: resumeBuilderMode(),
+  })
+  if (!access.allowed) {
+    return NextResponse.json(
+      access.reason === 'sign-in' ? UNAUTHORIZED_BODY : BLOCKED_BODY,
+      { status: access.status }
+    )
+  }
 
   const token = await readAccessToken()
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

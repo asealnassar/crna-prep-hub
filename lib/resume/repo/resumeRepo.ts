@@ -248,29 +248,38 @@ interface CreateRpcResult {
 /**
  * Stores a computed Resume Strength.
  *
- * A SCOPED UPDATE, not a save. Going through `save_resume_v2` would bump the
- * revision, and the revision is exactly what decides whether a score is stale --
- * so storing a score would immediately mark it out of date. Writing only the
- * three strength columns leaves the document's revision where it was.
+ * THROUGH AN RPC, NOT A SCOPED UPDATE. This used to write the three columns
+ * directly. Migration 007 refuses direct UPDATEs of a V2 resume, because the
+ * same grant that allowed this one allowed a signed-in user to write any column
+ * of their own rows over PostgREST -- including status and revision. The narrow
+ * function is what remains: three columns, on a resume the caller owns.
  *
- * One statement, so it is atomic without an RPC, and RLS scopes it to the
- * owner. `strength_revision` records which revision the number describes.
+ * IT STILL DOES NOT BUMP THE REVISION. Going through `save_resume_v2` would,
+ * and the revision is exactly what decides whether a score is stale -- so
+ * storing a score would immediately mark it out of date. `strength_revision`
+ * records which revision the number describes.
  */
 export async function saveStrength(
   db: SupabaseClient,
   resumeId: string,
   strength: { readonly score: number; readonly computedAt: string; readonly computedAtRevision: number }
 ): Promise<RepoResult<null>> {
-  const { error } = await db
-    .from(RESUMES)
-    .update({
-      strength_score: strength.score,
-      strength_computed_at: strength.computedAt,
-      strength_revision: strength.computedAtRevision,
-    })
-    .eq('id', resumeId)
-    .eq('schema_version', V2_SCHEMA_VERSION)
+  const { data, error } = await db.rpc('save_resume_strength_v2', {
+    p_resume_id: resumeId,
+    p_score: strength.score,
+    p_computed_at: strength.computedAt,
+    p_revision: strength.computedAtRevision,
+  })
   if (error) return failure('strength-save-failed', error)
+
+  const result = data as { ok?: boolean; reason?: string } | null
+  if (!result || result.ok !== true) {
+    return {
+      ok: false,
+      reason: result?.reason ?? 'strength-save-failed',
+      detail: '',
+    }
+  }
   return { ok: true, value: null }
 }
 

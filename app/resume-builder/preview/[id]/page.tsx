@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { useRouter, useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
+import { LEGACY_SCHEMA_FILTER } from '@/lib/resume/rollout'
 import { generateResumePDF } from '@/lib/generateResumePDF'
 import Sidebar from '@/components/Sidebar'
 import Link from 'next/link'
@@ -15,7 +16,6 @@ export default function PreviewResume() {
   const [enhancedBullets, setEnhancedBullets] = useState<any>({})
   const [loading, setLoading] = useState(true)
   const [enhancing, setEnhancing] = useState(false)
-  const [scoring, setScoring] = useState(false)
   const [userEmail, setUserEmail] = useState('')
   const [userTier, setUserTier] = useState('free')
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -48,17 +48,21 @@ export default function PreviewResume() {
         setUserTier(profile.subscription_tier || 'free')
       }
 
-      // Load resume
+      // Load resume -- LEGACY ROWS ONLY, for the same reason as the editor:
+      // the template picker below writes template_id straight to this row.
       const { data: resumeData } = await supabase
         .from('resumes')
         .select('*')
         .eq('id', resumeId)
-        .single()
+        .or(LEGACY_SCHEMA_FILTER)
+        .maybeSingle()
 
-      if (resumeData) {
-        setResume(resumeData)
-        setSelectedTemplate(resumeData.template_id || 'modern')
+      if (!resumeData) {
+        router.replace('/resume-builder')
+        return
       }
+      setResume(resumeData)
+      setSelectedTemplate(resumeData.template_id || 'modern')
 
       // Load sections
       const { data: sectionsData } = await supabase
@@ -145,26 +149,18 @@ setEnhancedBullets((prev: any) => ({
     }
   }
 
-  const calculateScore = async () => {
-    setScoring(true)
-    try {
-      const res = await fetch('/api/resume/score', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resumeId })
-      })
-
-      const data = await res.json()
-      if (data.score) {
-        setScore(data.score)
-      }
-    } catch (error) {
-      console.error('Scoring error:', error)
-      alert('Failed to calculate score. Please try again.')
-    } finally {
-      setScoring(false)
-    }
-  }
+  // The on-demand scoring action that used to live here has been removed.
+  //
+  // It posted to /api/resume/score, which was retired in 123981b for using the
+  // service role with no session check and taking a resume id straight from the
+  // request body -- anyone could score anyone's resume. No control on this page
+  // was ever wired to it, so nothing a user can do changes, but leaving a call
+  // to a deleted endpoint in the rollback path would be a trap for whoever
+  // flipped back to v1 mode and went looking for why it 404s.
+  //
+  // The score card below still renders: it reads whatever was previously stored
+  // in resume_scores, which is an ordinary RLS-scoped read and still works.
+  // Recomputing a score is Resume Studio's job now.
 
   const downloadPDF = () => {
     try {

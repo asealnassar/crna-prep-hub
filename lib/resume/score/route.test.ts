@@ -102,21 +102,56 @@ test('storing a score uses the scoped write, not a document save', () => {
 
 test('the repository write touches only the three strength columns', () => {
   const repo = code(read('../repo/resumeRepo.ts'))
-  const fn = repo.slice(repo.indexOf('export async function saveStrength'))
-  const update = fn.slice(fn.indexOf('.update('), fn.indexOf('.eq('))
-  for (const column of ['strength_score', 'strength_computed_at', 'strength_revision']) {
-    assert.ok(update.includes(column), `saveStrength does not write ${column}`)
-  }
-  // `revision:` on its own would move the document's revision and so make the
-  // score stale the instant it was stored. `strength_revision:` contains that
-  // substring, so the check has to exclude it rather than search for it.
-  assert.equal(
-    /(^|[^_])\brevision:/.test(update.replace(/strength_revision:/g, '')), false,
-    'saveStrength moves the document revision'
+  const fn = repo.slice(
+    repo.indexOf('export async function saveStrength'),
+    repo.indexOf('export async function deleteResume')
   )
-  for (const column of ['updated_at', 'title:', 'status:']) {
-    assert.equal(update.includes(column), false, `saveStrength also writes ${column}`)
+
+  // Migration 007 refuses direct UPDATEs of a V2 resume, so this now goes
+  // through a function whose entire surface is the three strength columns.
+  assert.ok(fn.includes("db.rpc('save_resume_strength_v2'"), 'the score is not stored')
+  assert.equal(fn.includes('.update('), false, 'a direct update is refused by the write boundary')
+  assert.equal(fn.includes('.from('), false, 'the score must not reach the table directly')
+
+  const args = fn.slice(fn.indexOf('save_resume_strength_v2'), fn.indexOf('if (error)'))
+  for (const param of ['p_resume_id', 'p_score', 'p_computed_at', 'p_revision']) {
+    assert.ok(args.includes(param), `saveStrength does not pass ${param}`)
   }
+  // Nothing else may be passed: the function has no other parameter, and the
+  // point of the narrow surface is that a score write cannot move anything else.
+  for (const forbidden of ['p_status', 'p_title', 'p_template', 'p_sections', 'p_expected_revision']) {
+    assert.equal(args.includes(forbidden), false, `saveStrength also passes ${forbidden}`)
+  }
+})
+
+test('the strength function itself cannot move the document revision', () => {
+  // `p_revision` is stored INTO strength_revision -- the revision the score
+  // describes. If the function ever wrote `revision` itself, every score would
+  // be stale the instant it was saved, which is the whole reason this is not
+  // an ordinary save.
+  const sql = read('../../../supabase/migrations/20260912_007_resume_v2_write_boundary.sql')
+  const fn = sql.slice(
+    sql.indexOf('create or replace function public.save_resume_strength_v2'),
+    sql.indexOf('revoke all on function public.save_resume_strength_v2')
+  )
+  // The SET clause only. The WHERE clause legitimately filters on
+  // schema_version and user_id, which are not columns being written.
+  const statement = fn.slice(fn.indexOf('update public.resumes'), fn.indexOf('if not found'))
+  const update = statement.slice(statement.indexOf('set '), statement.indexOf('where '))
+
+  for (const column of ['strength_score', 'strength_computed_at', 'strength_revision']) {
+    assert.ok(update.includes(column), `the function does not write ${column}`)
+  }
+  assert.equal(
+    /(^|[^_])\brevision\s*=/.test(update.replace(/strength_revision\s*=/g, '')), false,
+    'save_resume_strength_v2 moves the document revision'
+  )
+  for (const column of ['status', 'title', 'template_id', 'updated_at', 'schema_version']) {
+    assert.equal(update.includes(column), false, `the function also writes ${column}`)
+  }
+  // Ownership is named explicitly, not left to RLS alone.
+  assert.ok(statement.includes('r.user_id = v_user'), 'the update is not scoped to the owner')
+  assert.ok(statement.includes('r.schema_version = 2'), 'a V1 row must not be reachable here')
 })
 
 // ------------------------------------------------------ the reporting

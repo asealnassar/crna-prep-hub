@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
+import { LEGACY_SCHEMA_FILTER } from '@/lib/resume/rollout'
 import Sidebar from '@/components/Sidebar'
 import Link from 'next/link'
 
@@ -39,10 +40,14 @@ export default function ResumeBuilder() {
         setUserTier(profile.subscription_tier || 'free')
       }
 
+      // LEGACY ROWS ONLY. After the V1 -> V2 writer runs, this user's `resumes`
+      // rows are a mix of generations. Without this filter V1 would list every
+      // migrated resume a second time, side by side with its original.
       const { data: resumesData } = await supabase
         .from('resumes')
         .select('*')
         .eq('user_id', user.id)
+        .or(LEGACY_SCHEMA_FILTER)
         .order('updated_at', { ascending: false })
 
       if (resumesData) {

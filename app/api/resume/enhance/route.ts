@@ -1,10 +1,82 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
-import { authenticateRequest } from '@/lib/apiAuth'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { authenticateRequest, readAccessToken } from '@/lib/apiAuth'
+import {
+  AI_RATE_LIMITS, RATE_LIMIT_CODE, checkAiRate, rateLedgerWindowMs,
+} from '@/lib/resume/entitlement'
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 })
+
+/**
+ * ABUSE PROTECTION, ADDED IN PHASE 12. This route is V1's, and it stays live
+ * for the rollback window after V2 becomes the live builder -- at which point
+ * no page links to it any more, and it remains perfectly callable. It had a
+ * session check and nothing else: any signed-in user could call GPT-4o without
+ * limit, and because the ICU fields are interpolated into the prompt, with
+ * arbitrary text. That made it an unmetered language model behind a login.
+ *
+ * The fix is the ceiling the V2 routes already use -- the same windows, the
+ * same ledger, the same silence about it. There is no quota to display and no
+ * upgrade to offer: a 429 here means "try again shortly" and nothing else.
+ *
+ * NO SERVICE ROLE. The ledger is reached with the caller's own JWT, so RLS
+ * decides what they can read, and record_ai_usage writes the row for
+ * auth.uid(). Nothing here can see or touch another user's usage.
+ *
+ * Nothing else about V1's behaviour is changed.
+ */
+
+/** The caller's own recent AI calls, from the shared ledger. */
+async function rateDecision(db: SupabaseClient, userId: string) {
+  const since = new Date(Date.now() - rateLedgerWindowMs()).toISOString()
+  const { data, error } = await db
+    .from('resume_ai_usage')
+    .select('created_at')
+    .eq('user_id', userId)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(500)
+
+  if (error) {
+    // Fail closed: an abuse control that opens when its storage misbehaves is
+    // not a control.
+    console.error('resume enhance: usage ledger unreadable', error.code, error.message)
+    return {
+      allowed: false as const,
+      retryAfterSeconds: 30,
+      message: 'Too many requests just now. Please try again shortly.',
+    }
+  }
+
+  const recent = (data ?? [])
+    .map((row) => Date.parse((row as { created_at: string }).created_at))
+    .filter((at) => Number.isFinite(at))
+  return checkAiRate(recent, Date.now(), AI_RATE_LIMITS)
+}
+
+async function recordAttempt(db: SupabaseClient): Promise<string | null> {
+  // No resume id: this route is given a position from the request body and
+  // never reads a stored resume, so there is nothing to attribute it to.
+  const { data, error } = await db.rpc('record_ai_usage', {
+    p_resume_id: null,
+    p_operation: 'v1-enhance-bullets',
+    p_outcome: 'attempted',
+  })
+  if (error) {
+    console.error('resume enhance: could not record usage', error.code, error.message)
+    return null
+  }
+  return typeof data === 'string' ? data : null
+}
+
+async function settle(db: SupabaseClient, usageId: string | null, outcome: string): Promise<void> {
+  if (!usageId) return
+  const { error } = await db.rpc('settle_ai_usage', { p_id: usageId, p_outcome: outcome })
+  if (error) console.error('resume enhance: could not settle usage', error.code, error.message)
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,6 +89,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'You must be signed in to enhance resume bullet points.' },
         { status: 401 }
+      )
+    }
+
+    // The caller's own JWT, so RLS scopes the ledger read. No service role.
+    const token = await readAccessToken()
+    if (!token) {
+      return NextResponse.json(
+        { error: 'You must be signed in to enhance resume bullet points.' },
+        { status: 401 }
+      )
+    }
+    const db = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      }
+    )
+
+    // Checked BEFORE the model call, so a refused request costs nothing. The
+    // message names no plan and no allowance, because there is no quota.
+    const rate = await rateDecision(db, auth.userId)
+    if (!rate.allowed) {
+      return NextResponse.json(
+        { error: RATE_LIMIT_CODE, message: rate.message },
+        { status: 429, headers: { 'Retry-After': String(rate.retryAfterSeconds) } }
       )
     }
 
@@ -180,18 +279,30 @@ Return ONLY a JSON object with this structure:
 
 NO markdown formatting. NO explanations. NO preamble. ONLY the JSON object.`
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.75,
-      max_tokens: 1200,
-      response_format: { type: 'json_object' }
-    })
+    // Recorded immediately before the call, so the ledger counts attempts
+    // rather than successes -- a run of failures must not be a free retry loop.
+    const usageId = await recordAttempt(db)
+
+    let completion
+    try {
+      completion = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.75,
+        max_tokens: 1200,
+        response_format: { type: 'json_object' }
+      })
+    } catch (modelError) {
+      await settle(db, usageId, 'failed')
+      throw modelError
+    }
 
     const result = JSON.parse(completion.choices[0].message.content || '{"bullets": []}')
     
     // Normalize the response
     const bullets = result.bullets || result.bullet_points || Object.values(result)
+
+    await settle(db, usageId, 'proposed')
 
     return NextResponse.json({ bullets })
   } catch (error: any) {

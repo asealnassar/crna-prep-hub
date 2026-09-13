@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { useRouter, useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
+import { LEGACY_SCHEMA_FILTER } from '@/lib/resume/rollout'
 import Sidebar from '@/components/Sidebar'
 import Link from 'next/link'
 
@@ -51,16 +52,21 @@ export default function EditResume() {
         setUserTier(profile.subscription_tier || 'free')
       }
 
-      // Load resume
+      // Load resume -- LEGACY ROWS ONLY. A V2 resume must never open in this
+      // editor: it writes V1 section shapes, so saving one here would overwrite
+      // the Studio's data with a shape the Studio cannot read back.
       const { data: resumeData } = await supabase
         .from('resumes')
         .select('*')
         .eq('id', resumeId)
-        .single()
+        .or(LEGACY_SCHEMA_FILTER)
+        .maybeSingle()
 
-      if (resumeData) {
-        setResume(resumeData)
+      if (!resumeData) {
+        router.replace('/resume-builder')
+        return
       }
+      setResume(resumeData)
 
       // Load sections
       const { data: sectionsData } = await supabase

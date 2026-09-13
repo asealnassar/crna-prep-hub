@@ -1,7 +1,8 @@
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@supabase/supabase-js'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
 import { resumeV2Access } from '@/lib/resume/gate'
+import { resumeBuilderMode } from '@/lib/resume/rollout'
 import { readResume } from '@/lib/resume/repo/resumeRepo'
 import StudioClient from '../components/studio/StudioClient'
 
@@ -21,7 +22,15 @@ export const dynamic = 'force-dynamic'
 
 export default async function StudioPage({ params }: { params: Promise<{ id: string }> }) {
   const auth = await authenticateRequest()
-  const access = resumeV2Access({ isAdmin: isAdminEmail(auth?.email) })
+  const access = resumeV2Access({
+    isAdmin: isAdminEmail(auth?.email),
+    isAuthenticated: auth !== null,
+    mode: resumeBuilderMode(),
+  })
+  // In v2 mode the Studio IS the resume builder, so a signed-out visitor is
+  // sent to sign in exactly as V1 sent them. In v1 mode V2 has not launched for
+  // them and they get the 404 instead, which says nothing at all.
+  if (!access.allowed && access.reason === 'sign-in') redirect('/login')
   if (!access.allowed || !auth) notFound()
 
   const token = await readAccessToken()
