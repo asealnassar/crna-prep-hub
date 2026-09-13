@@ -460,7 +460,10 @@ begin
   if v_status = 'complete' then
     select lower(coalesce(p.subscription_tier, 'free')) into v_tier
       from public.user_profiles p where p.id = v_user;
-    if public.resume_v2_tier_cap(coalesce(v_tier, 'free')) is not null then
+    -- save_resume_v2 is SECURITY INVOKER, while resume_v2_tier_cap() is
+    -- intentionally private to trusted database code. Finalization is the
+    -- binary entitlement rule: only Ultimate may enter complete.
+    if coalesce(v_tier, 'free') <> 'ultimate' then
       return jsonb_build_object('ok', false, 'reason', 'finalize-not-permitted');
     end if;
   end if;

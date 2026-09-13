@@ -279,16 +279,17 @@ test('create_resume_v2 takes ownership from the session, not the payload', { ski
 })
 
 test('an offline connection cannot use create_resume_v2 -- the writer must not try', { skip }, async () => {
-  // This is the finding the writer is built around: with no session,
-  // auth.uid() is null and the function refuses. If this ever starts
-  // succeeding, the writer's whole privilege model should be revisited.
+  // The offline writer runs as service_role and must not use this browser RPC.
+  // The privilege boundary rejects service_role before the function body runs.
+  // If this ever succeeds, revisit the writer privilege model.
   const db = await client(serviceKey!)
-  const { data } = await db.rpc('create_resume_v2', {
+  const { data, error } = await db.rpc('create_resume_v2', {
     p_resume_id: randomUUID(), p_resume: { title: 'x', template_id: 'classic' }, p_sections: [],
   })
+  assert.equal(data, null, 'service_role unexpectedly executed create_resume_v2')
   assert.equal(
-    (data as { ok?: boolean; reason?: string } | null)?.reason, 'not-authenticated',
-    'create_resume_v2 accepted a session-less caller'
+    (error as { code?: string } | null)?.code, '42501',
+    'offline/service-role caller was not rejected by the RPC privilege boundary'
   )
 })
 

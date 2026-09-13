@@ -249,7 +249,7 @@ select (select count(*) from public.resumes)         as resumes,
 
 -- On an existing schema this file creates nothing, so every policy keeps the
 -- OID it had before. Capture these before and after to prove it:
-select tablename, policyname, oid
+select pp.tablename, pp.policyname, p.oid as oid
 from   pg_policy p join pg_class c on c.oid = p.polrelid
        join pg_policies pp on pp.policyname = p.polname and pp.tablename = c.relname
 where  pp.schemaname = 'public'
