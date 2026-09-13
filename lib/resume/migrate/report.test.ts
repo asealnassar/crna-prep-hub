@@ -145,6 +145,58 @@ test('an invented value fails the run', () => {
   assert.deepEqual(inventedStrings(out.resume, row, sections), [], 'the clean mapping reported inventions')
 })
 
+test('multiline and tabbed applicant text is not falsely reported as invented', () => {
+  const fixture = v1Fixtures()
+  const row = fixture.resumes[0]
+  const sections = fixture.sections.filter((s) => s.resume_id === row.id)
+
+  const out = mapV1Resume(row, sections, {
+    newResumeId: 'x',
+    idPool: Array.from({ length: 400 }, (_, i) => `x${i}`),
+    now: NOW,
+  })
+
+  assert.equal(out.kind, 'mapped')
+  if (out.kind !== 'mapped') return
+
+  const sourceText = 'Line one\nLine two\tLine three'
+
+  const sourceRow = {
+    ...row,
+    regression_multiline_source: sourceText,
+  }
+
+  const unchanged = {
+    ...out.resume,
+    contact: {
+      ...out.resume.contact,
+      fullName: sourceText,
+    },
+  }
+
+  assert.deepEqual(
+    inventedStrings(unchanged, sourceRow, sections),
+    [],
+    'real source whitespace was mistaken for invented content'
+  )
+
+  const fabricated =
+    sourceText + '\nThis sentence was never in the source'
+
+  const tampered = {
+    ...out.resume,
+    contact: {
+      ...out.resume.contact,
+      fullName: fabricated,
+    },
+  }
+
+  assert.ok(
+    inventedStrings(tampered, sourceRow, sections).includes(fabricated),
+    'the whitespace fix weakened the invention detector'
+  )
+})
+
 test('an unknown template is reported without failing the locked-table check', () => {
   const report = run({ templates: { 5: 'executive' } })
   assert.equal(named(report, 'template-mapping-locked').passed, true)

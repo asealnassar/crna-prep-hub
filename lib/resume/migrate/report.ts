@@ -117,17 +117,48 @@ export function inventedStrings(
   row: V1ResumeRow,
   sections: readonly V1SectionRow[]
 ): string[] {
-  const haystack = normalise(
-    JSON.stringify(row) + ' ' + sections.map((s) => JSON.stringify(s.section_data)).join(' ')
-  )
+  /*
+   * Compare against actual V1 string leaves, not JSON.stringify().
+   *
+   * JSON.stringify escapes real newlines/tabs as "\\n" / "\\t". The mapped
+   * ResumeV2 still contains the real whitespace, so otherwise unchanged
+   * applicant text can be falsely reported as invented.
+   */
+  const source: string[] = []
+
+  const collectSourceStrings = (value: unknown): void => {
+    if (typeof value === 'string') {
+      source.push(normalise(value))
+      return
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) collectSourceStrings(item)
+      return
+    }
+
+    if (value !== null && typeof value === 'object') {
+      for (const item of Object.values(value)) collectSourceStrings(item)
+    }
+  }
+
+  collectSourceStrings(row)
+  for (const section of sections) collectSourceStrings(section.section_data)
+
   const produced: string[] = []
   leafStrings(resume.contact, 'contact', produced)
   for (const section of resume.sections) leafStrings(section, 'section', produced)
 
   const missing: string[] = []
+
   for (const value of produced) {
-    if (!haystack.includes(normalise(value))) missing.push(value)
+    const needle = normalise(value)
+
+    if (!source.some((candidate) => candidate.includes(needle))) {
+      missing.push(value)
+    }
   }
+
   return [...new Set(missing)]
 }
 
