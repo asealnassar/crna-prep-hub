@@ -44,20 +44,11 @@ import type {
 } from '../lib/resume/migrate/writer.ts'
 import type { V1ResumeRow, V1SectionRow } from '../lib/resume/migrate/mapV1.ts'
 import { formatExecution, formatPlan } from '../lib/resume/migrate/audit.ts'
+import { requireStagingTarget } from '../lib/resume/migrate/target.ts'
 
 // ---------------------------------------------------------------------------
 // Guards, before anything is connected
 // ---------------------------------------------------------------------------
-
-/**
- * The script refuses to start unless the operator has named the environment.
- *
- * `staging` is the only value this version accepts. There is deliberately no
- * production branch in the code: the protection is the absence of the path, not
- * a flag someone could set by accident. Running against production is a
- * separate, reviewed change that has not been approved.
- */
-const ALLOWED_TARGETS = ['staging'] as const
 
 function requireEnv(name: string): string {
   const value = process.env[name]
@@ -68,29 +59,24 @@ function requireEnv(name: string): string {
   return value.trim()
 }
 
+/**
+ * WHICH DATABASE THIS MAY TOUCH is not decided here.
+ *
+ * requireStagingTarget() is the single shared guard, used identically by
+ * lib/resume/migrate/integration.test.ts. It refuses unless the target is named
+ * `staging`, the staging project is named explicitly, the URL is exactly that
+ * project, the project is not production, and the shell carries no production
+ * URL or production-only secrets. It exits before this function returns if any
+ * of that fails.
+ *
+ * It hands back only safe identifiers -- the ref and the host. The credentials
+ * are read here, separately, and never leave this file.
+ */
 function guards(): { target: string; url: string; key: string; apply: boolean } {
-  const target = (process.env.RESUME_MIGRATION_TARGET ?? '').trim().toLowerCase()
-  if (!(ALLOWED_TARGETS as readonly string[]).includes(target)) {
-    console.error(
-      'FATAL: set RESUME_MIGRATION_TARGET=staging to run this script.\n' +
-      '       This build has no production path. Running against production is a\n' +
-      '       separate change that requires its own review and approval.'
-    )
-    process.exit(1)
-  }
+  const { host } = requireStagingTarget()
 
   const url = requireEnv('SUPABASE_URL')
   const key = requireEnv('SUPABASE_SERVICE_ROLE_KEY')
-
-  // Credentials come from the environment and are never written to the audit
-  // record or the console. Only the host is ever printed.
-  let host: string
-  try {
-    host = new URL(url).host
-  } catch {
-    console.error('FATAL: SUPABASE_URL is not a valid URL.')
-    process.exit(1)
-  }
 
   const apply = process.argv.includes('--apply')
   return { target: host, url, key, apply }

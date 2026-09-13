@@ -207,14 +207,26 @@ test('nothing the application can reach imports the migration script', () => {
   assert.deepEqual(offenders, [], 'the migration script must be unreachable from the app')
 })
 
-test('the script refuses to run without an explicitly named staging target', () => {
+test('the script refuses to run through the shared target guard', () => {
   const script = code('scripts/migrate-v1-resumes.ts')
-  assert.ok(script.includes('RESUME_MIGRATION_TARGET'), 'the target guard is gone')
+  assert.ok(script.includes('requireStagingTarget()'), 'the target guard is gone')
   assert.ok(
-    /ALLOWED_TARGETS\s*=\s*\['staging'\]/.test(script),
-    'staging must be the only accepted target -- there is no production path in this build'
+    script.includes("from '../lib/resume/migrate/target.ts'"),
+    'the guard must be the shared module, not a local copy'
   )
-  assert.equal(script.includes("'production'"), false, 'a production branch was added')
+})
+
+test('the script has no second staging check that could drift', () => {
+  // The guard lives in exactly one place. A local re-check here would be a
+  // second opinion about which databases are safe, and the two would
+  // eventually disagree.
+  const script = code('scripts/migrate-v1-resumes.ts')
+  for (const local of ['RESUME_MIGRATION_TARGET', 'ALLOWED_TARGETS', 'supabase.co', 'PRODUCTION_PROJECT_REFS']) {
+    assert.equal(
+      script.includes(local), false,
+      `scripts/migrate-v1-resumes.ts re-implements "${local}" instead of using the shared guard`
+    )
+  }
 })
 
 test('the script writes nothing unless --apply is passed, and never over a dirty plan', () => {

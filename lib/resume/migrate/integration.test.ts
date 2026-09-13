@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { checkTarget } from './target.ts'
 
 /**
  * Database behaviour tests that need a real Postgres.
@@ -15,6 +16,7 @@ import { randomUUID } from 'node:crypto'
  * HOW TO RUN THEM:
  *
  *   RESUME_MIGRATION_TARGET=staging \
+ *   RESUME_STAGING_PROJECT_REF=<staging-ref> \
  *   SUPABASE_URL=https://<staging-ref>.supabase.co \
  *   SUPABASE_SERVICE_ROLE_KEY=<staging service role> \
  *   SUPABASE_ANON_KEY=<staging anon key> \
@@ -22,31 +24,40 @@ import { randomUUID } from 'node:crypto'
  *   RESUME_TEST_JWT_B=<staging user B access token> \
  *   node --test --import ./test/register.mjs lib/resume/migrate/integration.test.ts
  *
- * WHY THE TARGET GUARD. Every one of these tests writes rows. The environment
- * has to be named `staging` before any of them will run, so pointing a
- * connection string at production is not enough to cause damage -- the same
- * guard the migration script uses, for the same reason.
+ * WHY THE TARGET GUARD. Every one of these tests writes rows. checkTarget()
+ * -- the same guard the migration script uses -- refuses unless the URL is
+ * exactly the staging project that was named, is not production, and the
+ * shell carries no production URL or production-only secrets. Naming the
+ * target `staging` is necessary and, on its own, nowhere near sufficient.
  *
  * Rows created here are deleted at the end of each test. That is the one place
  * in this phase where DELETE is legitimate: it removes only rows this file just
  * created, in a staging project, and never a V1 source row.
  */
 
-const target = (process.env.RESUME_MIGRATION_TARGET ?? '').trim().toLowerCase()
+// The SAME guard the migration script uses. Not a second staging check --
+// there is exactly one, so the two cannot drift into disagreeing about which
+// databases are safe to touch. Everything below writes rows, so this file must
+// never be able to run anywhere the script could not.
+const TARGET = checkTarget(process.env)
+
 const url = process.env.SUPABASE_URL
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 const anonKey = process.env.SUPABASE_ANON_KEY
 const jwtA = process.env.RESUME_TEST_JWT_A
 const jwtB = process.env.RESUME_TEST_JWT_B
 
-const configured = target === 'staging' && Boolean(url) && Boolean(serviceKey)
+const configured = TARGET.ok && Boolean(url) && Boolean(serviceKey)
 const skip = configured
   ? false
-  : 'set RESUME_MIGRATION_TARGET=staging, SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to run'
+  // The guard's own message says exactly which rule refused, so a misconfigured
+  // run reports the cause rather than a generic "not configured".
+  : TARGET.ok
+    ? 'set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to run'
+    : `staging target refused: ${TARGET.message}`
 const skipRls = configured && jwtA && jwtB
   ? false
   : 'additionally set SUPABASE_ANON_KEY, RESUME_TEST_JWT_A and RESUME_TEST_JWT_B'
-
 type Client = {
   from: (table: string) => any
   rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>
