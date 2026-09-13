@@ -112,81 +112,138 @@ test('migration 001 columns exist and default a new row to V1 semantics', { skip
   assert.ok(Array.isArray(data))
 })
 
+async function existingLedgerFixture(db: Client): Promise<{
+  v1_resume_id: string
+  v2_resume_id: string
+  user_id: string
+  completed_at: string
+}> {
+  const { data, error } = await db
+    .from(LEDGER)
+    .select('v1_resume_id, v2_resume_id, user_id, completed_at')
+    .not('completed_at', 'is', null)
+    .limit(1)
+
+  assert.equal(
+    error,
+    null,
+    `reading an existing migration link failed: ${JSON.stringify(error)}`
+  )
+
+  const row = ((data ?? []) as {
+    v1_resume_id: string
+    v2_resume_id: string
+    user_id: string
+    completed_at: string | null
+  }[])[0]
+
+  assert.ok(
+    row?.v1_resume_id &&
+      row.v2_resume_id &&
+      row.user_id &&
+      row.completed_at,
+    'staging needs at least one completed migration link for ledger integration tests'
+  )
+
+  return row as {
+    v1_resume_id: string
+    v2_resume_id: string
+    user_id: string
+    completed_at: string
+  }
+}
+
 test('a V1 resume can be claimed in the ledger only once', { skip }, async () => {
   const db = await client(serviceKey!)
-  const { data: owners } = await db.from('resumes').select('user_id').limit(1)
-  const owner = ((owners ?? []) as { user_id: string }[])[0]?.user_id
-  assert.ok(owner, 'staging needs at least one existing resume to borrow an owner from')
+  const fixture = await existingLedgerFixture(db)
 
-  const v1Id = randomUUID()
-  try {
-    const first = await db.from(LEDGER).insert({
-      v1_resume_id: v1Id, v2_resume_id: randomUUID(), user_id: owner,
-    })
-    assert.equal(first.error, null, `the first claim failed: ${JSON.stringify(first.error)}`)
+  const duplicate = await db.from(LEDGER).insert({
+    v1_resume_id: fixture.v1_resume_id,
+    v2_resume_id: randomUUID(),
+    user_id: fixture.user_id,
+  })
 
-    const second = await db.from(LEDGER).insert({
-      v1_resume_id: v1Id, v2_resume_id: randomUUID(), user_id: owner,
-    })
-    assert.notEqual(
-      second.error, null,
-      'a second claim on the same V1 resume was accepted -- the primary key is missing'
-    )
-  } finally {
-    // The ledger denies DELETE to every role by design, so this row is left
-    // behind on purpose. Staging is rebuilt from a dump; production never runs
-    // this file.
-  }
+  assert.notEqual(
+    duplicate.error,
+    null,
+    'a second claim on the same V1 resume was accepted -- the primary key is missing'
+  )
 })
 
 test('two V1 resumes cannot claim the same V2 row', { skip }, async () => {
   const db = await client(serviceKey!)
-  const { data: owners } = await db.from('resumes').select('user_id').limit(1)
-  const owner = ((owners ?? []) as { user_id: string }[])[0]?.user_id
-  assert.ok(owner)
+  const fixture = await existingLedgerFixture(db)
 
-  const shared = randomUUID()
-  const first = await db.from(LEDGER).insert({
-    v1_resume_id: randomUUID(), v2_resume_id: shared, user_id: owner,
+  const duplicate = await db.from(LEDGER).insert({
+    v1_resume_id: randomUUID(),
+    v2_resume_id: fixture.v2_resume_id,
+    user_id: fixture.user_id,
   })
-  assert.equal(first.error, null)
 
-  const second = await db.from(LEDGER).insert({
-    v1_resume_id: randomUUID(), v2_resume_id: shared, user_id: owner,
-  })
-  assert.notEqual(second.error, null, 'the unique index on v2_resume_id is missing')
+  assert.notEqual(
+    duplicate.error,
+    null,
+    'the unique index on v2_resume_id is missing'
+  )
 })
 
 test('not even service_role may delete a ledger row', { skip }, async () => {
   const db = await client(serviceKey!)
-  const owner = randomUUID()
-  const v1Id = randomUUID()
-  await db.from(LEDGER).insert({ v1_resume_id: v1Id, v2_resume_id: randomUUID(), user_id: owner })
+  const fixture = await existingLedgerFixture(db)
 
-  const { error } = await db.from(LEDGER).delete().eq('v1_resume_id', v1Id)
+  const { error } = await db
+    .from(LEDGER)
+    .delete()
+    .eq('v1_resume_id', fixture.v1_resume_id)
+
   assert.notEqual(error, null, 'migration history must not be deletable')
 
-  const { data } = await db.from(LEDGER).select('v1_resume_id').eq('v1_resume_id', v1Id)
-  assert.equal((data ?? []).length, 1, 'the row should still be there')
+  const { data } = await db
+    .from(LEDGER)
+    .select('v1_resume_id')
+    .eq('v1_resume_id', fixture.v1_resume_id)
+
+  assert.equal((data ?? []).length, 1, 'the real migration link was deleted')
 })
 
 test('service_role may stamp completed_at and nothing else', { skip }, async () => {
   const db = await client(serviceKey!)
-  const v1Id = randomUUID()
-  const v2Id = randomUUID()
-  await db.from(LEDGER).insert({ v1_resume_id: v1Id, v2_resume_id: v2Id, user_id: randomUUID() })
+  const fixture = await existingLedgerFixture(db)
 
-  const stamp = await db.from(LEDGER)
-    .update({ completed_at: new Date().toISOString() }).eq('v1_resume_id', v1Id)
-  assert.equal(stamp.error, null, `stamping completion failed: ${JSON.stringify(stamp.error)}`)
+  const stamp = await db
+    .from(LEDGER)
+    .update({ completed_at: fixture.completed_at })
+    .eq('v1_resume_id', fixture.v1_resume_id)
 
-  // The column-level grant should refuse any other column.
-  const rewrite = await db.from(LEDGER)
-    .update({ v2_resume_id: randomUUID() }).eq('v1_resume_id', v1Id)
-  assert.notEqual(rewrite.error, null, 'a run must not be able to rewrite what a link names')
+  assert.equal(
+    stamp.error,
+    null,
+    `stamping completion failed: ${JSON.stringify(stamp.error)}`
+  )
 
-  const { data } = await db.from(LEDGER).select('v2_resume_id').eq('v1_resume_id', v1Id)
-  assert.equal(((data ?? []) as { v2_resume_id: string }[])[0]?.v2_resume_id, v2Id)
+  const rewrite = await db
+    .from(LEDGER)
+    .update({ v2_resume_id: randomUUID() })
+    .eq('v1_resume_id', fixture.v1_resume_id)
+
+  assert.notEqual(
+    rewrite.error,
+    null,
+    'a run must not be able to rewrite what a link names'
+  )
+
+  const { data } = await db
+    .from(LEDGER)
+    .select('v2_resume_id, completed_at')
+    .eq('v1_resume_id', fixture.v1_resume_id)
+
+  const after = ((data ?? []) as {
+    v2_resume_id: string
+    completed_at: string | null
+  }[])[0]
+
+  assert.equal(after?.v2_resume_id, fixture.v2_resume_id)
+  assert.equal(after?.completed_at, fixture.completed_at)
 })
 
 test('an authenticated user cannot read, write or forge a ledger row', { skip: skipRls }, async () => {
