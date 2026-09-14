@@ -494,3 +494,125 @@ test('a failed model call is settled rather than left counted as attempted', () 
   assert.ok(route.includes("settle(db, usageId, 'failed')"), 'a model failure is not settled')
   assert.ok(route.includes("settle(db, usageId, 'proposed')"), 'a success is not settled')
 })
+
+// ---------------------------------------------------------------------------
+// The dashboard can reach the Studio
+// ---------------------------------------------------------------------------
+
+/**
+ * The cards were a dead end: the title started an inline rename and nothing on
+ * the dashboard linked to /resume-studio/[id], so a saved resume could be
+ * renamed, duplicated and deleted but never reopened. The route existed by
+ * then; only a stale comment explaining its absence did not.
+ *
+ * NOTE ON READERS. These two halves need opposite ones. The link assertion goes
+ * through `code()`, or it matches the prose describing the link and passes with
+ * the bug still live. The stale-comment assertion must read RAW, because
+ * `code()` strips the very thing it is looking for and would always pass.
+ */
+
+const CARD = 'app/resume-studio/components/dashboard/ResumeCard.tsx'
+const DASHBOARD = 'app/resume-studio/components/dashboard/DashboardClient.tsx'
+
+function raw(relative: string): string {
+  return readFileSync(join(ROOT, relative), 'utf8')
+}
+
+test('a dashboard card links to the Studio, in code rather than in a comment', () => {
+  const card = code(CARD)
+  // The tripwire: if `code()` ever stops stripping, this test silently starts
+  // reading comments again and the assertions below stop meaning anything.
+  assert.notEqual(raw(CARD), card, 'ResumeCard has no comments left to strip -- check code()')
+
+  assert.ok(card.includes('/resume-studio/${resume.id}'), 'the card does not link to the Studio')
+})
+
+/**
+ * The card has always had a <Link> -- the "Upgrade to finalize" one -- so a bare
+ * `/<Link/` here would pass against the very code this guards against. Pick out
+ * the opening tag that carries the Studio href and assert on that alone.
+ */
+function titleLinkAttributes(card: string): string {
+  const chunk = card.split('<Link').find((part) => part.includes('/resume-studio/${resume.id}'))
+  assert.ok(chunk, 'no Link element points at the Studio')
+  return chunk.slice(0, chunk.indexOf('>'))
+}
+
+test('the card title opens the resume and is not wired straight to rename', () => {
+  const card = code(CARD)
+  const attrs = titleLinkAttributes(card)
+
+  assert.ok(attrs.includes('onOpen'), 'the title link does not hand the click upward')
+  assert.ok(attrs.includes('prefetch={false}'), 'the title link prefetches, costing a read per card')
+  assert.equal(
+    attrs.includes('onStartRename'), false,
+    'the title is still wired to rename -- that is the defect this fixes'
+  )
+  // Rename did not disappear, it moved to a control that says so.
+  assert.ok(card.includes('onClick={onStartRename}'), 'nothing starts a rename any more')
+  assert.ok(/>\s*Rename\s*<\/button>/.test(card), 'there is no Rename button')
+})
+
+test('the row actions name the resume they act on', () => {
+  const card = code(CARD)
+  for (const action of ['Rename', 'Duplicate', 'Delete']) {
+    assert.ok(
+      card.includes(`aria-label={\`${action} \${resume.title}\`}`),
+      `${action} renders the same accessible name on every card`
+    )
+  }
+})
+
+test('the stale "cards deliberately do not link" comment is gone', () => {
+  // RAW on purpose -- see the note above.
+  const source = raw(DASHBOARD)
+  assert.equal(
+    /deliberately do not link/.test(source), false,
+    'the comment still claims the Studio route does not exist'
+  )
+  assert.equal(
+    /Phase 5/.test(source), false,
+    'the card comment still defers the section editor to a finished phase'
+  )
+})
+
+/**
+ * `hasUnsavedWork(saveRef.current)` and `event.preventDefault()` both already
+ * appear in this file -- in `startRename` and the beforeunload guard -- so
+ * these have to be read inside `openResume` or they prove nothing. Sliced on
+ * code landmarks, never on a comment banner: `code()` strips those first.
+ */
+function openResumeBody(dashboard: string): string {
+  const start = dashboard.indexOf('const openResume')
+  const end = dashboard.indexOf('const command = async')
+  assert.ok(start > 0, 'openResume is gone -- the open path has no guard to check')
+  assert.ok(end > start, 'the `command` landmark moved; this slice reads the wrong code')
+  return dashboard.slice(start, end)
+}
+
+test('opening a card waits for an unsaved rename instead of racing the unmount', () => {
+  const dashboard = code(DASHBOARD)
+  const open = openResumeBody(dashboard)
+
+  assert.ok(open.includes('hasUnsavedWork(saveRef.current)'), 'the open path checks nothing')
+  assert.ok(open.includes('event.preventDefault()'), 'the navigation is never deferred')
+  assert.ok(open.includes('setWantsOpen'), 'nothing records the resume to open afterwards')
+  assert.ok(
+    /router\.push\(`\/resume-studio\/\$\{wantsOpen\}`\)/.test(dashboard),
+    'the deferred navigation never happens'
+  )
+  // A conflict and an exhausted failure are terminal until the applicant acts,
+  // so waiting on them would leave the click permanently dead.
+  assert.ok(
+    /save\.status === 'conflict' \|\| save\.status === 'failed'/.test(dashboard),
+    'a stuck save would block the click forever with no way out'
+  )
+})
+
+test('a modified click is left to the browser', () => {
+  const open = openResumeBody(code(DASHBOARD))
+  for (const key of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey']) {
+    assert.ok(open.includes(`event.${key}`), `${key} clicks are swallowed, breaking open-in-new-tab`)
+  }
+  assert.ok(open.includes('event.button !== 0'), 'non-primary clicks are swallowed')
+})

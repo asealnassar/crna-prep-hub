@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import {
   DEFAULT_AUTOSAVE, hasUnsavedWork, initialState, nextAction, reduce,
@@ -22,15 +23,17 @@ import SaveIndicator from './SaveIndicator'
  * when to save, what to do about a conflict, what the indicator may claim --
  * lives in that module and is unit-tested there.
  *
- * Titles are the only thing editable here. The section editor is Phase 5, so
- * cards deliberately do not link to /resume-studio/[id] yet: a link to a route
- * that does not exist is worse than no link.
+ * Titles are the only thing editable here; a card's title opens the Studio at
+ * /resume-studio/[id]. That navigation is deferred while a rename is still
+ * settling -- see `openResume` -- because a soft navigation does not fire
+ * `beforeunload` and unmounting cancels the pending save.
  */
 
 const ENDPOINT = '/api/resume-v2/draft'
 
 export default function DashboardClient({ tier }: { tier: string }) {
   const { sidebarCollapsed } = useSidebarCollapsed()
+  const router = useRouter()
 
   const [resumes, setResumes] = useState<ResumeSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -43,6 +46,9 @@ export default function DashboardClient({ tier }: { tier: string }) {
   const [draftTitle, setDraftTitle] = useState('')
   const [save, setSave] = useState<AutosaveState>(() => initialState(1))
   const [wantsExit, setWantsExit] = useState(false)
+  /** A resume to open once the rename in progress has landed. Same shape as
+   *  `wantsExit`: state the intent, let the save decide when it happens. */
+  const [wantsOpen, setWantsOpen] = useState<string | null>(null)
   /** Bumped by a timer so the driver re-evaluates when a wait expires. */
   const [tick, setTick] = useState(0)
 
@@ -157,6 +163,22 @@ export default function DashboardClient({ tier }: { tier: string }) {
     }
   }, [wantsExit, save])
 
+  /** Open a resume only once the rename it interrupted has landed. */
+  useEffect(() => {
+    if (wantsOpen === null) return
+    // `nextAction` treats both of these as idle: they are terminal until the
+    // applicant acts, so waiting for them would leave the click dead forever.
+    // Say so and let go of the navigation rather than discarding the title.
+    if (save.status === 'conflict' || save.status === 'failed') {
+      setWantsOpen(null)
+      setError('That title has not been saved yet. Sort that out first, then open the resume.')
+      return
+    }
+    if (hasUnsavedWork(save)) return
+    setWantsOpen(null)
+    router.push(`/resume-studio/${wantsOpen}`)
+  }, [wantsOpen, save, router])
+
   // --- not losing work ----------------------------------------------------
 
   useEffect(() => {
@@ -200,6 +222,25 @@ export default function DashboardClient({ tier }: { tier: string }) {
   const finishRename = () => {
     setSave((s) => reduce(s, { type: 'flush', at: Date.now() }))
     setWantsExit(true)
+  }
+
+  /**
+   * Opening a card. The plain link handles the ordinary case; this only steps
+   * in while a rename is still settling, and then it forces the save and waits
+   * for the server rather than trusting that blur-then-click got the request
+   * away before the unmount cancelled it.
+   */
+  const openResume = (resume: ResumeSummary, event: React.MouseEvent<HTMLAnchorElement>) => {
+    // Never swallow a modified click: those are the browser's own "open in a
+    // new tab/window", and this component is not the one unmounting for them.
+    if (
+      event.defaultPrevented || event.button !== 0 ||
+      event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+    ) return
+    if (!hasUnsavedWork(saveRef.current)) return
+    event.preventDefault()
+    finishRename()
+    setWantsOpen(resume.id)
   }
 
   // --- one-shot commands --------------------------------------------------
@@ -257,6 +298,7 @@ export default function DashboardClient({ tier }: { tier: string }) {
           />
         ) : null
       }
+      onOpen={(event) => openResume(resume, event)}
       onStartRename={() => startRename(resume)}
       onTitleChange={changeTitle}
       onFinishRename={finishRename}
