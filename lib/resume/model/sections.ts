@@ -19,7 +19,7 @@ import type {
   ResumeSectionV2, SectionOfType,
 } from './types.ts'
 
-/** Default headings. `label` overrides these per resume. */
+/** Default headings. `label` overrides these per resume, unless the heading is fixed. */
 export const SECTION_HEADINGS: Record<ResumeSectionType, string> = {
   summary: 'Professional Summary',
   education: 'Education',
@@ -38,7 +38,17 @@ export const SECTION_HEADINGS: Record<ResumeSectionType, string> = {
   custom: 'Additional Information',
 }
 
+/**
+ * Section types whose heading never changes. A label stored on one of these --
+ * saved before the heading was fixed, or sent by an editor that predates the
+ * rule -- stays in its row and is ignored everywhere a heading is shown.
+ */
+export function hasFixedHeading(type: ResumeSectionType): boolean {
+  return type === 'summary'
+}
+
 export function headingFor(section: ResumeSectionV2): string {
+  if (hasFixedHeading(section.type)) return SECTION_HEADINGS[section.type]
   if (section.label && section.label.trim() !== '') return section.label.trim()
   if (section.type === 'custom' && section.heading.trim() !== '') return section.heading.trim()
   return SECTION_HEADINGS[section.type]

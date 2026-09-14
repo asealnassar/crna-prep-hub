@@ -131,6 +131,11 @@ test('a custom label overrides the default heading', () => {
   assert.equal(blockFor(section)?.heading, 'ICU Experience')
 })
 
+test('a stored label never replaces the Professional Summary heading', () => {
+  const section = { ...populated('summary'), label: 'About Me' } as ResumeSectionV2
+  assert.equal(blockFor(section)?.heading, 'Professional Summary')
+})
+
 // ----------------------------------------- hidden and empty omitted
 
 test('a hidden section is omitted even when it has content', () => {

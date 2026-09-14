@@ -97,6 +97,17 @@ test('a visible but empty section is named, and costs proportionally', () => {
   assert.ok(section.improvements.some((i) => /hide/i.test(i)), 'hiding is not offered as a fix')
 })
 
+test('a stored summary label never names the summary in Strength feedback', () => {
+  // The heading that prints is fixed, so naming the section by a label that
+  // appears nowhere on the resume would send the applicant looking for it.
+  const labelled = createSection('summary', 'sm', { label: 'About Me' }) as ResumeSectionV2
+  const resume = base([labelled, position(['Managed vasoactive drips.'])])
+  const section = find(scoreDeterministic(resume), 'section-completeness')
+  assert.ok(section.weaknesses.some((w) => /empty/i.test(w)), 'the empty summary was not reported')
+  const said = [...section.strengths, ...section.weaknesses, ...section.improvements].join(' ')
+  assert.equal(said.includes('About Me'), false, 'Strength named a heading that prints nowhere')
+})
+
 test('a HIDDEN empty section costs nothing — hiding is a legitimate choice', () => {
   const hidden = { ...createSection('awards', 'aw'), visible: false } as ResumeSectionV2
   const results = scoreDeterministic(base([summary('Something.'), hidden]))

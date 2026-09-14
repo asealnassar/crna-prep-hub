@@ -1,6 +1,6 @@
 'use client'
 
-import { headingFor } from '@/lib/resume/model/sections'
+import { hasFixedHeading, headingFor } from '@/lib/resume/model/sections'
 import type { ResumeSectionV2 } from '@/lib/resume/model/types'
 import type { StudioPatch } from '@/lib/resume/studio/patch'
 import SectionEditor from '../sections/SectionEditor'
@@ -88,34 +88,38 @@ export default function SectionCard({
 
       {open && (
         <div id={panelId} className="px-3 pb-4 space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="block text-xs font-semibold text-indigo-200 mb-1" htmlFor={`label-${section.id}`}>
-                Heading on the resume
-              </label>
-              <input
-                id={`label-${section.id}`}
-                className="w-full bg-white/10 border border-white/25 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                value={section.label ?? ''}
-                placeholder={heading}
-                onChange={(e) => emit({ op: 'section-label', sectionId: section.id, label: e.target.value || null })}
-              />
-            </div>
-            {section.type === 'custom' && (
+          {/* A fixed heading has no controls. Hidden rather than disabled: the card
+              title above already shows the heading that prints. */}
+          {!hasFixedHeading(section.type) && (
+            <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label className="block text-xs font-semibold text-indigo-200 mb-1" htmlFor={`heading-${section.id}`}>
-                  Section name
+                <label className="block text-xs font-semibold text-indigo-200 mb-1" htmlFor={`label-${section.id}`}>
+                  Heading on the resume
                 </label>
                 <input
-                  id={`heading-${section.id}`}
+                  id={`label-${section.id}`}
                   className="w-full bg-white/10 border border-white/25 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                  value={section.heading}
-                  placeholder="Languages"
-                  onChange={(e) => emit({ op: 'section-heading', sectionId: section.id, value: e.target.value })}
+                  value={section.label ?? ''}
+                  placeholder={heading}
+                  onChange={(e) => emit({ op: 'section-label', sectionId: section.id, label: e.target.value || null })}
                 />
               </div>
-            )}
-          </div>
+              {section.type === 'custom' && (
+                <div>
+                  <label className="block text-xs font-semibold text-indigo-200 mb-1" htmlFor={`heading-${section.id}`}>
+                    Section name
+                  </label>
+                  <input
+                    id={`heading-${section.id}`}
+                    className="w-full bg-white/10 border border-white/25 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    value={section.heading}
+                    placeholder="Languages"
+                    onChange={(e) => emit({ op: 'section-heading', sectionId: section.id, value: e.target.value })}
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           <SectionEditor section={section} resumeId={resumeId} newId={newId} emit={emit} />
         </div>

@@ -260,3 +260,12 @@ test('parsing is pure and mutates nothing', () => {
   parseRubric(raw, rubricEligibility(populated()))
   assert.equal(JSON.stringify(raw), before)
 })
+
+// -------------------------------------------------------- fixed headings
+
+test('the writing review sees the fixed summary heading, never a stored label', () => {
+  const labelled = { ...summary('Six years in a medical ICU.'), label: 'About Me' } as ResumeSectionV2
+  const { user } = buildRubricPrompt(resumeWith([labelled, clinical()]))
+  assert.ok(user.includes('## Professional Summary'), 'the model was not shown the heading that prints')
+  assert.equal(user.includes('About Me'), false, 'the model was shown a heading that prints nowhere')
+})

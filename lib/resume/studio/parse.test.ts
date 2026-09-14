@@ -188,6 +188,22 @@ test('a label may be cleared to null but not set to a non-string', () => {
   assert.equal(parsePatch({ op: 'section-label', sectionId: SEC, label: 42 }, education), null)
 })
 
+test('a label for a fixed-heading section still parses, so a whole save is not refused', () => {
+  // Deliberately permissive. The patch does nothing when applied, but one
+  // unparseable edit refuses the entire run -- and a tab opened before the
+  // heading was locked sends this alongside the summary text it is saving.
+  const summary = asType('summary')
+  assert.deepEqual(
+    parsePatch({ op: 'section-label', sectionId: SEC, label: 'About Me' }, summary),
+    { op: 'section-label', sectionId: SEC, label: 'About Me' }
+  )
+  const run = parsePatches([
+    { op: 'section-label', sectionId: SEC, label: 'About Me' },
+    { op: 'summary', sectionId: SEC, value: 'Six years in a medical ICU.' },
+  ], summary)
+  assert.equal(run.ok, true, 'a stale editor would lose the summary text saved beside its label')
+})
+
 test('extra keys on a patch are dropped, not carried through', () => {
   const patch = parsePatch(
     { op: 'contact', field: 'city', value: 'Newark', user_id: 'someone', revision: 999 },

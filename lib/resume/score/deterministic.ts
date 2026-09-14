@@ -13,7 +13,7 @@
  */
 
 import { planDocument } from '../document/plan.ts'
-import { isSectionEmpty } from '../model/sections.ts'
+import { hasFixedHeading, isSectionEmpty } from '../model/sections.ts'
 import { isBlankAuthoredText } from '../model/authoredText.ts'
 import type { AuthoredText } from '../model/authoredText.ts'
 import { isUsableDate, rangeOrder } from '../model/dates.ts'
@@ -75,7 +75,10 @@ function sectionCompleteness(resume: ResumeV2): CategoryResult {
 }
 
 function headingOf(section: ResumeSectionV2): string {
-  return section.label ?? (section.type === 'custom' ? section.heading || 'custom' : section.type.replace(/_/g, ' '))
+  // A fixed heading ignores a stored label here too: naming a section by a
+  // label that prints nowhere would send the applicant looking for it.
+  const label = hasFixedHeading(section.type) ? null : section.label
+  return label ?? (section.type === 'custom' ? section.heading || 'custom' : section.type.replace(/_/g, ' '))
 }
 
 // ---------------------------------------------------------------------------

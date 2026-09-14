@@ -1,5 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { applyPatch, applyPatches, addableSectionTypes } from './patch.ts'
 import type { StudioPatch } from './patch.ts'
 import { descriptorFor, blankEntry, listKeyFor } from './fields.ts'
@@ -350,6 +352,81 @@ test('a section label overrides the heading and clears back to the default', () 
 
   const cleared = apply(resume, { op: 'section-label', sectionId, label: null })
   assert.notEqual(planDocument(cleared).blocks[0].heading, 'ICU Experience')
+})
+
+test('a Professional Summary cannot be relabelled: the patch changes nothing', () => {
+  const before = base(['summary'])
+  const sectionId = before.sections[0].id
+  const after = apply(before, { op: 'section-label', sectionId, label: 'About Me' })
+  assert.equal(after, before, 'the resume was rewritten for a heading that cannot change')
+})
+
+test('a stale editor sending a summary label still saves the summary text beside it', () => {
+  // A tab opened before the heading was locked still shows the input. Its label
+  // edit has to vanish without taking the rest of that save down with it.
+  const before = base(['summary'])
+  const sectionId = before.sections[0].id
+  const after = apply(before,
+    { op: 'section-label', sectionId, label: 'About Me' },
+    { op: 'summary', sectionId, value: 'Six years in a medical ICU.' })
+
+  assert.equal(after.sections[0].label, null, 'the label was written')
+  assert.equal(planDocument(after).blocks[0].heading, 'Professional Summary')
+  assert.ok(
+    textOf(planDocument(after)).join(' ').includes('Six years in a medical ICU.'),
+    'the summary text was lost'
+  )
+})
+
+// ------------------------------------------------ the editor, as source
+
+/**
+ * There is no DOM runner, so the editor is checked as source -- the approach
+ * ai/coverage.test.ts already takes with SectionEditor. Comments are stripped
+ * first, so prose about the heading can never satisfy an assertion about code.
+ */
+function sectionCardCode(): string {
+  const file = fileURLToPath(
+    new URL('../../../app/resume-studio/components/studio/SectionCard.tsx', import.meta.url)
+  )
+  return readFileSync(file, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+}
+
+const occurrences = (text: string, needle: string) => text.split(needle).length - 1
+const HEADING_GATE = '{!hasFixedHeading(section.type) && ('
+
+test('the heading editor is hidden, not disabled, for a fixed-heading section', () => {
+  const card = sectionCardCode()
+  assert.match(
+    card, /import \{[^}]*\bhasFixedHeading\b[^}]*\} from '@\/lib\/resume\/model\/sections'/,
+    'the gate must use the model rule, not a local copy of it'
+  )
+
+  const gate = card.indexOf(HEADING_GATE)
+  const editor = card.indexOf('<SectionEditor')
+  assert.ok(gate > 0, 'the heading editor is not gated on hasFixedHeading')
+  assert.ok(editor > gate, 'the content editor should follow the gated heading controls')
+
+  const gated = card.slice(gate, editor)
+  for (const needle of ['Heading on the resume', "op: 'section-label'"]) {
+    assert.equal(occurrences(card, needle), 1, `"${needle}" appears more than once, so a copy may be ungated`)
+    assert.ok(gated.includes(needle), `"${needle}" is outside the gate`)
+  }
+  assert.equal(/\bdisabled\b/.test(gated), false, 'the heading editor is disabled rather than hidden')
+})
+
+test('the summary content editor is not swallowed by the heading gate', () => {
+  // A misplaced closing paren-brace would hide the whole editor for a summary:
+  // a fixed heading over a summary nobody can edit. The gate has closed before
+  // the content editor exactly when the braces between the two balance.
+  const card = sectionCardCode()
+  const gate = card.indexOf(HEADING_GATE)
+  const editor = card.indexOf('<SectionEditor')
+  assert.ok(gate > 0 && editor > gate, 'no heading gate precedes the content editor')
+  const between = card.slice(gate, editor)
+  assert.equal(occurrences(between, '{'), occurrences(between, '}'), 'SectionEditor sits inside the heading gate')
 })
 
 // --------------------------------------------------------------- safety

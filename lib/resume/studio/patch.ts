@@ -28,7 +28,7 @@ import {
   acceptProposal, createAuthoredText, editSource, propose, restoreOriginal, restoreUserText,
 } from '../model/authoredText.ts'
 import type { AuthoredText } from '../model/authoredText.ts'
-import { createClinicalPosition } from '../model/sections.ts'
+import { createClinicalPosition, hasFixedHeading } from '../model/sections.ts'
 import { parseResumeDate, parseResumeDateRange } from '../model/dates.ts'
 import { SECTION_TYPES } from '../model/types.ts'
 import type {
@@ -301,7 +301,9 @@ export function applyPatch(resume: ResumeV2, patch: StudioPatch, ctx: PatchConte
 
     case 'section-label': {
       const section = findSection(resume, patch.sectionId)
-      if (!section) return resume
+      // A fixed heading is not relabelled. Nothing rather than a refusal, so an
+      // editor that predates the rule still saves the rest of what it sent.
+      if (!section || hasFixedHeading(section.type)) return resume
       const label = patch.label === null ? null : patch.label.trim() || null
       return replaceIfChanged(resume, { ...section, label } as ResumeSectionV2, now)
     }

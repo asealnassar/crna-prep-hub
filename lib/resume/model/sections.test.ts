@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   SECTION_HEADINGS, authoredTextsIn, createBullet, createClinicalPosition,
-  createSection, dropBlankBullets, emptyGpa, headingFor, isSectionEmpty,
+  createSection, dropBlankBullets, emptyGpa, hasFixedHeading, headingFor, isSectionEmpty,
   isSectionRenderable, normalizeMultiline, normalizeText, parseGpa,
 } from './sections.ts'
 import { SECTION_TYPES } from './types.ts'
@@ -79,6 +79,28 @@ test('a custom section names itself, and label still wins', () => {
   assert.equal(headingFor(custom), 'Military Service')
   assert.equal(headingFor({ ...custom, label: 'Service' }), 'Service')
   assert.equal(headingFor(createSection('custom', 'x2')), SECTION_HEADINGS.custom)
+})
+
+test('the Professional Summary heading is fixed, whatever label is stored', () => {
+  // A label saved before the heading was locked stays on the section. It is
+  // ignored, not erased: the heading is decided without consulting it.
+  for (const label of ['About Me', 'PROFILE', '  Summary of Qualifications  ', '   ', '']) {
+    assert.equal(
+      headingFor(createSection('summary', 's1', { label })), 'Professional Summary', JSON.stringify(label)
+    )
+  }
+})
+
+test('every other section type still takes its label', () => {
+  // Filtered on the literal rather than on the rule itself, so a rule that
+  // grew by mistake cannot quietly shrink the list this checks.
+  for (const type of SECTION_TYPES.filter((t) => t !== 'summary')) {
+    assert.equal(headingFor(createSection(type, 'x', { label: 'Renamed' })), 'Renamed', type)
+  }
+})
+
+test('only the Professional Summary has a fixed heading, for now', () => {
+  for (const type of SECTION_TYPES) assert.equal(hasFixedHeading(type), type === 'summary', type)
 })
 
 test('Leadership, Quality Improvement and Research are separate sections', () => {

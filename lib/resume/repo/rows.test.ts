@@ -7,6 +7,7 @@ import type { ResumeRow, SectionRow } from './rows.ts'
 import { DEFAULT_SECTION_TYPES, addSection, createResume, moveSection, setContact, setSectionVisibility } from '../model/resume.ts'
 import { createSection } from '../model/sections.ts'
 import { createAuthoredText } from '../model/authoredText.ts'
+import { planDocument } from '../document/plan.ts'
 import type { ResumeSectionV2, ResumeV2 } from '../model/types.ts'
 
 const NOW = '2026-09-10T10:00:00.000Z'
@@ -171,6 +172,38 @@ test('a custom label round-trips, and its absence stays null', () => {
   const custom = back.sections.find((s) => s.id === 'c1')!
   assert.equal(custom.label, 'Military Service')
   assert.equal(back.sections[0].label, null, 'unlabelled stays null, not empty string')
+})
+
+/** A stored resume whose summary row carries a label saved before the heading was fixed. */
+function storedWithSummaryLabel(label: string): { row: ResumeRow; sections: SectionRow[] } {
+  const resume = newResume()
+  const written: ResumeV2 = {
+    ...resume,
+    sections: resume.sections.map((s) =>
+      s.type === 'summary'
+        ? ({ ...s, text: createAuthoredText('Six years in a medical ICU.') } as ResumeSectionV2)
+        : s
+    ),
+  }
+  const { row, sections } = storedBy(written)
+  return { row, sections: sections.map((r) => (r.section_type === 'summary' ? { ...r, label } : r)) }
+}
+
+test('a stored summary label is read back and written back untouched', () => {
+  // Fixing the heading is a rendering rule, not a data migration: the value
+  // stays in the row, and saving the resume sends it back exactly as it was.
+  const { row, sections } = storedWithSummaryLabel('About Me')
+  const { resume: back } = fromRows(row, sections)
+  assert.equal(back!.sections.find((s) => s.type === 'summary')!.label, 'About Me', 'dropped on read')
+  const saved = toSavePayload(back!).sections.find((r) => r.section_type === 'summary')!
+  assert.equal(saved.label, 'About Me', 'rewritten on save')
+})
+
+test('a stored summary label never reaches the rendered heading', () => {
+  const { row, sections } = storedWithSummaryLabel('About Me')
+  const { resume: back } = fromRows(row, sections)
+  const block = planDocument(back!).blocks.find((b) => b.sectionType === 'summary')
+  assert.equal(block?.heading, 'Professional Summary')
 })
 
 // -------------------------------------------------- generation separation
