@@ -133,7 +133,7 @@ const UNIT_TYPES = [
  * make the verifier useless. What is here asserts a ROLE.
  */
 const RESPONSIBILITY_CLAIMS = [
-  'charge nurse', 'charge role', 'as charge', 'precepted', 'preceptor',
+  'charge nurse', 'charge rn', 'charge role', 'as charge', 'precepted', 'preceptor',
   'precepting', 'chaired', 'chairperson', 'committee', 'unit council',
   'supervised', 'led a team', 'team lead', 'shift lead', 'management role',
   'trained staff', 'mentored',
@@ -148,6 +148,173 @@ const WRITTEN_NUMBERS = [
 ]
 
 // ---------------------------------------------------------------------------
+// Claims whose support is bound to the claim
+// ---------------------------------------------------------------------------
+
+/**
+ * Written cardinals with one exact value. Vague quantities ("several",
+ * "dozens") have no value and are absent on purpose.
+ */
+const CARDINALS: Readonly<Record<string, string>> = {
+  one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7',
+  eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12', thirteen: '13',
+  fourteen: '14', fifteen: '15', sixteen: '16', seventeen: '17', eighteen: '18',
+  nineteen: '19', twenty: '20', thirty: '30', forty: '40', fifty: '50',
+}
+
+/** Qualifiers written before a span's number: "more than 4 years". */
+const QUALIFIERS_BEFORE = [
+  'no more than', 'no less than', 'more than', 'less than', 'fewer than',
+  'in excess of', 'upwards of', 'at least', 'at most', 'close to', 'up to',
+  'over', 'above', 'under', 'below', 'nearly', 'almost', 'about',
+  'approximately', 'around', 'roughly',
+]
+
+/**
+ * How much a qualifier claims. Synonyms share a strength and nothing else
+ * does: "over" stands in for "more than", never for "nearly", and no qualifier
+ * stands in for its own absence.
+ */
+const STRENGTH: Readonly<Record<string, string>> = {
+  'more than': 'more-than', over: 'more-than', above: 'more-than',
+  'in excess of': 'more-than', 'upwards of': 'more-than', '>': 'more-than',
+  'at least': 'at-least', 'no less than': 'at-least', '≥': 'at-least', '+': 'at-least',
+  'or more': 'at-least', 'or longer': 'at-least', 'and counting': 'at-least',
+  nearly: 'nearly', almost: 'nearly', 'close to': 'nearly',
+  about: 'about', approximately: 'about', around: 'about', roughly: 'about',
+  '~': 'about', 'or so': 'about',
+  'less than': 'less-than', 'fewer than': 'less-than', under: 'less-than',
+  below: 'less-than', '<': 'less-than',
+  'up to': 'up-to', 'at most': 'up-to', 'no more than': 'up-to', '≤': 'up-to',
+}
+
+const alternatives = (phrases: readonly string[]): string =>
+  phrases.map((phrase) => phrase.replace(/ /g, String.raw`\s+`)).join('|')
+
+/**
+ * A span of experience: a count of years, in digits or words, with whatever
+ * qualifies it.
+ *
+ * A span is supported only by a supplied span of the same value AND the same
+ * strength, and its number supports nothing else. "Four years" supports
+ * "4 years"; it does not support "more than 4 years", "4 patients", "4%" or
+ * "4:1", and the 4 of "4 West" does not support "4 years".
+ *
+ * Deliberately not a span: a compound or range ("twenty-four years", "2-4
+ * years" are refused rather than misread as 4), an age ("4 years old"), a time
+ * ago ("4 years ago"), or a hyphenated adjective ("a four-year program").
+ */
+const SPAN = new RegExp(
+  String.raw`(?<![a-z0-9])` +
+  String.raw`(?:(?<intensity>just|well|slightly|far|a\s+little|a\s+bit)\s+(?=(?:${alternatives(QUALIFIERS_BEFORE)})\s))?` +
+  String.raw`(?:(?<before>${alternatives(QUALIFIERS_BEFORE)})\s+|(?<symbol>[~<>≤≥])\s*)?` +
+  String.raw`(?<![a-z0-9.])(?<![a-z0-9]\s*[-–/]\s*)` +
+  String.raw`(?<value>\d+(?:\.\d+)?|${Object.keys(CARDINALS).join('|')})` +
+  String.raw`(?:\s*(?<plus>\+)|\s+(?<inner>or\s+(?:more|longer|so)))?` +
+  String.raw`\s*(?:years?|yrs?)\b` +
+  String.raw`(?:\s+(?<after>or\s+(?:more|longer|so)|and\s+counting))?` +
+  String.raw`(?![-\s]*(?:old|ago)\b)`,
+  'gi'
+)
+
+/** A span as quoted back: the claim, plus the words that make it recognisable. */
+const SPAN_CLAIM = new RegExp(SPAN.source + String.raw`(?:\s+of\s+\w+)?`, 'gi')
+
+/**
+ * What a span claims, as "intensity|strength|value": "|more-than|4" for both
+ * "more than four years" and "over 4 years". Two spans agree only when all
+ * three parts do.
+ */
+function spanKey(groups: Readonly<Record<string, string | undefined>>): string {
+  const plain = (part: string) => part.toLowerCase().replace(/\s+/g, ' ')
+  const strength = [groups.before ?? groups.symbol, groups.plus, groups.inner, groups.after]
+    .filter((part): part is string => part !== undefined)
+    .map((part) => STRENGTH[plain(part)] ?? plain(part))
+    .sort()
+    .join('+')
+  const value = plain(groups.value ?? '')
+  const intensity = groups.intensity ? plain(groups.intensity) : ''
+  return [intensity, strength, CARDINALS[value] ?? String(Number(value))].join('|')
+}
+
+/** Blanks every span, keeping length so indices still quote what was written. */
+function blankSpans(text: string): string {
+  return text.replace(SPAN, (span) => '§'.repeat(span.length))
+}
+
+/** Detected phrasings that claim the charge-nurse role. */
+const CHARGE_CLAIMS: ReadonlySet<string> = new Set(['charge nurse', 'charge rn', 'charge role', 'as charge'])
+
+/** A job title that IS the role, as the whole field: "Charge Nurse", "Relief Charge RN". */
+const CHARGE_TITLE = /^(?:relief\s+)?charge\s+(?:nurse|rn)$/i
+
+/**
+ * Prose that asserts the charge role, as whole phrases: "charge nurse
+ * experience", "served as charge (nurse)", "as charge nurse", and their RN
+ * forms. "Discharge nurse" never matches, and neither does a mention: "worked
+ * alongside the charge nurse", "such as charge nurse rounds".
+ */
+const CHARGE_ASSERTION = new RegExp(
+  String.raw`(?<![a-z0-9])(?:` +
+  String.raw`(?<!such\s+as\s+(?:an?\s+)?)charge\s+(?:nurse|rn)\s+experience` +
+  String.raw`|served\s+as\s+(?:an?\s+)?charge(?:\s+(?:nurse|rn))?` +
+  String.raw`|(?<!such\s+)as\s+(?:an?\s+)?charge\s+(?:nurse|rn)` +
+  String.raw`)(?![a-z0-9])`,
+  'gi'
+)
+
+/** "haven't", "hasn’t", "didnt": a straight, curly or missing apostrophe. */
+const CONTRACTED_NEGATION =
+  String.raw`(?:is|are|was|were|have|has|had|do|does|did|wo|ca|could|would|should|must|need)n['’]?t`
+
+/**
+ * Earlier in the same sentence, these stop a phrase asserting the role:
+ * negation, and wanting the role rather than having it. They err towards
+ * refusing -- a listed word voids the phrase even where it negated something
+ * else in the sentence.
+ */
+const VOIDS_BEFORE = new RegExp(
+  String.raw`(?<![a-z0-9])(?:no|not(?!\s+only\b)|never|without|cannot|lack(?:s|ed|ing)?|${CONTRACTED_NEGATION}` +
+  String.raw`|yet\s+to|seek(?:s|ing)?|sought|aspir(?:e|es|ed|ing)|hop(?:e|es|ed|ing)|want(?:s|ed|ing)?` +
+  String.raw`|would\s+like|plan(?:s|ned|ning)?\s+to|goal|towards?|pursu(?:e|es|ing)|gain(?:ing)?|looking\s+to)(?![a-z0-9])`,
+  'i'
+)
+
+/** Later in the same sentence: "Charge nurse experience: none", "(not yet)", "…that I haven't had". */
+const VOIDS_AFTER = new RegExp(
+  String.raw`[:\-–—(]\s*(?:no|not|never|pending)(?![a-z0-9])` +
+  String.raw`|(?<![a-z0-9])(?:none|n\/a|${CONTRACTED_NEGATION})(?![a-z0-9])`,
+  'i'
+)
+
+/** Where a sentence ends. A full stop counts only before whitespace, so "4.5" does not end one. */
+const SENTENCE_END = /[;!?•\n]|\.(?=\s|$)/g
+
+/**
+ * Whether the charge-nurse role is clearly asserted: the checkbox, a job title
+ * that is exactly the role, or an asserting phrase that no negation reaches.
+ */
+function assertsChargeRole(sheet: FactSheet, sources: readonly string[]): boolean {
+  if (sheet.facts.some((fact) => fact.kind === 'charge_role')) return true
+  if (sheet.facts.some((fact) => fact.kind === 'role' && CHARGE_TITLE.test(fact.value.trim()))) return true
+  return sources.some((source) => assertedInProse(source))
+}
+
+function assertedInProse(source: string): boolean {
+  const ends = Array.from(source.matchAll(SENTENCE_END), (end) => end.index ?? 0)
+  for (const match of source.matchAll(CHARGE_ASSERTION)) {
+    const start = match.index ?? 0
+    const finish = start + match[0].length
+    const sentenceStart = Math.max(0, ...ends.filter((at) => at < start).map((at) => at + 1))
+    const sentenceEnd = Math.min(source.length, ...ends.filter((at) => at >= finish))
+    if (VOIDS_BEFORE.test(source.slice(sentenceStart, start))) continue
+    if (VOIDS_AFTER.test(source.slice(finish, sentenceEnd))) continue
+    return true
+  }
+  return false
+}
+
+// ---------------------------------------------------------------------------
 // Support
 // ---------------------------------------------------------------------------
 
@@ -156,8 +323,17 @@ function normalise(value: string): string {
 }
 
 function buildSupport(sheet: FactSheet, options: VerifyOptions): Support {
-  const text = normalise([...sheet.facts.map((f) => f.value), options.existingText ?? ''].join(' • '))
-  return { text, numbers: supportedNumbers(text) }
+  const sources = [...sheet.facts.map((f) => f.value), options.existingText ?? '']
+  const text = normalise(sources.join(' • '))
+  const outsideSpans = blankSpans(text)
+  return {
+    text,
+    // A span's digits support that span and nothing else.
+    numbers: supportedNumbers(outsideSpans),
+    spans: new Set(Array.from(text.matchAll(SPAN), (span) => spanKey(span.groups ?? {}))),
+    outsideSpans,
+    chargeRole: assertsChargeRole(sheet, sources),
+  }
 }
 
 /**
@@ -170,7 +346,14 @@ function buildSupport(sheet: FactSheet, options: VerifyOptions): Support {
  */
 interface Support {
   readonly text: string
+  /** Numeric tokens from everything OUTSIDE a span of experience. */
   readonly numbers: ReadonlySet<string>
+  /** What each supplied span claims, as keyed by `spanKey`. */
+  readonly spans: ReadonlySet<string>
+  /** `text` with its spans blanked. */
+  readonly outsideSpans: string
+  /** Whether the charge-nurse role is clearly asserted. */
+  readonly chargeRole: boolean
 }
 
 /** A number as claimed: "2:1", "24", "3.5". Separators kept, spacing dropped. */
@@ -224,13 +407,36 @@ function supportsPhrase(support: Support, phrase: string): boolean {
   return stem.length >= 4 && support.text.includes(stem)
 }
 
+/** A span is supported by a supplied span that claims exactly the same, and by nothing else. */
+function supportsSpan(support: Support, token: string): boolean {
+  const span = new RegExp(SPAN.source, 'i').exec(token)
+  return span !== null && support.spans.has(spanKey(span.groups ?? {}))
+}
+
+/**
+ * A written number outside a span needs the same whole word, outside a span, in
+ * what was supplied. Not a digit, and not part of another word: "ten" is not in
+ * "intensive", and the "four" of "four years" counts years, not patients.
+ * Vague quantities keep the literal rule they had.
+ */
+function supportsWrittenNumber(support: Support, token: string): boolean {
+  const word = normalise(token)
+  if (CARDINALS[word] === undefined) return supportsPhrase(support, token)
+  return new RegExp(String.raw`(?<![a-z0-9])${word}(?![a-z0-9])`).test(support.outsideSpans)
+}
+
+/** A charge-role claim needs the role clearly asserted. Other responsibilities are unchanged. */
+function supportsResponsibility(support: Support, phrase: string): boolean {
+  if (CHARGE_CLAIMS.has(normalise(phrase))) return support.chargeRole
+  return supportsPhrase(support, phrase)
+}
+
 // ---------------------------------------------------------------------------
 // Detectors
 // ---------------------------------------------------------------------------
 
 const RATIO = /\b\d+\s*:\s*\d+\b/g
 const PERCENT = /\b\d+(?:\.\d+)?\s*%/g
-const YEARS_EXPERIENCE = /\b\d+\+?\s*(?:\+\s*)?years?\b(?:\s+of\s+\w+)?/gi
 const YEAR = /\b(?:19|20)\d{2}\b/g
 const NUMBER_WITH_UNIT =
   /\b\d+(?:\.\d+)?\s*-?\s*(?:hours?|hrs?|beds?|patients?|mmhg|mg|mcg|ml|l|days?|weeks?|months?|shifts?|cases?|procedures?|admissions?|codes?|units?)\b/gi
@@ -297,13 +503,13 @@ const DETECTORS: readonly Detector[] = [
   {
     category: 'responsibility',
     find: byVocabulary(RESPONSIBILITY_CLAIMS),
-    supported: supportsPhrase,
+    supported: supportsResponsibility,
     message: (t) => `claims a responsibility you have not recorded: “${t}”.`,
   },
   {
     category: 'experience_span',
-    find: byRegex(YEARS_EXPERIENCE),
-    supported: supportsNumber,
+    find: byRegex(SPAN_CLAIM),
+    supported: supportsSpan,
     message: (t) => `states a span of experience you have not given: “${t}”.`,
   },
   {
@@ -325,7 +531,7 @@ const DETECTORS: readonly Detector[] = [
   {
     category: 'quantity',
     find: byVocabulary(WRITTEN_NUMBERS),
-    supported: supportsPhrase,
+    supported: supportsWrittenNumber,
     message: (t) => `states a quantity you have not given: “${t}”.`,
   },
   {
@@ -359,17 +565,24 @@ export function verifyGrounding(
   const support = buildSupport(sheet, options)
   const violations: Violation[] = []
   const claimed = new Set<string>()
+  // Spans are read from the proposal as written. Every other detector reads it
+  // with the spans blanked, so a span's number is never judged -- or excused --
+  // as a claim of its own.
+  const outsideSpans = blankSpans(text)
 
   for (const detector of DETECTORS) {
-    for (const token of detector.find(text)) {
+    const isSpan = detector.category === 'experience_span'
+    for (const token of detector.find(isSpan ? text : outsideSpans)) {
       const key = normalise(token)
       if (key === '' || claimed.has(key)) continue
       claimed.add(key)
       // "2:1" is one claim, not three. Without this the bare-number sweep
       // reports the 2 and the 1 again, and a single fabrication reads as a
-      // pile of them.
-      for (const part of numericForm(token).split(/[:./]/)) {
-        if (part !== '') claimed.add(part)
+      // pile of them. A span needs no such cover: its number is blanked.
+      if (!isSpan) {
+        for (const part of numericForm(token).split(/[:./]/)) {
+          if (part !== '') claimed.add(part)
+        }
       }
       if (detector.supported(support, token)) continue
       violations.push({

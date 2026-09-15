@@ -1,7 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { describeViolations, summariseRejection, verifyAll, verifyGrounding } from './verify.ts'
-import { factSheet } from '../model/facts.ts'
+import { factSheet, makeFact } from '../model/facts.ts'
+import type { Fact, FactSheet } from '../model/facts.ts'
+import { factSheetForPosition } from './factSheet.ts'
+import { createClinicalPosition } from '../model/sections.ts'
 import { ADVERSARIAL, SUPPLIED_FACTS } from './fixtures/adversarial.ts'
 import { LEGITIMATE } from './fixtures/legitimate.ts'
 import { PROHIBITED_CATEGORIES } from './prompts.ts'
@@ -204,3 +207,226 @@ test('an unquantified claim is NOT caught, and that is a stated limit', () => {
   const result = verifyGrounding('Improved patient satisfaction on the unit.', SHEET)
   assert.equal(result.ok, true, 'if this now fails, the verifier got stricter — check for false positives')
 })
+
+// ================================================ strict years and charge role
+//
+// A span of experience is supported only by a supplied span of the same value
+// and the same strength, and its number supports nothing else. A charge-role
+// claim is supported only where the applicant clearly asserted the role. Every
+// row is a test of its own, so a failure names the exact claim that changed.
+
+const FOUR_WORDS = 'Critical care registered nurse with four years of MICU/CCU experience.'
+const FOUR_DIGITS = 'Critical care registered nurse with 4 years of MICU experience.'
+const UAT_SUMMARY =
+  'Critical care registered nurse with four years of MICU/CCU experience. ' +
+  'Experienced with CRRT, ECMO, arterial lines, and vasoactive infusions. ' +
+  'Charge nurse experience and active participation in code response.'
+
+/** Structured facts, for claims that arrive as fields rather than as prose. */
+const factsOf = (...facts: readonly (readonly [Fact['kind'], string])[]): FactSheet =>
+  factSheet('t/bullets', [facts.map(([kind, value], i) => makeFact(`f:t${i}`, kind, value, `t/${i}`))])
+
+/** The real checkbox fact, so a change to its wording cannot slip past these rows. */
+const CHARGE_FLAG = factSheetForPosition(
+  createClinicalPosition('p1', { employer: 'University Hospital', chargeExperience: true }),
+  'critical_care'
+)
+
+interface Row {
+  /** Prose is the text being improved; a sheet is the facts. */
+  readonly supplied: string | FactSheet
+  readonly proposal: string
+  /** For a rejection: the violation that must be among those reported. */
+  readonly flags?: RegExp
+}
+
+function verdictFor(row: Row) {
+  return typeof row.supplied === 'string'
+    ? verifyGrounding(row.proposal, EMPTY, { existingText: row.supplied })
+    : verifyGrounding(row.proposal, row.supplied)
+}
+
+function labelFor(row: Row): string {
+  const supplied = typeof row.supplied === 'string'
+    ? `"${row.supplied.length > 44 ? `${row.supplied.slice(0, 43)}…` : row.supplied}"`
+    : row.supplied.facts.map((f) => `${f.kind}="${f.value}"`).join(', ')
+  return `"${row.proposal}" from ${supplied}`
+}
+
+function passes(group: string, rows: readonly Row[]): void {
+  for (const row of rows) {
+    test(`${group} — ${labelFor(row)}`, () => {
+      const result = verdictFor(row)
+      const got = result.ok ? '' : result.violations.map((v) => `${v.category}:${v.token}`).join(', ')
+      assert.equal(result.ok, true, `FALSE POSITIVE — ${labelFor(row)} flagged [${got}]`)
+    })
+  }
+}
+
+function rejects(group: string, rows: readonly Row[]): void {
+  for (const row of rows) {
+    test(`${group} — ${labelFor(row)}`, () => {
+      const result = verdictFor(row)
+      assert.equal(result.ok, false, `NOT CAUGHT — ${labelFor(row)}`)
+      if (result.ok || !row.flags) return
+      const tokens = result.violations.map((v) => v.token)
+      assert.ok(
+        tokens.some((token) => row.flags!.test(token)),
+        `${labelFor(row)} was rejected, but not for ${row.flags} — reported [${tokens.join(', ')}]`
+      )
+    })
+  }
+}
+
+// ---------------------------------------------------- years: bound to the claim
+
+passes('years pass', [
+  { supplied: FOUR_WORDS, proposal: 'Critical care RN with 4 years of MICU/CCU experience.' },
+  { supplied: FOUR_WORDS, proposal: 'Brings 4 years of experience in the MICU.' },
+  { supplied: FOUR_WORDS, proposal: 'Critical care RN with four years of MICU/CCU experience.' },
+  { supplied: FOUR_DIGITS, proposal: 'Registered nurse with four years of MICU experience.' },
+  { supplied: FOUR_DIGITS, proposal: 'Brings 4 yrs of MICU experience.' },
+])
+
+passes('UAT summary', [
+  {
+    supplied: UAT_SUMMARY,
+    proposal: 'Critical care RN with 4 years in MICU/CCU, experienced with CRRT, ECMO, arterial lines, and vasoactive infusions; charge nurse and code response team member.',
+  },
+  {
+    supplied: UAT_SUMMARY,
+    proposal: 'Critical care registered nurse with 4 years of MICU/CCU experience, skilled in CRRT, ECMO, arterial lines, and vasoactive infusions, with charge nurse experience and active code response participation.',
+  },
+  {
+    supplied: UAT_SUMMARY,
+    proposal: 'Registered nurse with 4 years of experience in MICU/CCU settings, managing CRRT, ECMO, arterial lines, and vasoactive infusions; experienced as charge nurse and active in code response.',
+  },
+])
+
+rejects('a span supports no other claim', [
+  { supplied: FOUR_WORDS, proposal: 'Cared for 4 patients per shift.', flags: /4 patients/ },
+  { supplied: FOUR_WORDS, proposal: 'Reduced falls by 4%.', flags: /4\s*%/ },
+  { supplied: FOUR_WORDS, proposal: 'Maintained a 4:1 patient ratio.', flags: /4\s*:\s*1/ },
+  { supplied: FOUR_WORDS, proposal: 'Worked 4 shifts a week.', flags: /4 shifts/ },
+  { supplied: FOUR_WORDS, proposal: 'Cared for four patients per shift.', flags: /^four$/i },
+  { supplied: FOUR_DIGITS, proposal: 'Cared for 4 patients per shift.', flags: /4 patients/ },
+  { supplied: FOUR_DIGITS, proposal: 'Reduced falls by 4%.', flags: /4\s*%/ },
+  { supplied: FOUR_DIGITS, proposal: 'Assigned to bed 4 most nights.', flags: /^4$/ },
+  { supplied: FOUR_WORDS, proposal: 'Brings 4 years of MICU experience and covered bed 4.', flags: /^4$/ },
+])
+
+rejects('a span needs a supplied span of the same value', [
+  { supplied: 'Night shift RN on 4 West.', proposal: 'Brings 4 years of nursing experience.', flags: /4 years/ },
+  { supplied: FOUR_WORDS, proposal: 'Brings 6 years of MICU experience.', flags: /6 years/ },
+  { supplied: FOUR_WORDS, proposal: 'Brings six years of MICU experience.', flags: /six/i },
+  { supplied: 'Brings 4.5 years of ICU experience.', proposal: 'Brings 5 years of ICU experience.', flags: /5 years/ },
+  { supplied: 'Brings 4.5 years of ICU experience.', proposal: 'Brings 4 years of ICU experience.', flags: /4 years/ },
+  { supplied: 'One of the busiest ICUs in the state.', proposal: 'Brings one year of ICU experience.', flags: /one year/i },
+  { supplied: 'Intensive care nurse.', proposal: 'Brings ten years of intensive care experience.', flags: /ten years/i },
+  { supplied: 'Brings twenty-four years of nursing experience.', proposal: 'Brings 4 years of nursing experience.', flags: /4 years/ },
+])
+
+rejects('an age, a time ago or a hyphenated duration is not a span', [
+  { supplied: FOUR_WORDS, proposal: 'Cared for a 4-year-old after a near drowning.', flags: /^4$/ },
+  { supplied: FOUR_WORDS, proposal: 'Graduated 4 years ago.', flags: /^4$/ },
+  { supplied: FOUR_WORDS, proposal: 'Four-year MICU/CCU nurse.', flags: /^four$/i },
+])
+
+// ---------------------------------------------------------- years: qualifiers
+
+rejects('a qualifier that was not supplied', [
+  { supplied: FOUR_DIGITS, proposal: 'Brings more than 4 years of MICU experience.', flags: /more than 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings over 4 years of MICU experience.', flags: /over 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings 4+ years of MICU experience.', flags: /4\+ years/ },
+  { supplied: FOUR_DIGITS, proposal: 'Brings nearly 4 years of MICU experience.', flags: /nearly 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings almost 4 years of MICU experience.', flags: /almost 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings at least 4 years of MICU experience.', flags: /at least 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings about 4 years of MICU experience.', flags: /about 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings approximately 4 years of MICU experience.', flags: /approximately 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings ~4 years of MICU experience.', flags: /~4 years/ },
+  { supplied: FOUR_DIGITS, proposal: 'Brings 4 or more years of MICU experience.', flags: /4 or more years/ },
+  { supplied: FOUR_DIGITS, proposal: 'Brings 4 years or more of MICU experience.', flags: /4 years or more/ },
+  { supplied: FOUR_DIGITS, proposal: 'Brings well over 4 years of MICU experience.', flags: /well over 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings less than 4 years of MICU experience.', flags: /less than 4 years/i },
+  { supplied: FOUR_DIGITS, proposal: 'Brings up to 4 years of MICU experience.', flags: /up to 4 years/i },
+  { supplied: FOUR_WORDS, proposal: 'Brings more than 4 years of MICU/CCU experience.', flags: /more than 4 years/i },
+  { supplied: FOUR_WORDS, proposal: 'Brings over four years of MICU/CCU experience.', flags: /over four years/i },
+])
+
+passes('the same qualifier, or its exact synonym', [
+  { supplied: 'Brings more than four years of ICU experience.', proposal: 'Brings more than 4 years of ICU experience.' },
+  { supplied: 'Brings more than four years of ICU experience.', proposal: 'Brings over 4 years of ICU experience.' },
+  { supplied: 'Brings 4+ years of ICU experience.', proposal: 'Brings at least four years of ICU experience.' },
+  { supplied: 'Nearly four years in the MICU.', proposal: 'Nearly 4 years of MICU experience.' },
+  { supplied: 'Nearly four years in the MICU.', proposal: 'Almost 4 years of MICU experience.' },
+])
+
+rejects('a supplied qualifier dropped or swapped', [
+  { supplied: 'Brings more than four years of ICU experience.', proposal: 'Brings 4 years of ICU experience.', flags: /4 years/ },
+  { supplied: 'Nearly four years in the MICU.', proposal: 'Brings 4 years of MICU experience.', flags: /4 years/ },
+  { supplied: 'Brings more than four years of ICU experience.', proposal: 'Brings nearly 4 years of ICU experience.', flags: /nearly 4 years/i },
+  { supplied: 'Brings well over four years of ICU experience.', proposal: 'Brings over 4 years of ICU experience.', flags: /over 4 years/i },
+])
+
+// ---------------------------------------------------------------- charge role
+
+passes('charge role asserted', [
+  { supplied: UAT_SUMMARY, proposal: 'Served as charge nurse in the MICU.' },
+  { supplied: 'Served as charge on nights.', proposal: 'Experienced as charge nurse.' },
+  { supplied: CHARGE_FLAG, proposal: 'Served as charge nurse on nights.' },
+  { supplied: factsOf(['role', 'Charge Nurse']), proposal: 'Served as charge nurse on nights.' },
+  { supplied: factsOf(['role', 'Relief Charge Nurse']), proposal: 'Served as charge nurse on nights.' },
+  { supplied: factsOf(['role', 'Charge Nurse']), proposal: 'Charge nurse on nights.' },
+  { supplied: factsOf(['role', 'Charge RN']), proposal: 'Served as charge RN on nights.' },
+  { supplied: 'As charge RN, coordinated nightly assignments.', proposal: 'Served as charge nurse.' },
+  { supplied: 'Charge RN experience on nights.', proposal: 'Served as charge RN on nights.' },
+  { supplied: 'Served as charge nurse on nights.', proposal: 'Charge RN on nights.' },
+])
+
+rejects('charge role only mentioned, or never stated', [
+  { supplied: 'Taught discharge nurse education classes.', proposal: 'Worked as a charge nurse on nights.', flags: /charge nurse/i },
+  { supplied: 'Worked alongside the charge nurse on nights.', proposal: 'Served as charge nurse on nights.', flags: /charge/i },
+  { supplied: 'Worked alongside the charge nurse on nights.', proposal: 'Charge nurse on nights.', flags: /charge nurse/i },
+  { supplied: 'Joined unit huddles such as charge nurse rounds.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: FOUR_WORDS, proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: FOUR_WORDS, proposal: 'Charge RN on nights.', flags: /charge rn/i },
+  { supplied: factsOf(['role', 'Staff Nurse']), proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: factsOf(['role', 'Assistant to the Charge Nurse']), proposal: 'Served as charge nurse.', flags: /charge/i },
+])
+
+rejects('charge role negated or only hoped for', [
+  { supplied: "Haven't served as charge nurse yet.", proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'Hasn’t worked as charge nurse.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: "Hasn't worked as charge.", proposal: 'Served as charge.', flags: /as charge/i },
+  { supplied: 'Havent served as charge RN.', proposal: 'Served as charge RN.', flags: /charge/i },
+  { supplied: "Didn't serve as charge nurse on nights.", proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'I have not served as charge nurse.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'Never served as charge RN.', proposal: 'Served as charge RN.', flags: /charge/i },
+  { supplied: 'No charge nurse experience yet.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'Charge nurse experience: none.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'Charge nurse experience: not yet.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'Seeking charge nurse experience.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'Hoping to gain charge nurse experience.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'Would like to serve as charge nurse.', proposal: 'Served as charge nurse.', flags: /charge/i },
+  { supplied: 'Yet to serve as charge nurse.', proposal: 'Served as charge nurse.', flags: /charge/i },
+])
+
+passes('negation is read within its own sentence', [
+  { supplied: 'Not yet CCRN certified. Served as charge nurse on nights.', proposal: 'Served as charge nurse.' },
+  { supplied: 'Not only precepted new graduates but also served as charge nurse.', proposal: 'Served as charge nurse.' },
+  { supplied: 'Served as charge nurse without incident.', proposal: 'Served as charge nurse.' },
+])
+
+// ------------------------------------------------------ numbers outside a span
+
+// Unchanged on purpose. A number outside a span of experience is still
+// supported by the same number anywhere it was supplied, so "24-bed" still
+// supports "24 hours". Binding these to their unit is a separate, logged audit;
+// when that lands, the second and third rows here are expected to flip.
+passes('numbers outside a span, unchanged for now', [
+  { supplied: factsOf(['unit_type', '24-bed medical ICU']), proposal: 'Held a full assignment on a 24-bed unit.' },
+  { supplied: factsOf(['unit_type', '24-bed medical ICU']), proposal: 'Worked 24 hours straight during a surge.' },
+  { supplied: 'Cared for up to 3 patients on nights.', proposal: 'Covered 3 shifts a week.' },
+  { supplied: factsOf(['date_range', 'Mar 2021 – Present']), proposal: 'At the hospital since Mar 2021.' },
+  { supplied: 'Cared for four patients per shift.', proposal: 'Cared for four patients each shift.' },
+])
