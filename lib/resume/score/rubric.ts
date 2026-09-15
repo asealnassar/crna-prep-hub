@@ -35,23 +35,16 @@ const WRITING_CATEGORY_IDS = categoriesOf('writing-quality').map((c) => c.id)
 export type Eligibility = Readonly<Record<CategoryId, string | null>>
 
 /**
- * What there is to judge.
+ * What may be left out of the writing half.
  *
- * Each reason is written for the applicant, because it appears in place of a
- * score. "Not assessed — you have not recorded any leadership experience" is a
- * neutral fact; "0 out of 8" would be an accusation.
+ * Only Leadership framing, and only when no leadership, precepting or committee
+ * work is recorded -- the one category whose subject is optional, where "not
+ * assessed" is a neutral fact rather than an accusation. Every other category
+ * stays in the denominator however little is written, and scores low through
+ * the evidence ceilings in evidence.ts: "not written yet" is not "not applicable".
  */
 export function rubricEligibility(resume: ResumeV2): Eligibility {
   const visible = resume.sections.filter((s) => s.visible)
-  const plan = planDocument(resume)
-
-  const prose = plan.blocks.some((block) =>
-    block.kind === 'prose' ? block.paragraphs.length > 0 : block.entries.some((e) => e.detail.length > 0)
-  )
-
-  const clinical = visible.some(
-    (s) => (s.type === 'critical_care' || s.type === 'other_clinical') && s.positions.length > 0
-  )
 
   const leadership = visible.some((s) => {
     if (s.type === 'leadership') return s.entries.length > 0
@@ -65,26 +58,20 @@ export function rubricEligibility(resume: ResumeV2): Eligibility {
     return false
   })
 
-  const noProse = 'You have not written any bullets or descriptions yet.'
-
   return {
     'section-completeness': null,
     'contact-completeness': null,
     'date-integrity': null,
     'content-hygiene': null,
     'length-and-fit': null,
-    'clinical-specificity': prose ? null : noProse,
-    'accomplishment-focus': prose ? null : noProse,
-    'critical-care-presentation': clinical
-      ? null
-      : 'You have not added a critical care or other clinical position yet.',
+    'clinical-specificity': null,
+    'accomplishment-focus': null,
+    'critical-care-presentation': null,
     'leadership-framing': leadership
       ? null
       : 'You have not recorded any leadership, precepting or committee work. This is not counted against you.',
-    'clarity-and-tone': prose ? null : noProse,
-    'organisation-readability': plan.blocks.length >= 2
-      ? null
-      : 'There is only one section on the resume, so there is no ordering to judge yet.',
+    'clarity-and-tone': null,
+    'organisation-readability': null,
   }
 }
 
@@ -116,8 +103,10 @@ export function rubricSystemPrompt(): string {
     '  would help, say so as an improvement, not as a deduction.',
     '- invent anything about the applicant that is not in the resume below',
     '',
-    'If a category has nothing legitimate to judge, return it with "notAssessed"',
-    'and a short reason instead of a score. Never score such a category zero.',
+    'Score only what is written. A category with little or nothing written cannot',
+    'score highly: give it a low score and say exactly what to add. Only a category',
+    'marked NOT ASSESSABLE below may be returned as "notAssessed" with a short',
+    'reason instead of a score. Never score such a category zero.',
     '',
     'For every category you DO score, return all four of: score, strengths,',
     'weaknesses, improvements. Improvements must be specific and actionable —',

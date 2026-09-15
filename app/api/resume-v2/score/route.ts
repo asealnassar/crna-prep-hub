@@ -12,6 +12,7 @@ import { scoreDeterministic } from '@/lib/resume/score/deterministic'
 import { buildRubricPrompt, parseRubric, rubricEligibility, rubricUnavailable } from '@/lib/resume/score/rubric'
 import { compose, isStale } from '@/lib/resume/score/compose'
 import { STRENGTH_DISCLAIMER } from '@/lib/resume/score/language'
+import { applyWritingCeilings, measureEvidence } from '@/lib/resume/score/evidence'
 
 /**
  * CRNA Resume Strength for one resume.
@@ -123,7 +124,10 @@ export async function POST(request: NextRequest) {
         response_format: { type: 'json_object' },
       })
       const parsed = parseRubric(response.choices[0]?.message?.content ?? '', eligibility)
-      writing = [...parsed.categories]
+      // The reviewer judges quality; the code decides how much there is to
+      // judge. A summary and a job title cannot score like a finished resume
+      // however generously they are read (lib/resume/score/evidence.ts).
+      writing = applyWritingCeilings(parsed.categories, measureEvidence(resume))
       if (parsed.droppedLines > 0) {
         // Visible in the logs before it is visible to a user.
         console.warn('resume-v2 score: dropped', parsed.droppedLines, 'line(s) making admissions claims')

@@ -14,9 +14,12 @@
  * shadowing hours, leadership, research or publications. That is not a promise
  * kept by the prompt; it is structural. The deterministic half contains no rule
  * that reads any of them, the rubric half is scoped to presentation, and a
- * category with nothing legitimate to assess is EXCLUDED from its sub-score's
- * denominator rather than scored zero. A resume with none of the optional
- * experiences above can still reach 100.
+ * category whose subject is optional and absent -- leadership nobody recorded,
+ * dates nobody entered -- is EXCLUDED from its sub-score's denominator rather
+ * than scored zero. A resume with none of the optional experiences above can
+ * still reach 100. What is NOT excluded is a category that simply has not been
+ * written yet: that scores low, so a near-empty resume cannot score like a
+ * finished one (evidence.ts).
  */
 
 export type SubScoreId = 'data-quality' | 'writing-quality'
@@ -63,7 +66,7 @@ export const CATEGORIES: readonly CategoryDefinition[] = [
     label: 'Section completeness',
     maxPoints: 10,
     measures:
-      'Whether the sections you chose to include actually have content. It never asks why you do not have a section you did not add.',
+      'Whether your professional summary and clinical experience are written out, and whether a section you left visible is empty. Optional sections are never required.',
   },
   {
     id: 'contact-completeness',
@@ -118,7 +121,7 @@ export const CATEGORIES: readonly CategoryDefinition[] = [
     label: 'Critical-care presentation',
     maxPoints: 12,
     measures:
-      'How clearly your critical-care work reads to someone outside your unit. It measures the presentation, never the amount.',
+      'How clearly your critical-care work reads to someone outside your unit. Your critical-care role needs to be written out for this to score; having more experience is never what it rewards.',
   },
   {
     id: 'leadership-framing',

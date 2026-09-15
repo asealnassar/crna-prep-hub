@@ -68,16 +68,23 @@ test('leadership becomes assessable once any of its forms exists', () => {
   }
 })
 
-test('critical-care presentation is not assessed without a clinical position', () => {
-  const eligibility = rubricEligibility(resumeWith([summary('A summary with words in it.')]))
-  assert.ok(eligibility['critical-care-presentation'])
+test('critical-care presentation is always assessed — what is written decides its ceiling', () => {
+  // Without a critical-care role it scores zero through the evidence ceiling
+  // (see evidence.test.ts); it no longer drops out of the denominator.
+  assert.equal(rubricEligibility(resumeWith([summary('A summary with words in it.')]))['critical-care-presentation'], null)
   assert.equal(rubricEligibility(populated())['critical-care-presentation'], null)
 })
 
-test('nothing written means nothing to judge', () => {
+test('only Leadership can be excluded for being absent; unwritten categories stay in', () => {
+  // Nothing written is not the same as not applicable. An empty resume keeps
+  // every other writing category in the denominator, where the evidence
+  // ceilings score it zero.
   const empty = createResume({ id: 'r', userId: 'u', title: 'T', sectionIds: ids(20), now: NOW })
   const eligibility = rubricEligibility(empty)
-  for (const id of WRITING) assert.ok(eligibility[id], `${id} was marked assessable on an empty resume`)
+  assert.ok(eligibility['leadership-framing'], 'leadership was assessable with none recorded')
+  for (const id of WRITING.filter((w) => w !== 'leadership-framing')) {
+    assert.equal(eligibility[id], null, `${id} was excluded on an empty resume`)
+  }
 })
 
 // ---------------------------------------------- eligibility overrules
@@ -127,6 +134,12 @@ test('the prompt forbids every penalty the design forbids', () => {
 test('the prompt judges presentation, not the applicant', () => {
   const system = rubricSystemPrompt()
   assert.match(system, /small community ICU can score full marks/i)
+})
+
+test('the prompt tells the reviewer to score only what is written', () => {
+  assert.match(rubricSystemPrompt(), /only what is written/i)
+  const { user } = buildRubricPrompt(populated())
+  assert.equal(/never the amount/i.test(user), false, 'the reviewer is still told to ignore how much is written')
 })
 
 test('the prompt shows the resume as it would print, and no contact details', () => {

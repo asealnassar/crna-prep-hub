@@ -176,3 +176,11 @@ test('a stale result stays on screen and is labelled', () => {
 test('the panel waits for edits to save before scoring the stored resume', () => {
   assert.match(PANEL, /disabled=\{working \|\| hasUnsavedWork\}/)
 })
+
+test('writing scores are capped by what is written before they are composed', () => {
+  const parsed = BODY.indexOf('parseRubric(')
+  const capped = BODY.indexOf('applyWritingCeilings(')
+  const composed = BODY.indexOf('compose(')
+  assert.ok(parsed > 0 && capped > parsed, 'the reviewer’s scores are not capped by the evidence')
+  assert.ok(composed > capped, 'the score is composed before the ceilings apply')
+})

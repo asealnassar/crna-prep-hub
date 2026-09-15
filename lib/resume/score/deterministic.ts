@@ -21,6 +21,7 @@ import type { ResumeDate, ResumeDateRange } from '../model/dates.ts'
 import type { ResumeSectionV2, ResumeV2 } from '../model/types.ts'
 import { category } from './types.ts'
 import type { CategoryResult } from './types.ts'
+import { measureEvidence } from './evidence.ts'
 
 /** Everything the deterministic half produces. */
 export function scoreDeterministic(resume: ResumeV2): CategoryResult[] {
@@ -38,13 +39,13 @@ export function scoreDeterministic(resume: ResumeV2): CategoryResult[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Of the sections the applicant CHOSE to include and left visible, how many
- * actually say something.
+ * Whether the core of the resume is written out: a professional summary, worth
+ * up to 3, and developed clinical experience, worth up to 7 -- less a point for
+ * each section left visible but empty.
  *
- * The distinction that matters: this never asks why a resume has no Research
- * section. It asks whether the Research section someone added is still empty.
- * An empty visible section prints a heading over nothing, which is a defect a
- * reader notices and the applicant can fix in seconds.
+ * What it never asks for is any optional section. Only the summary and the
+ * clinical bullets earn points here, and the only thing that costs a point is a
+ * section the applicant chose to show and left empty.
  */
 function sectionCompleteness(resume: ResumeV2): CategoryResult {
   const visible = resume.sections.filter((s) => s.visible)
@@ -55,22 +56,46 @@ function sectionCompleteness(resume: ResumeV2): CategoryResult {
     })
   }
 
+  const evidence = measureEvidence(resume)
+  const words = evidence.summaryWords
+  const summaryPoints = words >= 25 ? 3 : words >= 12 ? 2 : words > 0 ? 1 : 0
+  const bullets = evidence.substantiveRoleBullets
+  const clinicalPoints = 7 * Math.min(1, bullets / 3)
   const empty = visible.filter((s) => isSectionEmpty(s))
-  const filled = visible.length - empty.length
-  const earned = (filled / visible.length) * 10
 
-  if (empty.length === 0) {
-    return category('section-completeness', earned, {
-      strengths: [`All ${visible.length} of your visible sections have content.`],
-    })
+  const strengths: string[] = []
+  const weaknesses: string[] = []
+  const improvements: string[] = []
+
+  if (summaryPoints === 3) {
+    strengths.push('Your professional summary is written out.')
+  } else if (summaryPoints === 0) {
+    weaknesses.push('There is no professional summary yet.')
+    improvements.push('Write two or three sentences for your professional summary about who you are as a critical-care nurse.')
+  } else {
+    weaknesses.push('Your professional summary is very short.')
+    improvements.push('Expand your professional summary to two or three sentences.')
   }
 
-  return category('section-completeness', earned, {
-    strengths: filled > 0 ? [`${filled} of your ${visible.length} visible sections have content.`] : [],
-    weaknesses: empty.map((s) => `The ${headingOf(s)} section is visible but empty, so it prints as a heading over nothing.`),
-    improvements: [
-      'Fill in the empty sections, or hide them — a hidden section keeps its data and does not print.',
-    ],
+  if (bullets >= 3) {
+    strengths.push(`Your clinical experience has ${bullets} developed bullets.`)
+  } else if (bullets === 0) {
+    weaknesses.push(evidence.clinicalPositions > 0
+      ? 'Your clinical experience lists a role but no developed bullets, so there is little for a reader to go on.'
+      : 'There is no clinical experience written out yet.')
+    improvements.push('Add three or more bullets under your most recent clinical role describing what you handled and were trusted with.')
+  } else {
+    weaknesses.push(`Your clinical experience has ${bullets} developed ${bullets === 1 ? 'bullet' : 'bullets'}; three or more give a reader a clear picture.`)
+    improvements.push('Add bullets under your clinical roles describing what you handled and were trusted with.')
+  }
+
+  if (empty.length > 0) {
+    weaknesses.push(...empty.map((s) => `The ${headingOf(s)} section is visible but empty, so it prints as a heading over nothing.`))
+    improvements.push('Fill in the empty sections, or hide them — a hidden section keeps its data and does not print.')
+  }
+
+  return category('section-completeness', Math.max(0, summaryPoints + clinicalPoints - empty.length), {
+    strengths, weaknesses, improvements,
   })
 }
 
@@ -239,6 +264,9 @@ function collectDates(resume: ResumeV2): DatedThing[] {
 // Content hygiene -- 8
 // ---------------------------------------------------------------------------
 
+/** Hygiene is judged across this many written lines; a resume with fewer earns it in proportion. */
+const HYGIENE_FULL_LINES = 4
+
 /**
  * The small defects that make a resume look careless.
  *
@@ -249,8 +277,9 @@ function collectDates(resume: ResumeV2): DatedThing[] {
 function contentHygiene(resume: ResumeV2): CategoryResult {
   const lines = collectProse(resume)
   if (lines.length === 0) {
-    return category('content-hygiene', null, {
-      notAssessed: 'You have not written any bullets or descriptions yet.',
+    return category('content-hygiene', 0, {
+      weaknesses: ['Nothing is written yet, so there is nothing to check.'],
+      improvements: ['Write your summary and role bullets; hygiene is checked across everything you write.'],
     })
   }
 
@@ -270,12 +299,15 @@ function contentHygiene(resume: ResumeV2): CategoryResult {
   const duplicates = [...seen.values()].filter((entry) => entry.count > 1)
 
   const faults = blanks.length + duplicates.reduce((n, d) => n + d.count - 1, 0)
-  const earned = Math.max(0, (1 - faults / lines.length)) * 8
+  const earned = Math.max(0, (1 - faults / lines.length)) * 8 * Math.min(1, lines.length / HYGIENE_FULL_LINES)
 
   const clean = faults === 0
   return category('content-hygiene', earned, {
     strengths: clean ? [`All ${lines.length} of your written lines have content and none repeat.`] : [],
     weaknesses: [
+      ...(lines.length < HYGIENE_FULL_LINES
+        ? [`Only ${lines.length} ${lines.length === 1 ? 'line is' : 'lines are'} written so far, so there is little to check yet.`]
+        : []),
       ...(blanks.length > 0
         ? [`${blanks.length} empty ${blanks.length === 1 ? 'line prints' : 'lines print'} as a bullet with nothing after it.`]
         : []),
@@ -366,8 +398,9 @@ const CHARS_PER_LINE = 95
 function lengthAndFit(resume: ResumeV2): CategoryResult {
   const plan = planDocument(resume)
   if (plan.blocks.length === 0) {
-    return category('length-and-fit', null, {
-      notAssessed: 'There is nothing on the resume yet to measure.',
+    return category('length-and-fit', 0, {
+      weaknesses: ['There is nothing on the resume yet to measure.'],
+      improvements: ['Add your summary and clinical experience; length is judged once there is something to print.'],
     })
   }
 
@@ -387,6 +420,12 @@ function lengthAndFit(resume: ResumeV2): CategoryResult {
 
   const pages = lines / LINES_PER_PAGE
 
+  if (pages < 0.25) {
+    return category('length-and-fit', 1, {
+      weaknesses: ['The resume fills well under a quarter of a page, so it reads as an outline rather than a resume.'],
+      improvements: ['Add detail to the work you have already listed — what you handled, and what you were trusted with.'],
+    })
+  }
   if (pages < 0.45) {
     return category('length-and-fit', 3, {
       weaknesses: ['The resume fills well under half a page, so it reads as thin next to a full one.'],

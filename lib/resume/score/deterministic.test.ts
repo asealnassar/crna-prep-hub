@@ -58,7 +58,7 @@ function realisticResume(extra: readonly ResumeSectionV2[] = []): ResumeV2 {
   } as ResumeSectionV2
 
   return base([
-    summary('Critical care nurse with sustained experience in a high-acuity medical ICU, known for early recognition of deterioration and calm escalation under pressure.'),
+    summary('Critical care nurse with sustained experience in a high-acuity medical ICU, known for early recognition of deterioration and calm escalation under pressure on busy night shifts.'),
     education,
     jobs,
     ...extra,
@@ -82,17 +82,51 @@ const position = (bullets: string[], over = {}) =>
 
 // ------------------------------------------------- section completeness
 
-test('a resume whose visible sections all have content scores full marks', () => {
-  const results = scoreDeterministic(base([summary('Six years in a medical ICU.')]))
-  const section = find(results, 'section-completeness')
+test('a written summary and developed clinical experience score full marks', () => {
+  const section = find(scoreDeterministic(realisticResume()), 'section-completeness')
   assert.equal(section.earned, 10)
   assert.ok(section.strengths.length > 0)
 })
 
-test('a visible but empty section is named, and costs proportionally', () => {
-  const resume = base([summary('Something.'), createSection('awards', 'aw') as ResumeSectionV2])
+test('the summary is worth up to three points by how much it says', () => {
+  const words = (n: number) => Array.from({ length: n }, () => 'word').join(' ')
+  for (const [n, points] of [[1, 1], [11, 1], [12, 2], [24, 2], [25, 3], [60, 3]] as const) {
+    assert.equal(find(scoreDeterministic(base([summary(words(n))])), 'section-completeness').earned, points, `${n} words`)
+  }
+})
+
+test('clinical experience is worth up to seven points by its developed bullets', () => {
+  const line = (i: number) => `Managed ventilated patients on vasoactive infusions during shift ${i}.`
+  const at = (bullets: string[]) => find(scoreDeterministic(base([position(bullets)])), 'section-completeness').earned as number
+  assert.equal(at([]), 0)
+  assert.equal(at(['Charge.', 'Vents.']), 0, 'short lines counted as developed experience')
+  assert.ok(Math.abs(at([line(1)]) - 7 / 3) < 0.01)
+  assert.equal(at([line(1), line(2), line(3)]), 7)
+  assert.equal(at([line(1), line(2), line(3), line(4), line(5)]), 7)
+})
+
+test('a job title with no bullets is not developed experience, and says what to add', () => {
+  const section = find(scoreDeterministic(base([position([])])), 'section-completeness')
+  assert.equal(section.earned, 0)
+  assert.ok(section.improvements.some((i) => /bullet/i.test(i)))
+})
+
+test('education, licensure and every optional section are never required', () => {
+  const developed = base([
+    summary('Critical care nurse with sustained experience in a high-acuity medical ICU, known for early recognition of deterioration and calm escalation under pressure on busy nights.'),
+    position([
+      'Managed ventilated patients on vasoactive infusions overnight.',
+      'Initiated and troubleshot CRRT circuits with the nephrology team.',
+      'Titrated sedation during proning for severe ARDS on nights.',
+    ]),
+  ])
+  assert.equal(find(scoreDeterministic(developed), 'section-completeness').earned, 10)
+})
+
+test('a visible but empty section is named, and costs a point', () => {
+  const resume = realisticResume([createSection('awards', 'aw') as ResumeSectionV2])
   const section = find(scoreDeterministic(resume), 'section-completeness')
-  assert.equal(section.earned, 5)
+  assert.equal(section.earned, 9)
   assert.ok(section.weaknesses.some((w) => /empty/i.test(w)))
   assert.ok(section.improvements.some((i) => /hide/i.test(i)), 'hiding is not offered as a fix')
 })
@@ -110,17 +144,15 @@ test('a stored summary label never names the summary in Strength feedback', () =
 
 test('a HIDDEN empty section costs nothing — hiding is a legitimate choice', () => {
   const hidden = { ...createSection('awards', 'aw'), visible: false } as ResumeSectionV2
-  const results = scoreDeterministic(base([summary('Something.'), hidden]))
-  assert.equal(find(results, 'section-completeness').earned, 10)
+  assert.equal(find(scoreDeterministic(realisticResume([hidden])), 'section-completeness').earned, 10)
 })
 
-test('not having a section is never counted — only leaving one empty is', () => {
-  // Two resumes: one with three filled sections, one with a single filled
-  // section. Neither is penalised for what it does not contain.
-  const many = base([summary('A.'), position(['B.']), { ...createSection('awards', 'aw'), awards: [{ id: 'a', title: 'DAISY', issuer: '', awarded: MAR_2021, detail: createAuthoredText('') }] } as ResumeSectionV2])
-  const one = base([summary('A.')])
-  assert.equal(find(scoreDeterministic(many), 'section-completeness').earned, 10)
-  assert.equal(find(scoreDeterministic(one), 'section-completeness').earned, 10)
+test('an optional section you have not added is never counted — only leaving one empty is', () => {
+  // The same developed resume, with and without a filled optional section,
+  // scores the same. What it does not contain is never held against it.
+  const award = { ...createSection('awards', 'aw'), awards: [{ id: 'a', title: 'DAISY', issuer: '', awarded: MAR_2021, detail: createAuthoredText('') }] } as ResumeSectionV2
+  assert.equal(find(scoreDeterministic(realisticResume([award])), 'section-completeness').earned, 10)
+  assert.equal(find(scoreDeterministic(realisticResume()), 'section-completeness').earned, 10)
 })
 
 // ------------------------------------------------- contact completeness
@@ -191,7 +223,7 @@ test('a missing optional date is not a defect', () => {
 // ------------------------------------------------------ content hygiene
 
 test('clean prose scores full marks', () => {
-  const result = find(scoreDeterministic(base([position(['One.', 'Two.'])])), 'content-hygiene')
+  const result = find(scoreDeterministic(base([position(['One.', 'Two.', 'Three.', 'Four.'])])), 'content-hygiene')
   assert.equal(result.earned, 8)
 })
 
@@ -207,9 +239,17 @@ test('a repeated line is caught and quoted back', () => {
   assert.ok(result.weaknesses.some((w) => /Same line/.test(w)))
 })
 
-test('hygiene is not assessed before anything is written', () => {
+test('hygiene scores zero before anything is written, rather than leaving the denominator', () => {
   const result = find(scoreDeterministic(base([createSection('summary', 'sm') as ResumeSectionV2])), 'content-hygiene')
-  assert.equal(result.earned, null)
+  assert.equal(result.earned, 0)
+  assert.ok(result.weaknesses.length + result.improvements.length > 0, 'a zero was not explained')
+})
+
+test('clean writing earns hygiene in proportion to how much is written, up to four lines', () => {
+  const at = (lines: string[]) => find(scoreDeterministic(base([position(lines)])), 'content-hygiene').earned
+  assert.equal(at(['One.']), 2)
+  assert.equal(at(['One.', 'Two.']), 4)
+  assert.equal(at(['One.', 'Two.', 'Three.', 'Four.', 'Five.']), 8)
 })
 
 // -------------------------------------------------------- length and fit
@@ -248,8 +288,16 @@ test('a long resume is told to tighten, never to remove experience', () => {
   assert.doesNotMatch(advice, /remove (a|your) (job|role|position)/i, 'it told them to delete experience')
 })
 
-test('length is not assessed on an empty resume', () => {
-  assert.equal(find(scoreDeterministic(base()), 'length-and-fit').earned, null)
+test('an empty resume scores zero for length, rather than leaving the denominator', () => {
+  const result = find(scoreDeterministic(base()), 'length-and-fit')
+  assert.equal(result.earned, 0)
+  assert.ok(result.weaknesses.length + result.improvements.length > 0, 'a zero was not explained')
+})
+
+test('under a quarter page scores 1, and under half a page scores 3', () => {
+  assert.equal(find(scoreDeterministic(base([summary('Nurse.')])), 'length-and-fit').earned, 1)
+  const longer = Array.from({ length: 300 }, () => 'word').join(' ')
+  assert.equal(find(scoreDeterministic(base([summary(longer)])), 'length-and-fit').earned, 3)
 })
 
 // ------------------------------------------------- the no-penalty rule
@@ -257,9 +305,9 @@ test('length is not assessed on an empty resume', () => {
 test('no deterministic rule reads a GPA, a certification or an hour count', () => {
   // Asserted against the source, because the guarantee is the absence of a rule
   // rather than the behaviour of one.
-  const source = readFileSync(
-    fileURLToPath(new URL('./deterministic.ts', import.meta.url)), 'utf8'
-  )
+  const source = ['./deterministic.ts', './evidence.ts']
+    .map((file) => readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8'))
+    .join('\n')
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   // Narrow on purpose. The layer DOES read certification dates, because date
   // integrity checks the dates someone entered -- that is not a credential
