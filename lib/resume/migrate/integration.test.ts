@@ -565,8 +565,8 @@ test('create_resume_v2 called directly cannot exceed the tier cap', { skip: skip
 
   const created: string[] = []
   try {
-    // Free is 1 and Premium is 3, so four attempts must hit the ceiling for
-    // either. The refusal is a result, not an exception.
+    // Free and Premium are both 1, so four attempts hit the ceiling either
+    // way. The refusal is a result, not an exception.
     let refused = false
     for (let i = 0; i < 4; i++) {
       const id = randomUUID()
@@ -1005,7 +1005,9 @@ test('Free starting at 0 ends with exactly 1 after concurrent creates', { skip: 
   }
 })
 
-test('Premium starting at 2 ends with exactly 3 after concurrent creates', { skip: skipRls }, async () => {
+test('Premium starting at 0 ends with exactly 1 after concurrent creates', { skip: skipRls }, async () => {
+  // Migration 009: Premium is one resume, the same as Free. This used to seed
+  // two and expect three.
   const service = await client(serviceKey!)
   const ownerA = await ownerOf(service, jwtA!)
   const asA = await client(anonKey!, jwtA!)
@@ -1014,25 +1016,94 @@ test('Premium starting at 2 ends with exactly 3 after concurrent creates', { ski
   await service.from('resumes').delete().eq('user_id', ownerA).eq('schema_version', 2)
   await setTier(service, ownerA, 'premium')
 
-  const seeded = [resumeRow(ownerA), resumeRow(ownerA)]
   let created: string[] = []
   try {
-    // Seeded as service_role, which is exempt from the cap.
-    assert.equal((await service.from('resumes').insert(seeded)).error, null)
-    assert.equal(await v2Count(service, ownerA), 2)
+    assert.equal(await v2Count(service, ownerA), 0, 'the account did not start empty')
 
     const race = await raceCreates(asA, 5)
     created = race.created
 
     assert.equal(
-      await v2Count(service, ownerA), 3,
-      'concurrent creates let a Premium account exceed three resumes'
+      await v2Count(service, ownerA), 1,
+      'concurrent creates let a Premium account exceed one resume'
     )
     assert.equal(race.created.length, 1, 'only one of the five should have been admitted')
+    assert.equal(race.refused, 4)
   } finally {
-    await service.from('resumes').delete().in('id', [...seeded.map((r) => r.id), ...created])
+    if (created.length > 0) await service.from('resumes').delete().in('id', created)
     await setTier(service, ownerA, original ?? 'free')
   }
+})
+
+/** One create through the exposed RPC. Returns the id when it stuck. */
+async function createOne(db: Client, title: string): Promise<{ ok: boolean; id: string; reason?: string }> {
+  const id = randomUUID()
+  const { data } = await db.rpc('create_resume_v2', {
+    p_resume_id: id, p_resume: { title, template_id: 'classic' }, p_sections: [],
+  })
+  const result = data as { ok?: boolean; reason?: string } | null
+  return { ok: result?.ok === true, id, reason: result?.reason }
+}
+
+/**
+ * The cap, one create at a time, for the two tiers that hold one resume.
+ *
+ * The race above proves the lock; this proves the RULE, which is the thing
+ * migration 009 changed. Both tiers are asserted the same way because after
+ * 009 they are the same number -- if Premium ever drifts back to three, the
+ * second create here succeeds and this fails.
+ */
+for (const tier of ['free', 'premium'] as const) {
+  test(`${tier} may hold one resume and is refused the second`, { skip: skipRls }, async () => {
+    const service = await client(serviceKey!)
+    const ownerA = await ownerOf(service, jwtA!)
+    const asA = await client(anonKey!, jwtA!)
+    const original = (await profileOf(service, ownerA)).subscription_tier
+
+    await service.from('resumes').delete().eq('user_id', ownerA).eq('schema_version', 2)
+    await setTier(service, ownerA, tier)
+
+    const created: string[] = []
+    try {
+      const first = await createOne(asA, `${tier} first`)
+      assert.equal(first.ok, true, `${tier} was refused its first resume`)
+      created.push(first.id)
+
+      const second = await createOne(asA, `${tier} second`)
+      assert.equal(second.ok, false, `${tier} was allowed a second resume`)
+      assert.equal(second.reason, 'not-permitted')
+      if (second.ok) created.push(second.id)
+      assert.equal(await v2Count(service, ownerA), 1)
+
+      // Deleting the one they hold makes room again: the cap is a count, not a
+      // one-time grant.
+      assert.equal((await asA.from('resumes').delete().eq('id', first.id)).error, null)
+      assert.equal(await v2Count(service, ownerA), 0, 'the applicant could not delete their own resume')
+
+      const again = await createOne(asA, `${tier} replacement`)
+      assert.equal(again.ok, true, `${tier} could not create a resume after deleting theirs`)
+      created.push(again.id)
+      assert.equal(await v2Count(service, ownerA), 1)
+    } finally {
+      if (created.length > 0) await service.from('resumes').delete().in('id', created)
+      await setTier(service, ownerA, original ?? 'free')
+    }
+  })
+}
+
+test('the cap function itself reads 1 / 1 / unlimited', { skip }, async () => {
+  // Read straight from the database, so a stale 007 is caught even if no
+  // create path happens to be exercised.
+  const service = await client(serviceKey!)
+  const { data, error } = await service.rpc('resume_v2_tier_cap', { p_tier: 'premium' })
+  if (error) {
+    // The helper is executable by nobody by design; service_role may still be
+    // refused. A direct read is a convenience, not the assertion that matters.
+    const message = error instanceof Error ? error.message : JSON.stringify(error)
+    assert.match(message, /permission|does not exist/i)
+    return
+  }
+  assert.equal(data, 1, 'the database still caps Premium above one resume')
 })
 
 test('Ultimate concurrent creates are all allowed', { skip: skipUltimate }, async () => {

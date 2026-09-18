@@ -21,7 +21,7 @@
  */
 
 import {
-  addSection, findSection, moveSection, removeSection, reorderSections,
+  addSection, findSection, lockResumeOutput, moveSection, removeSection, reorderSections,
   replaceSection, setContact, setSectionVisibility, setTemplate, setTitle,
 } from '../model/resume.ts'
 import {
@@ -36,6 +36,8 @@ import type {
   ResumeTemplate, ResumeV2,
 } from '../model/types.ts'
 import { blankEntry, fieldFor, listKeyFor } from './fields.ts'
+import { dismissImportItem, placeImportItem } from './importItems.ts'
+import type { ImportPlacement } from './importItems.ts'
 
 /** The contact fields a patch may touch. Nothing else on the header exists. */
 export const CONTACT_FIELDS = [
@@ -72,6 +74,18 @@ export type StudioPatch =
   | { readonly op: 'section-visible'; readonly sectionId: string; readonly visible: boolean }
   | { readonly op: 'section-label'; readonly sectionId: string; readonly label: string | null }
   | { readonly op: 'section-heading'; readonly sectionId: string; readonly value: string }
+  /**
+   * Which column a section is drawn in on a two-column template.
+   *
+   * `null` gives it back to the template's own default. Layout only: it changes
+   * where a section is drawn and never what the resume says, nor the order a
+   * parser reads it in.
+   */
+  | {
+      readonly op: 'section-column'
+      readonly sectionId: string
+      readonly column: 'sidebar' | 'main' | null
+    }
   | { readonly op: 'section-move'; readonly sectionId: string; readonly toIndex: number }
   | { readonly op: 'section-reorder'; readonly orderedIds: readonly string[] }
   | { readonly op: 'summary'; readonly sectionId: string; readonly value: string }
@@ -166,6 +180,25 @@ export type StudioPatch =
       readonly index: number
       readonly value: string
     }
+  /**
+   * An item from "Imported items to review" moved to where the applicant
+   * chose. `sectionId`/`entryId` name the review list and the item; see
+   * lib/resume/studio/importItems.ts.
+   */
+  | {
+      readonly op: 'import-item-place'
+      readonly sectionId: string
+      readonly entryId: string
+      readonly target: ImportPlacement
+    }
+  /** An item removed from "Imported items to review", because the applicant said so. */
+  | { readonly op: 'import-item-dismiss'; readonly sectionId: string; readonly entryId: string }
+  /**
+   * The applicant tried to download, saw the upgrade modal, and chose "Not
+   * now". Nothing else sends this: not opening the Studio, not editing, and
+   * not closing that modal any other way.
+   */
+  | { readonly op: 'output-lock' }
 
 export interface PatchContext {
   /** ISO timestamp. Injected so applying a patch is deterministic in tests. */
@@ -304,7 +337,12 @@ export function applyPatch(resume: ResumeV2, patch: StudioPatch, ctx: PatchConte
       // A fixed heading is not relabelled. Nothing rather than a refusal, so an
       // editor that predates the rule still saves the rest of what it sent.
       if (!section || hasFixedHeading(section.type)) return resume
-      const label = patch.label === null ? null : patch.label.trim() || null
+      // STORED AS TYPED. Trimming here ran on every keystroke, so the space
+      // between two words was deleted the moment it was typed: "Critical Care
+      // Experience" could only ever be saved as "CriticalCareExperience".
+      // All-whitespace is still no heading, and `headingFor` trims the ends
+      // when a heading is read, so nothing prints with a stray edge space.
+      const label = patch.label === null || patch.label.trim() === '' ? null : patch.label
       return replaceIfChanged(resume, { ...section, label } as ResumeSectionV2, now)
     }
 
@@ -312,6 +350,21 @@ export function applyPatch(resume: ResumeV2, patch: StudioPatch, ctx: PatchConte
       const section = findSection(resume, patch.sectionId)
       if (!section || section.type !== 'custom') return resume
       return replaceIfChanged(resume, { ...section, heading: patch.value }, now)
+    }
+
+    case 'section-column': {
+      const section = findSection(resume, patch.sectionId)
+      if (!section) return resume
+      // Cleared back to the default by REMOVING the field rather than storing a
+      // third value: "the template decides" is exactly what its absence means,
+      // and a record that has never been touched must stay indistinguishable
+      // from one that was moved and moved back.
+      const { modernColumn: _current, ...rest } = section as ResumeSectionV2 & Record<string, unknown>
+      const next = patch.column === null ? rest : { ...rest, modernColumn: patch.column }
+      // A layout edit is an edit: the revision bumps, and a stored Resume
+      // Strength for the previous revision is stale, exactly as it is after a
+      // reorder. See replaceIfChanged.
+      return replaceIfChanged(resume, next as ResumeSectionV2, now)
     }
 
     case 'section-move':
@@ -518,6 +571,15 @@ export function applyPatch(resume: ResumeV2, patch: StudioPatch, ctx: PatchConte
           bullets: p.bullets.map((b, i) => (i === patch.index ? editSource(b, patch.value, now) : b)),
         }
       })
+
+    case 'import-item-place':
+      return placeImportItem(resume, patch.sectionId, patch.entryId, patch.target, now)
+
+    case 'import-item-dismiss':
+      return dismissImportItem(resume, patch.sectionId, patch.entryId, now)
+
+    case 'output-lock':
+      return lockResumeOutput(resume, now)
 
     default: {
       const never: never = patch

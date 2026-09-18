@@ -354,6 +354,50 @@ test('a section label overrides the heading and clears back to the default', () 
   assert.notEqual(planDocument(cleared).blocks[0].heading, 'ICU Experience')
 })
 
+test('a heading keeps the spaces the applicant types', () => {
+  // The trim ran on every keystroke, so the space between two words vanished as
+  // it was typed: "Critical Care Experience" could only ever be saved as
+  // "CriticalCareExperience", and nobody could see why.
+  let resume = base(['critical_care'])
+  const sectionId = resume.sections[0].id
+  for (const label of [
+    'Critical', 'Critical ', 'Critical C', 'Critical Care', 'Critical Care ',
+    'Critical Care Experience',
+  ]) {
+    resume = apply(resume, { op: 'section-label', sectionId, label })
+  }
+  assert.equal(resume.sections[0].label, 'Critical Care Experience')
+})
+
+test('a label that is only whitespace is no label', () => {
+  let resume = base(['critical_care'])
+  const sectionId = resume.sections[0].id
+  resume = apply(resume, { op: 'section-label', sectionId, label: '   ' })
+  assert.equal(resume.sections[0].label, null)
+})
+
+test('a stray space at the end does not print', () => {
+  // Stored as typed, trimmed when read: mid-word spaces survive and edge ones
+  // never reach the page.
+  let resume = base(['critical_care'])
+  const sectionId = resume.sections[0].id
+  resume = apply(resume,
+    { op: 'position-add', sectionId, positionId: U(60) },
+    { op: 'position-fact', sectionId, positionId: U(60), field: 'employer', value: 'UH' },
+    { op: 'section-label', sectionId, label: ' Critical Care Experience ' })
+  assert.equal(planDocument(resume).blocks[0].heading, 'Critical Care Experience')
+})
+
+test('Education cannot be relabelled: the patch changes nothing', () => {
+  // A programme reads the resume looking for the word "Education". Rows saved
+  // before the heading was fixed still carry labels like "Academics", and they
+  // are ignored rather than migrated away.
+  const before = base(['education'])
+  const sectionId = before.sections[0].id
+  const after = apply(before, { op: 'section-label', sectionId, label: 'Academics' })
+  assert.equal(after, before, 'the resume was rewritten for a heading that cannot change')
+})
+
 test('a Professional Summary cannot be relabelled: the patch changes nothing', () => {
   const before = base(['summary'])
   const sectionId = before.sections[0].id
@@ -431,6 +475,55 @@ test('the summary content editor is not swallowed by the heading gate', () => {
 
 // --------------------------------------------------------------- safety
 
+// ------------------------------------------------ Modern column placement
+
+test('a section can be moved to the sidebar and back to the default', () => {
+  let resume = base(['critical_care'])
+  const sectionId = resume.sections[0].id
+
+  resume = apply(resume, { op: 'section-column', sectionId, column: 'sidebar' })
+  assert.equal(resume.sections[0].modernColumn, 'sidebar')
+
+  resume = apply(resume, { op: 'section-column', sectionId, column: 'main' })
+  assert.equal(resume.sections[0].modernColumn, 'main')
+
+  // Cleared by removing the field: "the template decides" is what its absence
+  // means, so a section moved and moved back must be indistinguishable from one
+  // that was never touched.
+  resume = apply(resume, { op: 'section-column', sectionId, column: null })
+  assert.equal(resume.sections[0].modernColumn, undefined)
+  assert.equal('modernColumn' in resume.sections[0], false, 'a cleared placement left a key behind')
+})
+
+test('moving a section between columns is an edit, so Strength goes stale', () => {
+  // The same rule as a reorder: the revision moves, and a score computed for the
+  // previous revision no longer describes this document.
+  const before = base(['critical_care'])
+  const sectionId = before.sections[0].id
+  const after = apply(before, { op: 'section-column', sectionId, column: 'sidebar' })
+  assert.ok(after.revision > before.revision, 'the revision did not move')
+})
+
+test('moving a section to the column it is already in changes nothing', () => {
+  const before = apply(base(['critical_care']), {
+    op: 'section-column', sectionId: base(['critical_care']).sections[0].id, column: 'sidebar',
+  })
+  const same = apply(before, { op: 'section-column', sectionId: before.sections[0].id, column: 'sidebar' })
+  assert.equal(same, before, 'a no-op edit bumped the revision')
+})
+
+test('a placement changes where a section is drawn and nothing it says', () => {
+  let resume = base(['critical_care'])
+  const sectionId = resume.sections[0].id
+  resume = apply(resume,
+    { op: 'position-add', sectionId, positionId: U(60) },
+    { op: 'position-fact', sectionId, positionId: U(60), field: 'employer', value: 'UH' })
+
+  const before = textOf(planDocument(resume))
+  const after = textOf(planDocument(apply(resume, { op: 'section-column', sectionId, column: 'sidebar' })))
+  assert.deepEqual(after, before, 'a layout choice changed the content of the resume')
+})
+
 test('a patch for a section that no longer exists is a no-op', () => {
   const resume = base()
   const gone = U(777)
@@ -438,6 +531,7 @@ test('a patch for a section that no longer exists is a no-op', () => {
     { op: 'section-remove', sectionId: gone },
     { op: 'section-visible', sectionId: gone, visible: false },
     { op: 'section-label', sectionId: gone, label: 'x' },
+    { op: 'section-column', sectionId: gone, column: 'sidebar' },
     { op: 'entry-add', sectionId: gone, entryId: U(50) },
     { op: 'entry-remove', sectionId: gone, entryId: U(50) },
     { op: 'field', sectionId: gone, entryId: U(50), field: 'title', value: 'x' },

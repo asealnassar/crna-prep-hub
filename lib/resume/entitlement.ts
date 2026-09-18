@@ -9,9 +9,16 @@
  *
  * THE MONETISATION MODEL, as locked:
  *
- *   Free      1 resume,  full builder, full AI, preview only
- *   Premium   3 resumes, full builder, full AI, preview only
- *   Ultimate  unlimited, and the only tier that may finalise or export
+ *   Free      1 resume
+ *   Premium   1 resume
+ *   Ultimate  unlimited
+ *
+ * Every tier gets the WHOLE builder: all templates, import, AI, Resume
+ * Strength, section controls, and a clean multi-page preview with no mark on
+ * it. What Ultimate adds is taking the finished file away -- the download, and
+ * marking a resume complete. The old "preview only" framing, where a Free
+ * preview carried an upgrade watermark, is gone: someone should be able to
+ * finish their resume and see it before deciding to pay for it.
  *
  * AI IS NOT METERED. There is no monthly allowance, nothing counts down, and
  * nothing is displayed. What exists instead is invisible abuse protection: a
@@ -42,7 +49,7 @@ export function normaliseTier(value: string | null | undefined): Tier {
 export function resumeLimitFor(tier: string | null | undefined): number | null {
   switch (normaliseTier(tier)) {
     case 'ultimate': return null
-    case 'premium': return 3
+    case 'premium': return 1
     case 'free': return 1
   }
 }
@@ -74,14 +81,12 @@ export function decideCreateResume(input: {
   if (limit === null) return allow
   if (input.currentCount < limit) return allow
 
-  const tier = normaliseTier(input.tier)
   return {
     allowed: false,
     code: RESUME_LIMIT_CODE,
-    message:
-      tier === 'free'
-        ? 'Free accounts can build one resume. Upgrade to build more.'
-        : `Your plan includes ${limit} resumes. Upgrade to Ultimate for unlimited resumes.`,
+    message: limit === 1
+      ? 'Your plan includes one resume. Upgrade to Ultimate for unlimited resumes.'
+      : `Your plan includes ${limit} resumes. Upgrade to Ultimate for unlimited resumes.`,
   }
 }
 
@@ -124,17 +129,16 @@ export function decideExport(tier: string | null | undefined): Decision {
 }
 
 /**
- * Whether the preview must carry the watermark.
+ * Whether the finished document must be held back from this tier.
  *
- * The inverse of the export gate on purpose: any tier that cannot take the file
- * away sees the preview marked, so Print → Save as PDF is not a clean way round
- * the gate. It is the same question asked once.
+ * The same question as the export gate, asked about what is on screen. It does
+ * NOT mark or restrict the preview while someone is building: it is what makes
+ * a download attempt open the upgrade modal instead of producing a file, and
+ * what keeps a locked preview locked. See lib/resume/studio/outputLock.ts.
  */
-export function needsPreviewWatermark(tier: string | null | undefined): boolean {
+export function outputGated(tier: string | null | undefined): boolean {
   return !canExportPdf(tier)
 }
-
-export const PREVIEW_WATERMARK = 'PREVIEW — UPGRADE TO ULTIMATE TO FINALIZE'
 
 // ---------------------------------------------------------------------------
 // AI: no quota, only abuse protection

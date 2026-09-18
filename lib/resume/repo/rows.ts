@@ -93,9 +93,27 @@ function asInt(value: unknown, fallback: number): number {
  */
 const CONTACT_SECTION_TYPE = '__contact__'
 
+/**
+ * Resume-level state the `resumes` columns have no place for.
+ *
+ * The columns are fixed -- title, template, status, strength -- and adding one
+ * is a migration. A reserved row carries the rest in the JSON envelope every
+ * section already uses, which is how the contact block has always been stored.
+ * Today that is the output lock; a resume without the row simply has none.
+ */
+const META_SECTION_TYPE = '__meta__'
+
 /** Deterministic, so the contact row is upserted rather than duplicated. */
 export function contactRowId(resumeId: string): string {
   return resumeId
+}
+
+/**
+ * The meta row's id: the resume's own, with a fixed tail so it can never be
+ * the contact row or a section the client generated.
+ */
+export function metaRowId(resumeId: string): string {
+  return `${resumeId.slice(0, 24)}5e7a00000001`
 }
 
 /**
@@ -121,6 +139,7 @@ export function fromRows(resumeRow: ResumeRow | null, sectionRows: readonly Sect
   }
 
   let contact = emptyContact()
+  let outputLockedAt: string | null = null
   const sections: ResumeSectionV2[] = []
 
   const ordered = [...sectionRows].sort(
@@ -134,6 +153,12 @@ export function fromRows(resumeRow: ResumeRow | null, sectionRows: readonly Sect
     if (row.section_type === CONTACT_SECTION_TYPE) {
       if (isObject) contact = { ...emptyContact(), ...(payload as object) }
       else issues.push({ rowId: row.id, kind: 'malformed-payload', detail: 'contact' })
+      continue
+    }
+
+    if (row.section_type === META_SECTION_TYPE) {
+      const locked = isObject ? (payload as { outputLockedAt?: unknown }).outputLockedAt : null
+      outputLockedAt = typeof locked === 'string' && locked !== '' ? locked : null
       continue
     }
 
@@ -187,6 +212,7 @@ export function fromRows(resumeRow: ResumeRow | null, sectionRows: readonly Sect
       updatedAt: resumeRow.updated_at ?? '',
       // Import provenance is a later phase; nothing writes it yet.
       importedFrom: null,
+      outputLockedAt,
       strength,
     },
     issues,
@@ -229,6 +255,19 @@ export function toSavePayload(resume: ResumeV2): SavePayload {
     label: null,
   })
 
+  // Written only once there is something to say, so a resume that was never
+  // locked carries no row and reads back exactly as it always did.
+  if (resume.outputLockedAt) {
+    sections.push({
+      id: metaRowId(resume.id),
+      section_type: META_SECTION_TYPE,
+      section_data: { outputLockedAt: resume.outputLockedAt },
+      order_index: -2,
+      visible: true,
+      label: null,
+    })
+  }
+
   return {
     resume: {
       title: resume.title,
@@ -242,4 +281,4 @@ export function toSavePayload(resume: ResumeV2): SavePayload {
   }
 }
 
-export { CONTACT_SECTION_TYPE }
+export { CONTACT_SECTION_TYPE, META_SECTION_TYPE }

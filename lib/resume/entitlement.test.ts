@@ -1,10 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
-  AI_RATE_LIMITS, EXPORT_CODE, FINALIZE_CODE, PREVIEW_WATERMARK, RATE_LIMIT_CODE,
+  AI_RATE_LIMITS, EXPORT_CODE, FINALIZE_CODE, RATE_LIMIT_CODE,
   RESUME_LIMIT_CODE, canExportDocx, canExportPdf, canFinalize, canUseAi, checkAiRate,
-  decideCreateResume, decideExport, decideFinalize, needsPreviewWatermark,
-  normaliseTier, rateLedgerWindowMs, resumeLimitFor,
+  decideCreateResume, decideExport, decideFinalize, normaliseTier, outputGated,
+  rateLedgerWindowMs, resumeLimitFor,
 } from './entitlement.ts'
 
 const TIERS = ['free', 'premium', 'ultimate'] as const
@@ -24,16 +26,16 @@ test('an unrecognised tier is the lowest one', () => {
 })
 
 test('the resume limits are the ones that were locked', () => {
+  // One resume on either paid-for-nothing tier; Ultimate is the unlimited one.
   assert.equal(resumeLimitFor('free'), 1)
-  assert.equal(resumeLimitFor('premium'), 3)
+  assert.equal(resumeLimitFor('premium'), 1)
   assert.equal(resumeLimitFor('ultimate'), null, 'Ultimate is unlimited')
 })
 
-test('Premium gets something Free does not', () => {
-  // The defect being fixed: in V1 both tiers were capped at one.
-  const free = resumeLimitFor('free')
-  const premium = resumeLimitFor('premium')
-  assert.ok(free !== null && premium !== null && premium > free)
+test('what Premium adds to the Resume Builder is not a second resume', () => {
+  // The old model gave Premium three. The locked one gives it one, and sells
+  // the download instead -- so this is the rule, stated where it can drift.
+  assert.equal(resumeLimitFor('premium'), resumeLimitFor('free'))
 })
 
 // ------------------------------------------------------------- creating
@@ -41,8 +43,8 @@ test('Premium gets something Free does not', () => {
 test('a resume may be created below the limit and refused at it', () => {
   assert.equal(decideCreateResume({ tier: 'free', currentCount: 0 }).allowed, true)
   assert.equal(decideCreateResume({ tier: 'free', currentCount: 1 }).allowed, false)
-  assert.equal(decideCreateResume({ tier: 'premium', currentCount: 2 }).allowed, true)
-  assert.equal(decideCreateResume({ tier: 'premium', currentCount: 3 }).allowed, false)
+  assert.equal(decideCreateResume({ tier: 'premium', currentCount: 0 }).allowed, true)
+  assert.equal(decideCreateResume({ tier: 'premium', currentCount: 1 }).allowed, false)
 })
 
 test('Ultimate is never refused, however many exist', () => {
@@ -63,9 +65,12 @@ test('a refusal carries a code and a message that names the way forward', () => 
   assert.match(decision.message, /upgrade/i)
 })
 
-test('the Premium refusal names the real number', () => {
-  const decision = decideCreateResume({ tier: 'premium', currentCount: 3 })
-  if (!decision.allowed) assert.match(decision.message, /3/)
+test('the refusal reads as a sentence, not as "1 resumes"', () => {
+  const decision = decideCreateResume({ tier: 'premium', currentCount: 1 })
+  assert.equal(decision.allowed, false)
+  if (decision.allowed) return
+  assert.match(decision.message, /one resume/i)
+  assert.match(decision.message, /ultimate/i)
 })
 
 // ------------------------------------------------- finalise and export
@@ -106,19 +111,24 @@ test('Ultimate passes both gates cleanly', () => {
   assert.deepEqual(decideExport('ultimate'), { allowed: true })
 })
 
-// ----------------------------------------------------------- watermark
+// -------------------------------------------------------- the output gate
 
-test('every tier that cannot export sees a watermarked preview', () => {
+test('the output gate is the export gate, asked about what is on screen', () => {
   for (const tier of TIERS) {
     assert.equal(
-      needsPreviewWatermark(tier), !canExportPdf(tier),
-      `${tier}: the watermark and the export gate disagree`
+      outputGated(tier), !canExportPdf(tier),
+      `${tier}: the output gate and the export gate disagree`
     )
   }
 })
 
-test('the watermark says what was specified', () => {
-  assert.equal(PREVIEW_WATERMARK, 'PREVIEW — UPGRADE TO ULTIMATE TO FINALIZE')
+test('the preview watermark is gone, and so is the language on it', () => {
+  const entitlement = readFileSync(
+    fileURLToPath(new URL('./entitlement.ts', import.meta.url)), 'utf8'
+  )
+  for (const gone of ['PREVIEW_WATERMARK', 'needsPreviewWatermark', 'UPGRADE TO ULTIMATE TO FINALIZE']) {
+    assert.equal(entitlement.includes(gone), false, `${gone} survives`)
+  }
 })
 
 // ------------------------------------------------------------- AI rate

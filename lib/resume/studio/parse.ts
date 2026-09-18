@@ -16,6 +16,8 @@ import type { ResumeSectionType, ResumeTemplate } from '../model/types.ts'
 import { CONTACT_FIELDS, POSITION_FLAGS, POSITION_LISTS, POSITION_TEXT_FACTS } from './patch.ts'
 import type { ContactField, StudioPatch } from './patch.ts'
 import { fieldFor } from './fields.ts'
+import { PLACEABLE_ENTRY_TYPES } from './importItems.ts'
+import type { ImportPlacement } from './importItems.ts'
 
 /** One autosave carries at most this many edits. A run longer than this is a bug. */
 export const MAX_PATCHES = 200
@@ -170,6 +172,13 @@ export function parsePatch(
       const sectionId = id(p.sectionId)
       const value = str(p.value)
       return sectionId && value !== null ? { op: 'section-heading', sectionId, value } : null
+    }
+    case 'section-column': {
+      const sectionId = id(p.sectionId)
+      if (!sectionId) return null
+      if (p.column === null) return { op: 'section-column', sectionId, column: null }
+      const column = p.column === 'sidebar' || p.column === 'main' ? p.column : null
+      return column ? { op: 'section-column', sectionId, column } : null
     }
     case 'section-move': {
       const sectionId = id(p.sectionId)
@@ -338,6 +347,49 @@ export function parsePatch(
       const value = str(p.value)
       return sectionId && positionId && i !== null && value !== null
         ? { op: 'bullet-text', sectionId, positionId, index: i, value }
+        : null
+    }
+    case 'import-item-place': {
+      const sectionId = id(p.sectionId)
+      const entryId = id(p.entryId)
+      const target = importPlacement(p.target)
+      return sectionId && entryId && target ? { op: 'import-item-place', sectionId, entryId, target } : null
+    }
+    case 'output-lock':
+      // Carries nothing: the timestamp is the server's, and which resume it is
+      // comes from the request, not from the patch.
+      return { op: 'output-lock' }
+    case 'import-item-dismiss': {
+      const sectionId = id(p.sectionId)
+      const entryId = id(p.entryId)
+      return sectionId && entryId ? { op: 'import-item-dismiss', sectionId, entryId } : null
+    }
+    default:
+      return null
+  }
+}
+
+/**
+ * Where an imported item is going: ids and a section type, nothing else. The
+ * text itself never crosses this line -- it is read from the stored item.
+ */
+function importPlacement(value: unknown): ImportPlacement | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const t = value as Record<string, unknown>
+  const sectionId = id(t.sectionId)
+  if (!sectionId) return null
+  switch (t.kind) {
+    case 'bullet': {
+      const positionId = id(t.positionId)
+      return positionId ? { kind: 'bullet', sectionId, positionId } : null
+    }
+    case 'summary':
+      return { kind: 'summary', sectionId }
+    case 'entry': {
+      const type = sectionType(t.sectionType)
+      const entryId = id(t.entryId)
+      return type && entryId && PLACEABLE_ENTRY_TYPES.includes(type)
+        ? { kind: 'entry', sectionType: type, sectionId, entryId }
         : null
     }
     default:

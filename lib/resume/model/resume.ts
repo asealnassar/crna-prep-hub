@@ -72,6 +72,7 @@ export function createResume(input: {
     createdAt: input.now,
     updatedAt: input.now,
     importedFrom: input.importedFrom ?? null,
+    outputLockedAt: null,
     strength: null,
   }
 }
@@ -190,6 +191,18 @@ export function setContact(resume: ResumeV2, contact: ResumeContact, now: string
 export function setStatus(resume: ResumeV2, status: ResumeStatus, now: string): ResumeV2 {
   if (resume.status === status) return resume
   return { ...resume, status, revision: resume.revision + 1, updatedAt: now }
+}
+
+/**
+ * Locks the finished output, once.
+ *
+ * Idempotent on purpose: a second "Not now" is not a second decision, and
+ * moving the timestamp would make the lock look newer than the choice that
+ * caused it.
+ */
+export function lockResumeOutput(resume: ResumeV2, now: string): ResumeV2 {
+  if (resume.outputLockedAt) return resume
+  return { ...resume, outputLockedAt: now, revision: resume.revision + 1, updatedAt: now }
 }
 
 /** Attaches a computed score. Stale-checking is `computedAtRevision`. */
