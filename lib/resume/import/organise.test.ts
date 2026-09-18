@@ -127,10 +127,14 @@ test('an invented bullet is discarded while the real ones survive', () => {
     }],
   })
   const plan = buildImportPlan(withLie, source())
+  // Both real bullets under the job -- including the one the organiser left
+  // out, which the document's own structure places -- and never the invention.
   assert.deepEqual(plan.organised.positions[0].bullets, [
     'Titrated vasoactive infusions through haemodynamic collapse.',
+    'Precepted new graduate nurses through unit orientation.',
   ])
   assert.equal(plan.rejected.length, 1)
+  assert.equal(plan.rejected[0].value, 'Maintained a 2:1 patient assignment on ECMO.')
 })
 
 test('an invented certification never reaches the draft', () => {
@@ -153,11 +157,21 @@ test('an invented contact detail never reaches the draft', () => {
 // -------------------------------------------------- uncertain, not guessed
 
 test('a loosely traced value is set aside rather than written in', () => {
-  const loose = organised({ summary: 'Critical care nurse with sustained experience in a high acuity medical ICU' })
+  // The source reads "Registered Nurse, Medical ICU": the organiser's version
+  // matches only once punctuation is ignored.
+  const base = organised().positions[0]
+  const loose = organised({ positions: [{ ...base, role: 'Registered Nurse Medical ICU' }] })
   const plan = buildImportPlan(loose, source())
-  assert.equal(plan.organised.summary, '', 'an uncertain value was written into the resume')
+  assert.equal(plan.organised.positions[0].role, '', 'an uncertain value was written into the resume')
   assert.equal(plan.uncertain.length, 1)
   assert.equal(plan.uncertain[0].confidence, 'low')
+})
+
+test('a loosely traced summary is not written in -- the document’s own paragraph under its heading is', () => {
+  const loose = organised({ summary: 'Critical care nurse with sustained experience in a high acuity medical ICU' })
+  const plan = buildImportPlan(loose, source())
+  assert.equal(plan.organised.summary, 'Critical care nurse with sustained experience in a high-acuity medical ICU.')
+  assert.equal(plan.uncertain.length, 0)
 })
 
 test('every mapping carries a path and provenance', () => {

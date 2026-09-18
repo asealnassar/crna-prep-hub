@@ -91,6 +91,16 @@ export interface EducationEntry {
   readonly field: string
   readonly institution: string
   readonly location: string
+  /**
+   * When the degree started.
+   *
+   * OPTIONAL IN THE TYPE ON PURPOSE. Records written before education had a
+   * start date do not carry one, and nothing rewrites a stored row to add it:
+   * a reader treats a missing start as absent and prints the graduation date
+   * alone, exactly as it always did.
+   */
+  readonly startDate?: ResumeDate
+  /** When it finished. The end of the span, and the date a resume calls graduation. */
   readonly graduationDate: ResumeDate
   readonly overallGpa: GpaValue
   readonly scienceGpa: GpaValue
@@ -216,6 +226,30 @@ export interface CustomEntry {
   readonly id: string
   readonly title: string
   readonly detail: AuthoredText
+  /**
+   * Set only on an item waiting in "Imported items to review": where the import
+   * thought it might belong. A suggestion, never a placement -- see
+   * lib/resume/model/importReview.ts.
+   */
+  readonly importItem?: ImportItemMeta
+}
+
+/**
+ * Where an imported item looks like it belongs, when the document's layout said.
+ *
+ * The applicant chooses. A suggestion pre-selects a destination; it never moves
+ * anything on its own.
+ */
+export type ImportSuggestion =
+  | { readonly kind: 'bullet'; readonly positionId: string | null }
+  | { readonly kind: 'summary' }
+  | { readonly kind: 'section'; readonly sectionType: ResumeSectionType }
+  | { readonly kind: 'none' }
+
+export interface ImportItemMeta {
+  /** The line of the uploaded document it came from. */
+  readonly sourceLine: number | null
+  readonly suggestion: ImportSuggestion
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +263,19 @@ interface SectionBase<T extends ResumeSectionType> {
   readonly visible: boolean
   /** Overrides the default heading. null means use the default. */
   readonly label: string | null
+  /**
+   * Which column this section sits in on a two-column template.
+   *
+   * OPTIONAL, AND ABOUT LAYOUT ONLY. Absent means "whatever the template
+   * decides", which is what every existing record says and what a new section
+   * says until someone moves it. Single-column templates ignore it entirely, so
+   * a resume that visits Modern, goes to Classic and comes back still remembers
+   * where its sections were put.
+   *
+   * It is stored inside the section payload, so it needs no column and no
+   * migration -- see toSavePayload in lib/resume/repo/rows.ts.
+   */
+  readonly modernColumn?: 'sidebar' | 'main'
 }
 
 export interface ProfessionalSummarySection extends SectionBase<'summary'> {
@@ -277,6 +324,12 @@ export interface CustomSection extends SectionBase<'custom'> {
   /** Custom sections name themselves; `label` still overrides for display. */
   readonly heading: string
   readonly entries: readonly CustomEntry[]
+  /**
+   * Marks the section holding imported text still to be placed. It is kept in
+   * the section's own JSON, so it needs no column and no migration, and it never
+   * prints whatever its visibility says.
+   */
+  readonly importReview?: boolean
 }
 
 export type ResumeSectionV2 =
@@ -363,5 +416,15 @@ export interface ResumeV2 {
   readonly createdAt: string
   readonly updatedAt: string
   readonly importedFrom: ImportReference | null
+  /**
+   * When this resume's finished output was locked, and null while it is not.
+   *
+   * Set once, by the applicant choosing "Not now" at the upgrade modal after a
+   * download attempt -- never by opening the Studio, editing, or closing that
+   * modal another way. It blurs the finished document for a tier that cannot
+   * download it, and has no effect at all on Ultimate. Persisted in the
+   * reserved `__meta__` section row; see lib/resume/repo/rows.ts.
+   */
+  readonly outputLockedAt?: string | null
   readonly strength: ResumeStrengthRef | null
 }

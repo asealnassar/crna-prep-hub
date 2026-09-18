@@ -5,12 +5,12 @@
  * anything the organiser asserted but the source did not contain, and set aside
  * anything that traced only loosely. This turns what survived into a ResumeV2.
  *
- * WHAT DID NOT SURVIVE IS NOT THROWN AWAY EITHER. Uncertain values and lines
- * the organiser could not place go into a HIDDEN custom section titled
- * "Imported — needs review". Hidden means it does not print, so nothing
- * unreviewed can reach a programme; keeping it means the applicant's own words
- * are still in their resume, where they can move them somewhere sensible and
- * delete the rest. Guessing where they belong is the one thing we may not do.
+ * WHAT DID NOT SURVIVE IS NOT THROWN AWAY EITHER. Every source line nothing
+ * was placed from becomes an item in "Imported items to review": a flagged
+ * section that never prints, shown in the editor as its own panel, where the
+ * applicant places each line or dismisses it. Keeping them means the
+ * applicant's own words are still in their resume; guessing where they belong
+ * is the one thing we may not do -- a suggestion only pre-selects.
  *
  * EVERY PIECE OF PROSE IS MARKED 'import'. That is what stops imported text
  * being mistaken for something the applicant typed here, and -- via the rule in
@@ -25,10 +25,12 @@ import { createResume } from '../model/resume.ts'
 import { createAuthoredText } from '../model/authoredText.ts'
 import { createClinicalPosition, createSection, parseGpa } from '../model/sections.ts'
 import { parseResumeDate, parseResumeDateRange } from '../model/dates.ts'
-import type { ImportReference, ResumeSectionV2, ResumeV2 } from '../model/types.ts'
+import { IMPORT_REVIEW_HEADING } from '../model/importReview.ts'
+import type { ImportReference, ImportSuggestion, ResumeSectionV2, ResumeV2 } from '../model/types.ts'
 import type { ImportPlan } from './organise.ts'
+import type { StructuralSuggestion } from './structure.ts'
 
-export const REVIEW_SECTION_HEADING = 'Imported — needs review'
+export const REVIEW_SECTION_HEADING = IMPORT_REVIEW_HEADING
 
 export interface DraftIds {
   readonly resumeId: string
@@ -88,22 +90,29 @@ export function draftFromPlan(input: {
         id: nextId(),
         degree: e.degree, field: e.field, institution: e.institution, location: e.location,
         graduationDate: parseResumeDate(e.graduated),
-        // A GPA is never inferred from an imported document, and the switch that
-        // would print one stays off.
-        overallGpa: parseGpa(''), scienceGpa: parseGpa(''), honors: '',
+        // Only a GPA the document states outright under this degree, exactly as
+        // written -- never inferred. The switch that would print one stays off
+        // until the applicant turns it on.
+        overallGpa: parseGpa(e.overallGpa ?? ''), scienceGpa: parseGpa(e.scienceGpa ?? ''), honors: '',
       })),
     } as ResumeSectionV2)
   }
 
-  const positions = organised.positions.filter((p) => p.employer || p.role || p.bullets.length > 0)
+  // Which created position each organised one became, so an item the import
+  // could not place can still suggest the job it sat under.
+  const positionIdByIndex = new Map<number, string>()
+  const positions = organised.positions
+    .map((p, index) => ({ p, index }))
+    .filter(({ p }) => p.employer || p.role || p.bullets.length > 0)
   if (positions.length > 0) {
     sections.push({
       ...createSection('critical_care', nextId()),
-      positions: positions.map((p) => {
+      positions: positions.map(({ p, index }) => {
         const position = createClinicalPosition(nextId(), {
           employer: p.employer, role: p.role, unit: p.unit,
           location: p.location, dates: rangeFrom(p.dates),
         })
+        positionIdByIndex.set(index, position.id)
         return { ...position, bullets: p.bullets.map((b) => createAuthoredText(b, 'import')) }
       }),
     } as ResumeSectionV2)
@@ -139,7 +148,7 @@ export function draftFromPlan(input: {
     if (section) sections.push(section)
   }
 
-  const review = reviewSection(plan, nextId)
+  const review = reviewSection(plan, nextId, positionIdByIndex)
   if (review) sections.push(review)
 
   const base = createResume({
@@ -221,27 +230,56 @@ function buildEntrySection(
 }
 
 /**
- * Everything the import could not place, kept and hidden.
+ * Everything the import could not place: "Imported items to review".
  *
- * HIDDEN, not omitted and not printed. Omitting it would quietly lose a line
- * from someone's resume; printing it would put unreviewed text in front of a
- * programme. Hidden, it renders nowhere and is one click from being read,
- * moved and deleted.
+ * KEPT, NOT PRINTED, AND FOUND. Omitting a line would quietly lose part of
+ * someone's resume; printing it would put unreviewed text in front of a
+ * programme. So each unplaced line is kept exactly as the document had it, in a
+ * flagged section the document plan never draws and the Studio shows as its own
+ * panel, with where the line appeared to belong.
+ *
+ * FROM THE DOCUMENT, NOT FROM THE REVIEW. It used to be built from the uncertain
+ * values -- which confirmation, re-tracing the already-filtered plan, no longer
+ * had. `plan.recovery` is derived from the source text on both runs, so what was
+ * promised on the review screen is what arrives.
  */
-function reviewSection(plan: ImportPlan, nextId: () => string): ResumeSectionV2 | null {
-  const items = [
-    ...plan.uncertain.map((value) => value.value),
-    ...plan.unmapped,
-  ].filter((text, i, all) => text.trim() !== '' && all.indexOf(text) === i)
-
+function reviewSection(
+  plan: ImportPlan,
+  nextId: () => string,
+  positionIdByIndex: ReadonlyMap<number, string>
+): ResumeSectionV2 | null {
+  const items = plan.recovery.filter((item) => item.text.trim() !== '')
   if (items.length === 0) return null
 
   return {
     ...createSection('custom', nextId(), { visible: false, heading: REVIEW_SECTION_HEADING }),
     heading: REVIEW_SECTION_HEADING,
     visible: false,
-    entries: items.map((text) => ({
-      id: nextId(), title: '', detail: createAuthoredText(text, 'import'),
+    importReview: true,
+    entries: items.map((item) => ({
+      id: nextId(),
+      title: '',
+      detail: createAuthoredText(item.text, 'import'),
+      importItem: { sourceLine: item.sourceLine, suggestion: suggestionFor(item.suggestion, positionIdByIndex) },
     })),
   } as ResumeSectionV2
+}
+
+function suggestionFor(
+  suggestion: StructuralSuggestion,
+  positionIdByIndex: ReadonlyMap<number, string>
+): ImportSuggestion {
+  switch (suggestion.kind) {
+    case 'bullet':
+      return {
+        kind: 'bullet',
+        positionId: suggestion.position === null ? null : positionIdByIndex.get(suggestion.position) ?? null,
+      }
+    case 'summary':
+      return { kind: 'summary' }
+    case 'section':
+      return { kind: 'section', sectionType: suggestion.sectionType }
+    default:
+      return { kind: 'none' }
+  }
 }

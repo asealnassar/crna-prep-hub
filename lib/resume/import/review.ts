@@ -41,7 +41,10 @@ export interface ReviewPayload {
    * NOT written into the resume by the import itself.
    */
   readonly uncertain: readonly ReviewMapping[]
-  /** Lines from the document the organiser could not place. */
+  /**
+   * Lines from the document nothing was placed from. Each becomes an item in
+   * "Imported items to review" when the resume is created.
+   */
   readonly unmapped: readonly string[]
   /**
    * How many values the verifier threw out. A COUNT AND NEVER THE VALUES: a

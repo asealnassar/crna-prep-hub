@@ -20,6 +20,8 @@
  */
 
 import type { SourceDocument } from './source.ts'
+import { analyseStructure } from './structure.ts'
+import type { RecoveredLine } from './structure.ts'
 
 export type Confidence = 'high' | 'low'
 
@@ -54,6 +56,13 @@ export interface OrganisedEducation {
   readonly institution: string
   readonly location: string
   readonly graduated: string
+  /**
+   * A GPA stated outright under this degree -- "Overall GPA: 3.3" -- exactly as
+   * written. Never asked of the organiser and never inferred: read from the
+   * document's own line by structure.ts.
+   */
+  readonly overallGpa?: string
+  readonly scienceGpa?: string
 }
 
 export const ENTRY_SECTIONS = [
@@ -92,11 +101,20 @@ export interface ImportPlan {
   readonly rejected: readonly RejectedValue[]
   /** Source lines nothing was made of. */
   readonly unmapped: readonly string[]
+  /**
+   * The same lines, with where each one appeared to belong. What becomes
+   * "Imported items to review" -- derived from the document itself, so it is
+   * the same on confirmation as it was on review.
+   */
+  readonly recovery: readonly RecoveredLine[]
 }
 
 export const CONTACT_FIELDS = [
   'fullName', 'credentials', 'email', 'phone', 'city', 'state',
 ] as const
+
+/** The order mapped values are reported in: the order of a resume. */
+const PATH_ORDER = ['contact', 'summary', 'positions', 'education', 'certifications', 'licenses', 'entries']
 
 // ---------------------------------------------------------------------------
 // Tracing
@@ -255,6 +273,9 @@ export function parseOrganised(raw: unknown): OrganisedResume {
     education: rows(body.education).map((e) => ({
       degree: str(e.degree), field: str(e.field), institution: str(e.institution),
       location: str(e.location), graduated: str(e.graduated),
+      // Carried so a reviewed plan round-trips; re-derived from the document
+      // regardless, so a value sent back here is never taken on trust.
+      overallGpa: str(e.overallGpa), scienceGpa: str(e.scienceGpa),
     })),
     certifications: rows(body.certifications).map((c) => ({ name: str(c.name), issuer: str(c.issuer) })),
     licenses: rows(body.licenses).map((l) => ({ licenseType: str(l.licenseType), state: str(l.state) })),
@@ -281,6 +302,11 @@ export function parseOrganised(raw: unknown): OrganisedResume {
  * only. Everything else is reported beside it -- uncertain for the applicant to
  * place, rejected because it was not in their document at all -- and none of it
  * reaches the draft.
+ *
+ * Then the document's own structure (structure.ts) fills what one-line tracing
+ * cannot see -- a summary under its heading, the wrapped bullets under a job
+ * that traced, a GPA stated under a degree -- and every line still unplaced is
+ * kept as `recovery`, for the applicant to place.
  */
 export function buildImportPlan(organised: OrganisedResume, source: SourceDocument): ImportPlan {
   const mapped: MappedValue[] = []
@@ -348,19 +374,98 @@ export function buildImportPlan(organised: OrganisedResume, source: SourceDocume
 
   const summary = keep('summary', organised.summary)
 
-  // Unmapped lines are the applicant's own text, so they are kept whether or
-  // not the organiser echoed them back correctly -- but only the ones that are
-  // genuinely in the source.
-  const unmapped = organised.unmapped.filter((line) => traceValue(line, source) !== null)
+  // The document's own structure, read from the lines and anchored on what
+  // traced above: a summary under its heading, the bullets under each job,
+  // GPAs stated under a degree, and every line nothing placed. Everything it
+  // returns is source text in source order -- see structure.ts.
+  const structure = analyseStructure(
+    { contact, summary, positions, education, certifications, licenses, entries, unmapped: [] },
+    source
+  )
+
+  /**
+   * Replaces what the organiser said for one place with what the document's
+   * structure says. Its own values go, whether they traced or not -- except a
+   * value that was not in the document at all, which stays reported as
+   * discarded unless it is exactly the text structure found. (Structure's
+   * joined lines do not trace as one line, so a confirmation re-tracing them
+   * would otherwise count them as discards.)
+   */
+  const replaceAt = (matches: (path: string) => boolean, found: readonly string[]) => {
+    const drop = <T extends { path: string }>(records: T[], also: (record: T) => boolean = () => true) => {
+      for (let i = records.length - 1; i >= 0; i--) {
+        if (matches(records[i].path) && also(records[i])) records.splice(i, 1)
+      }
+    }
+    drop(mapped)
+    drop(uncertain)
+    drop(rejected, (record) => found.includes(record.value))
+  }
+
+  let finalSummary = summary
+  if (structure.summary) {
+    finalSummary = structure.summary.text
+    replaceAt((path) => path === 'summary', [structure.summary.text])
+    mapped.push({
+      path: 'summary', value: structure.summary.text, confidence: 'high',
+      sourceLine: structure.summary.lines[0] ?? null,
+    })
+  }
+
+  const finalPositions = positions.map((position, i) => {
+    const bullets = structure.positionBullets.get(i)
+    if (!bullets) return position
+    // The job's own block replaces whatever the organiser listed for it: every
+    // line under the header, in order, and nothing from another job.
+    const prefix = `positions[${i}].bullets[`
+    replaceAt((path) => path.startsWith(prefix), bullets.map((bullet) => bullet.text))
+    bullets.forEach((bullet, b) => mapped.push({
+      path: `positions[${i}].bullets[${b}]`, value: bullet.text, confidence: 'high',
+      sourceLine: bullet.lines[0] ?? null,
+    }))
+    return { ...position, bullets: bullets.map((bullet) => bullet.text) }
+  })
+
+  const finalEducation = education.map((entry, i) => {
+    const gpa = structure.gpas.get(i)
+    if (gpa?.overall) {
+      mapped.push({ path: `education[${i}].overallGpa`, value: gpa.overall.raw, confidence: 'high', sourceLine: gpa.overall.line })
+    }
+    if (gpa?.science) {
+      mapped.push({ path: `education[${i}].scienceGpa`, value: gpa.science.raw, confidence: 'high', sourceLine: gpa.science.line })
+    }
+    return { ...entry, overallGpa: gpa?.overall?.raw ?? '', scienceGpa: gpa?.science?.raw ?? '' }
+  })
+
+  // Every line nothing placed -- from the DOCUMENT, not from the organiser's
+  // list, so a line it silently skipped is recovered too, and so confirmation
+  // (which re-runs this over the same text, without the values review set
+  // aside) keeps exactly what review showed, suggestions included.
+  const recovery = structure.recovery
+  const unmapped = recovery.map((item) => item.text)
+
+  // Reviewed in resume order -- a summary structure found is not listed after
+  // the certifications -- and each entry's values together.
+  const orderOf = (path: string): [number, number] => {
+    const match = /^([a-z]+)(?:\[(\d+)\])?/i.exec(path)
+    const group = PATH_ORDER.indexOf(match?.[1] ?? '')
+    return [group < 0 ? PATH_ORDER.length : group, Number(match?.[2] ?? 0)]
+  }
+  mapped.sort((a, b) => {
+    const [groupA, entryA] = orderOf(a.path)
+    const [groupB, entryB] = orderOf(b.path)
+    return groupA - groupB || entryA - entryB
+  })
 
   return {
     organised: {
-      contact, summary, positions, education, certifications, licenses, entries,
-      unmapped,
+      contact, summary: finalSummary, positions: finalPositions, education: finalEducation,
+      certifications, licenses, entries, unmapped,
     },
     mapped,
     uncertain,
     rejected,
     unmapped,
+    recovery,
   }
 }

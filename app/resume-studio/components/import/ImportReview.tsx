@@ -1,5 +1,7 @@
 'use client'
 
+import { Button, Card, cx, text } from '../ui'
+
 /**
  * What the import found, before anything is created.
  *
@@ -7,11 +9,11 @@
  * clean up if the applicant walks away — which is the point of reviewing first.
  *
  * THREE HONEST CATEGORIES, all shown in full rather than counted. Placed, for
- * what traced verbatim to their document. Needs checking, for what we
- * recognised but could not place with confidence. Not placed, for lines nothing
- * was made of. The last two do not go into the resume's visible content; they
- * are kept in a hidden section so nothing unreviewed prints and nothing of
- * theirs is lost.
+ * what traced to their document. Needs checking, for what we recognised but
+ * could not place with confidence. Imported items to review, for every line
+ * nothing was made of -- which is exactly the list the editor shows under the
+ * same name once the resume exists, word for word, never printed until the
+ * applicant places it.
  *
  * Discarded values are COUNTED AND NEVER SHOWN. A discarded value is one the
  * organiser asserted and their document did not contain — rendering it here
@@ -75,25 +77,25 @@ export default function ImportReview({
   const needsChecking = review.uncertain.length + review.unmapped.length
 
   return (
-    <section className="border border-white/20 bg-white/5 rounded-2xl p-5">
-      <h2 className="text-white font-semibold">Here is what we found</h2>
-      <p className="text-xs text-indigo-300 mt-1">
+    <Card as="section" className="p-5">
+      <h3 className="text-base font-semibold text-slate-900">Here is what we found</h3>
+      <p className={cx('mt-1 text-sm', text.secondary)}>
         Nothing has been created yet. Everything below came from your document — nothing was added
         to it. Have a look, then choose whether to build a resume from it.
       </p>
 
       <Group
         title={`Will be filled in (${review.mapped.length})`}
-        tone="border-emerald-300/30 bg-emerald-400/5"
+        tone="border-emerald-200 bg-emerald-50/60"
       >
         {review.mapped.length === 0 ? (
-          <p className="text-xs text-indigo-300">Nothing could be matched to a section.</p>
+          <p className={cx('text-xs', text.muted)}>Nothing could be matched to a section.</p>
         ) : (
           <ul className="space-y-1">
             {review.mapped.map((m, i) => (
-              <li key={`${m.path}-${i}`} className="text-xs text-indigo-100 flex flex-wrap gap-x-2">
-                <span className="text-indigo-300 shrink-0">{describePath(m.path)}</span>
-                <span className="text-white">{m.value}</span>
+              <li key={`${m.path}-${i}`} className="flex flex-wrap gap-x-2 text-xs">
+                <span className="shrink-0 text-slate-500">{describePath(m.path)}</span>
+                <span className="text-slate-900">{m.value}</span>
               </li>
             ))}
           </ul>
@@ -103,18 +105,18 @@ export default function ImportReview({
       {review.uncertain.length > 0 && (
         <Group
           title={`Needs your eye (${review.uncertain.length})`}
-          tone="border-amber-300/40 bg-amber-400/5"
+          tone="border-amber-200 bg-amber-50/70"
         >
-          <p className="text-xs text-amber-100/90 mb-2">
+          <p className="mb-2 text-xs text-amber-800">
             We recognised these from your document but could not place them confidently, so they
-            will not be filled in automatically. They will be waiting in a hidden section for you to
-            move where they belong.
+            will not be filled in automatically. The lines they came from are listed under
+            “Imported items to review”, exactly as written, for you to place or remove.
           </p>
           <ul className="space-y-1">
             {review.uncertain.map((m, i) => (
-              <li key={`${m.path}-${i}`} className="text-xs flex flex-wrap gap-x-2">
-                <span className="text-amber-200/80 shrink-0">{describePath(m.path)}?</span>
-                <span className="text-amber-50">{m.value}</span>
+              <li key={`${m.path}-${i}`} className="flex flex-wrap gap-x-2 text-xs">
+                <span className="shrink-0 text-amber-800">{describePath(m.path)}?</span>
+                <span className="text-slate-900">{m.value}</span>
               </li>
             ))}
           </ul>
@@ -122,58 +124,53 @@ export default function ImportReview({
       )}
 
       {review.unmapped.length > 0 && (
-        <Group title={`Not placed (${review.unmapped.length})`} tone="border-white/15 bg-white/5">
-          <p className="text-xs text-indigo-300 mb-2">
-            Lines from your document we could not match to any section. They are kept, hidden, for
-            you to place or delete.
+        <Group title={`Imported items to review (${review.unmapped.length})`} tone="border-slate-200 bg-slate-50">
+          <p className={cx('mb-2 text-xs', text.secondary)}>
+            Lines from your document that were not placed automatically. After you create the resume,
+            they wait at the top of the editor under this heading, exactly as written. They will not
+            appear on your resume or in downloads until you place them.
           </p>
           <ul className="space-y-1">
             {review.unmapped.map((line, i) => (
-              <li key={i} className="text-xs text-indigo-100">{line}</li>
+              <li key={i} className="text-xs text-slate-800">{line}</li>
             ))}
           </ul>
         </Group>
       )}
 
       {review.discarded > 0 && (
-        <p className="mt-3 text-xs text-indigo-300">
+        <p className={cx('mt-3 text-xs', text.muted)}>
           {review.discarded} suggested {review.discarded === 1 ? 'value was' : 'values were'}{' '}
           discarded for not appearing in your document, and are not shown.
         </p>
       )}
 
-      <div className="mt-5 flex flex-wrap gap-3">
-        <button
-          type="button"
+      <div className="mt-5 flex flex-wrap items-center gap-3">
+        <Button
+          variant="primary"
           onClick={onCreate}
           disabled={busy || review.mapped.length === 0}
           aria-busy={busy}
-          className="px-5 py-2.5 bg-white text-indigo-900 font-semibold rounded-xl hover:bg-indigo-50 transition disabled:opacity-60"
         >
           {busy ? 'Creating...' : 'Create this resume'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={busy}
-          className="px-5 py-2.5 border border-white/30 text-white font-semibold rounded-xl hover:bg-white/10 transition disabled:opacity-60"
-        >
+        </Button>
+        <Button onClick={onCancel} disabled={busy}>
           Cancel
-        </button>
+        </Button>
         {needsChecking > 0 && (
-          <p className="text-xs text-indigo-300 self-center">
+          <p className={cx('text-xs', text.muted)}>
             Cancelling creates nothing and uses none of your resume allowance.
           </p>
         )}
       </div>
-    </section>
+    </Card>
   )
 }
 
 function Group({ title, tone, children }: { title: string; tone: string; children: React.ReactNode }) {
   return (
-    <div className={`mt-4 rounded-xl border p-3 ${tone}`}>
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-indigo-200 mb-2">{title}</h3>
+    <div className={cx('mt-4 rounded-lg border p-3', tone)}>
+      <h4 className="mb-2 text-xs font-semibold text-slate-700">{title}</h4>
       {children}
     </div>
   )

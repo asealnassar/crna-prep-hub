@@ -105,8 +105,21 @@ test('unplaced lines are kept, hidden, and never printed', () => {
 })
 
 test('no review section is added when everything was placed', () => {
-  const resume = build({ unmapped: [] })
+  // Every line of THIS document is placed. (The shared fixture's leftover line
+  // is in the document, so it is kept whatever the organiser listed.)
+  const placedAll = sourceFromText(RESUME.replace('\nLEFTOVER LINE NOBODY PLACED', ''), 'paste')
+  const resume = draftFromPlan({
+    plan: buildImportPlan(organised({ unmapped: [] }), placedAll),
+    userId: 'u1', title: 'Imported', ids, now: NOW, importedFrom: reference,
+  })
   assert.equal(resume.sections.some((s) => s.type === 'custom'), false)
+})
+
+test('a line the organiser never mentioned is still kept for review', () => {
+  const resume = build({ unmapped: [] })
+  const review = resume.sections.find((s) => s.type === 'custom')
+  assert.ok(review && review.type === 'custom' && review.importReview === true)
+  assert.deepEqual(review.entries.map((e) => e.detail.accepted), ['LEFTOVER LINE NOBODY PLACED'])
 })
 
 test('an import never invents a GPA, a licence number or an expiry', () => {

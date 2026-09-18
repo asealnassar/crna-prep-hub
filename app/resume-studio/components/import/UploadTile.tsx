@@ -1,8 +1,10 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { CircleCheck, ClipboardPaste, Lock, Upload } from 'lucide-react'
 import { MAX_UPLOAD_BYTES } from '@/lib/resume/import/upload'
+import { Button, Card, TextAreaField, buttonClass, cx, text as tokens } from '../ui'
 import ImportReview from './ImportReview'
 import type { ImportReviewData } from './ImportReview'
 
@@ -30,7 +32,14 @@ type State =
   | { readonly kind: 'reviewing'; readonly review: ImportReviewData }
   | { readonly kind: 'creating'; readonly review: ImportReviewData }
 
-export default function UploadTile({ onImported }: { onImported?: () => void }) {
+export default function UploadTile({
+  onImported,
+  onExpandedChange,
+}: {
+  onImported?: () => void
+  /** True while the paste box or a review needs more room than a side column. Presentation only. */
+  onExpandedChange?: (expanded: boolean) => void
+}) {
   const router = useRouter()
   const [state, setState] = useState<State>({ kind: 'idle' })
   const [pasting, setPasting] = useState(false)
@@ -119,6 +128,13 @@ export default function UploadTile({ onImported }: { onImported?: () => void }) 
     }
   }, [router, onImported])
 
+  const showPaste = pasting || (state.kind === 'refused' && state.offerPaste)
+  const expanded = showPaste || state.kind === 'reviewing' || state.kind === 'creating'
+
+  useEffect(() => {
+    onExpandedChange?.(expanded)
+  }, [expanded, onExpandedChange])
+
   if (state.kind === 'reviewing' || state.kind === 'creating') {
     return (
       <ImportReview
@@ -135,23 +151,21 @@ export default function UploadTile({ onImported }: { onImported?: () => void }) 
   const working = state.kind === 'working'
 
   return (
-    <section className="border-2 border-dashed border-white/25 bg-white/5 rounded-2xl p-5">
-      <h2 className="text-white font-semibold">Already have a resume?</h2>
-      <p className="text-xs text-indigo-300 mt-1">
-        Upload a PDF or Word file and we will sort it into sections for you to check.
-        The file itself is not kept — we read the text and discard it.
+    <Card tone="muted" className="p-3.5">
+      <p className={cx('text-xs leading-relaxed', tokens.secondary)}>
+        Start from a PDF or Word resume you already have.
       </p>
 
       {state.kind === 'refused' && (
-        <p role="alert" className="mt-3 text-xs text-amber-200">{state.message}</p>
+        <p role="alert" className="mt-2 text-xs text-amber-800">{state.message}</p>
       )}
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className={cx('mt-3 gap-1.5', expanded ? 'flex flex-wrap' : 'flex flex-col')}>
         <input
           ref={fileInput}
           type="file"
           accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          className="sr-only"
+          className="peer sr-only"
           id="import-file"
           onChange={(e) => {
             const file = e.target.files?.[0]
@@ -159,51 +173,66 @@ export default function UploadTile({ onImported }: { onImported?: () => void }) 
             e.target.value = ''
           }}
         />
+        {/* The visible control for the hidden input, so it shows the input's keyboard focus. */}
         <label
           htmlFor="import-file"
-          className={`px-4 py-2 text-sm font-semibold rounded-xl bg-white text-indigo-900 transition ${
-            working ? 'opacity-60 pointer-events-none' : 'hover:bg-indigo-50 cursor-pointer'
-          }`}
+          className={cx(
+            buttonClass('secondary', 'sm'),
+            'peer-focus-visible:ring-2 peer-focus-visible:ring-violet-600 peer-focus-visible:ring-offset-2',
+            working ? 'pointer-events-none opacity-60' : 'cursor-pointer'
+          )}
         >
-          {working ? `Reading ${state.what}...` : 'Choose a file'}
+          <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+          {working ? `Reading ${state.what}...` : 'Upload PDF or Word'}
         </label>
 
-        <button
-          type="button"
+        <Button
+          size="sm"
+          variant="tertiary"
+          icon={ClipboardPaste}
           disabled={working}
           onClick={() => setPasting((open) => !open)}
-          className="px-4 py-2 text-sm font-semibold rounded-xl border border-white/30 text-white hover:bg-white/10 transition disabled:opacity-60"
         >
           {pasting ? 'Hide paste box' : 'Paste resume text'}
-        </button>
+        </Button>
       </div>
 
-      {(pasting || (state.kind === 'refused' && state.offerPaste)) && (
-        <div className="mt-4">
-          <label className="block text-xs font-semibold text-indigo-200 mb-1" htmlFor="import-text">
-            Paste your resume text
-          </label>
-          <textarea
+      {showPaste && (
+        <div className="mt-3">
+          <TextAreaField
             id="import-text"
+            label="Paste your resume text"
             value={text}
+            rows={8}
             onChange={(e) => setText(e.target.value)}
-            className="w-full min-h-[10rem] bg-white/10 border border-white/25 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
             placeholder="Select everything in your resume, copy it, and paste it here."
           />
-          <button
-            type="button"
+          <Button
+            size="sm"
+            variant="primary"
+            className="mt-2"
             disabled={working || text.trim() === ''}
             onClick={() => void send({
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ text }),
             }, 'your text')}
-            className="mt-2 px-4 py-2 text-sm font-semibold rounded-xl bg-white text-indigo-900 hover:bg-indigo-50 transition disabled:opacity-60"
           >
             Import this text
-          </button>
+          </Button>
         </div>
       )}
-    </section>
+
+      <ul className={cx('mt-3 space-y-1.5 border-t border-slate-200 pt-2.5 text-[11px] leading-snug', tokens.secondary)}>
+        <li className="flex gap-1.5">
+          <Lock className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+          The file itself is not kept — we read the text and discard it.
+        </li>
+        <li className="flex gap-1.5">
+          <CircleCheck className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+          You review everything before a resume is created.
+        </li>
+      </ul>
+    </Card>
   )
 }
