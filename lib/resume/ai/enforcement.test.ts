@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { applyPatches } from '../studio/patch.ts'
 import type { StudioPatch } from '../studio/patch.ts'
 import { parsePatch } from '../studio/parse.ts'
-import { parseProposeRequest, targetTextFor } from './request.ts'
+import {
+  MAX_BULLET_ITEMS, MAX_ITEMS, parseProposeRequest, targetTextFor,
+} from './request.ts'
 import { createResume } from '../model/resume.ts'
 import { createBullet, createClinicalPosition, createSection } from '../model/sections.ts'
 import { createAuthoredText } from '../model/authoredText.ts'
@@ -164,6 +166,34 @@ test('a propose request is refused when anything is malformed', () => {
   }
 })
 
+test('only bullet generation may ask for more than the general ceiling', () => {
+  // The ceiling is decided per operation. Generation is plural by nature -- an
+  // applicant may take five of eight bullets -- and rewriting one field is not,
+  // so raising the one must not raise the other.
+  const base = { resumeId: U(9), sectionId: SEC, targetId: POS }
+
+  assert.equal(
+    parseProposeRequest({ ...base, operation: 'generate-bullets', maxItems: MAX_BULLET_ITEMS }).ok,
+    true,
+    'generation cannot ask for its own ceiling'
+  )
+  assert.equal(
+    parseProposeRequest({ ...base, operation: 'generate-bullets', maxItems: MAX_BULLET_ITEMS + 1 }).ok,
+    false,
+    'generation has no ceiling of its own'
+  )
+
+  for (const operation of ['improve-bullet', 'improve-text', 'tighten-summary', 'shorten']) {
+    assert.equal(
+      parseProposeRequest({ ...base, operation, maxItems: MAX_ITEMS }).ok, true, operation
+    )
+    assert.equal(
+      parseProposeRequest({ ...base, operation, maxItems: MAX_ITEMS + 1 }).ok, false,
+      `${operation} was allowed to ask for more than the general ceiling`
+    )
+  }
+})
+
 test('the text being rewritten is read from the stored resume', () => {
   const resume = resumeWith([positionSection(['Stored bullet.'])])
   assert.equal(targetTextFor(resume, SEC, POS, 0), 'Stored bullet.')
@@ -235,6 +265,28 @@ test('the rate limit is never dressed up as an upgrade prompt', () => {
     assert.equal(rateBlock.toLowerCase().includes(word), false, `the 429 path mentions "${word}"`)
   }
   assert.ok(PROPOSE.includes('429'))
+})
+
+test('writing new bullets may see the stored ones; improving one may not', () => {
+  // Two cases that look alike and are not. Bullets the applicant has already
+  // written are stored text of their own and legitimate context for the next
+  // one; the bullet being rewritten would otherwise ground itself.
+  assert.match(PROPOSE, /includeWrittenBullets: operation === 'generate-bullets'/)
+})
+
+test('a candidate is never added to the sheet it is checked against', () => {
+  const build = PROPOSE.indexOf('groundingFor(resume, command)')
+  const call = PROPOSE.indexOf('openai.chat.completions.create')
+  // The call site, not the import of the same name at the top of the file.
+  const verify = PROPOSE.indexOf('verifyGrounding(proposal')
+  assert.ok(build >= 0 && build < call, 'the grounding is built after the model has answered')
+  assert.ok(call < verify, 'proposals are verified before they exist')
+  // Nothing rebuilds the sheet once the model has replied, so no proposal can
+  // become part of what it is checked against.
+  assert.equal(
+    /factSheetFor|groundingFor/.test(PROPOSE.slice(call, verify)), false,
+    'the fact sheet is rebuilt between the model call and the verification'
+  )
 })
 
 test('the usage ledger records every attempt', () => {

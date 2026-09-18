@@ -39,6 +39,14 @@ export interface FieldDescriptor {
   readonly name: string
   /** The form label. Every input gets one; none is placeholder-only. */
   readonly label: string
+  /**
+   * A noun for the field where a sentence needs one.
+   *
+   * The best form label is often a question -- "What did you do or contribute?"
+   * -- which reads badly inside "Improve ... with AI". This is what that button
+   * says instead. Falls back to `label`.
+   */
+  readonly shortLabel?: string
   readonly kind: FieldKind
   readonly placeholder?: string
 }
@@ -79,7 +87,11 @@ const DESCRIPTORS: Record<ResumeSectionType, SectionDescriptor> = {
         text('field', 'Field of study', 'Nursing'),
         text('institution', 'Institution'),
         text('location', 'Location', 'Newark, NJ'),
-        { name: 'graduationDate', label: 'Graduated', kind: 'date' },
+        // A degree has a span. The start is optional -- a record written before
+        // this field existed has only the graduation date, and that still reads
+        // correctly on its own.
+        { name: 'startDate', label: 'Start date', kind: 'date' },
+        { name: 'graduationDate', label: 'End / graduation date', kind: 'date' },
         { name: 'overallGpa', label: 'Overall GPA', kind: 'gpa' },
         { name: 'scienceGpa', label: 'Science GPA', kind: 'gpa' },
         text('honors', 'Honors', 'Cum laude'),
@@ -126,7 +138,14 @@ const DESCRIPTORS: Record<ResumeSectionType, SectionDescriptor> = {
         text('facility', 'Facility'),
         text('hours', 'Hours', '40'),
         { name: 'dates', label: 'Dates', kind: 'daterange' },
-        { name: 'reflection', label: 'What you took from it', kind: 'authored' },
+        // The applicant's own account of the shadowing, and the only thing an
+        // AI improvement of this entry may be built from. See lib/resume/ai/gating.ts.
+        {
+          name: 'reflection',
+          label: 'Shadowing details',
+          kind: 'authored',
+          placeholder: 'What did you observe or learn? Write what actually happened, in your own words.',
+        },
       ],
     },
   },
@@ -153,7 +172,15 @@ const DESCRIPTORS: Record<ResumeSectionType, SectionDescriptor> = {
         text('role', 'Your role'),
         text('organization', 'Organization'),
         { name: 'dates', label: 'Dates', kind: 'daterange' },
-        { name: 'detail', label: 'What it achieved', kind: 'authored' },
+        // The applicant's own account, and the only thing an AI improvement of
+        // this entry may be built from. See lib/resume/ai/gating.ts.
+        {
+          name: 'detail',
+          label: 'What did you do or improve?',
+          shortLabel: 'your improvement',
+          kind: 'authored',
+          placeholder: 'What you actually did, in your own words.',
+        },
       ],
     },
   },
@@ -205,7 +232,15 @@ const DESCRIPTORS: Record<ResumeSectionType, SectionDescriptor> = {
         text('role', 'Role'),
         text('organization', 'Organization'),
         { name: 'dates', label: 'Dates', kind: 'daterange' },
-        { name: 'detail', label: 'What you did', kind: 'authored' },
+        // The applicant's own account, and the only thing an AI improvement of
+        // this entry may be built from. See lib/resume/ai/gating.ts.
+        {
+          name: 'detail',
+          label: 'What did you do or contribute?',
+          shortLabel: 'your contribution',
+          kind: 'authored',
+          placeholder: 'What you actually did, in your own words.',
+        },
       ],
     },
   },

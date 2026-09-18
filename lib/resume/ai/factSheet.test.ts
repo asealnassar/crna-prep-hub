@@ -127,7 +127,9 @@ test('the applicant’s own guided answer does become grounding', () => {
   assert.ok(values.includes('I ran the sepsis protocol every shift.'))
 })
 
-test('bullets are not grounding — they are the thing being written', () => {
+test('bullets are not grounding by default — on an improve they are the subject', () => {
+  // A caller has to ask for them, and only generation does. See "stored bullets
+  // as context, candidates as neither" below.
   const withBullets = { ...position(), bullets: [createBullet('Titrated vasopressors nightly.')] }
   const values = valuesOf(positionFacts(withBullets, 'critical_care'))
   assert.equal(values.includes('Titrated vasopressors nightly.'), false)
@@ -184,7 +186,21 @@ function resumeWith(sections: readonly ResumeSectionV2[]): ResumeV2 {
   return { ...base, contact: { ...emptyContact(), fullName: 'Jane Doe', email: 'j@example.test' }, sections }
 }
 
-test('the summary sheet spans sections but carries no contact details', () => {
+const summaryOf = (written: string): ResumeSectionV2 =>
+  ({ ...createSection('summary', 'sum'), text: createAuthoredText(written) }) as ResumeSectionV2
+
+const WROTE = 'Six years in a medical ICU, most of it on nights.'
+
+test('the summary is grounded in the summary the applicant wrote', () => {
+  const sheet = factSheetForSummary(resumeWith([summaryOf(WROTE)]))
+  assert.ok(valuesOf(sheet.facts).includes(WROTE))
+  assert.equal(sheet.subject, 'summary/text')
+})
+
+test('a fact elsewhere on the resume does not license a claim in the summary', () => {
+  // The sheet is PERMISSION. Listing an employer and a degree here invited a
+  // "tightened" summary to state things the applicant never said about
+  // themselves -- true of the resume, but never their own words.
   const cc = { ...createSection('critical_care', 'cc'), positions: [position()] } as ResumeSectionV2
   const edu = {
     ...createSection('education', 'ed'),
@@ -196,22 +212,31 @@ test('the summary sheet spans sections but carries no contact details', () => {
     }],
   } as ResumeSectionV2
 
-  const sheet = factSheetForSummary(resumeWith([cc, edu]))
-  const values = valuesOf(sheet.facts)
-  assert.ok(values.includes('University Hospital'))
-  assert.ok(values.includes('Rutgers University'))
-  // A summary needs none of this, so the model is never shown it.
+  const values = valuesOf(factSheetForSummary(resumeWith([summaryOf(WROTE), cc, edu])).facts)
+  assert.ok(values.includes(WROTE), 'their own summary was withheld')
+  assert.equal(values.includes('University Hospital'), false, 'an employer licensed a summary claim')
+  assert.equal(values.includes('Rutgers University'), false, 'an institution licensed a summary claim')
+  // A summary needs none of this either, and never did.
   assert.equal(values.includes('Jane Doe'), false, 'the applicant’s name reached the model')
   assert.equal(values.includes('j@example.test'), false, 'an email reached the model')
   assert.equal(values.some((v) => v.includes('3.85')), false, 'a GPA reached the model')
 })
 
-test('a hidden section is not grounding', () => {
-  const cc = {
-    ...createSection('critical_care', 'cc'), visible: false, positions: [position()],
-  } as ResumeSectionV2
-  const sheet = factSheetForSummary(resumeWith([cc]))
-  assert.equal(valuesOf(sheet.facts).includes('University Hospital'), false)
+test('a summary an assistant tightened grounds in their words, not its own', () => {
+  const tightened = acceptProposal(
+    propose(createAuthoredText(WROTE), {
+      text: 'Seasoned nocturnal critical-care clinician.', model: 'test', groundedIn: [], requestedAt: NOW,
+    }),
+    NOW
+  )
+  const section = { ...createSection('summary', 'sum'), text: tightened } as ResumeSectionV2
+  const values = valuesOf(factSheetForSummary(resumeWith([section])).facts)
+
+  assert.ok(values.includes(WROTE), 'their own source was discarded')
+  assert.equal(
+    values.includes('Seasoned nocturnal critical-care clinician.'), false,
+    'the assistant’s own sentence became the grounding for the next round'
+  )
 })
 
 test('an untouched resume yields an empty sheet rather than throwing', () => {
@@ -224,4 +249,122 @@ test('building a sheet mutates nothing', () => {
   const before = JSON.stringify(p)
   factSheetForPosition(p, 'critical_care')
   assert.equal(JSON.stringify(p), before)
+})
+
+// --------------------------------- the summary sees the whole resume
+
+test('an education record written before start dates existed still builds', () => {
+  // `startDate` is optional on purpose: nothing rewrites stored rows to add it.
+  // A formatter reading `.kind` off an absent field would throw, and the
+  // applicant would lose a proposal rather than a date.
+  const legacy = {
+    id: 'e1', degree: 'BSN', field: 'Nursing', institution: 'Rutgers University',
+    location: 'Newark, NJ', graduationDate: resumeDateFromParts(2019, 5),
+    overallGpa: { raw: '', value: null, showOnResume: false },
+    scienceGpa: { raw: '', value: null, showOnResume: false }, honors: '',
+  } as unknown as Record<string, unknown>
+
+  const values = valuesOf(entryFacts('education', legacy, 'education/e1'))
+  assert.ok(values.includes('Rutgers University'))
+  assert.ok(values.includes('May 2019'), 'the graduation date was lost')
+})
+
+test('an education start date is a fact once it is given', () => {
+  const withStart = {
+    id: 'e1', degree: 'BSN', field: 'Nursing', institution: 'Rutgers University',
+    location: 'Newark, NJ',
+    startDate: resumeDateFromParts(2015, 8), graduationDate: resumeDateFromParts(2019, 5),
+    overallGpa: { raw: '', value: null, showOnResume: false },
+    scienceGpa: { raw: '', value: null, showOnResume: false }, honors: '',
+  } as unknown as Record<string, unknown>
+
+  const values = valuesOf(entryFacts('education', withStart, 'education/e1'))
+  assert.ok(values.includes('Aug 2015'), 'the start date the applicant gave was withheld')
+})
+
+test('entry facts survive a record missing a field entirely', () => {
+  const sparse = { id: 'e1', degree: 'BSN' } as unknown as Record<string, unknown>
+  assert.doesNotThrow(() => entryFacts('education', sparse, 'education/e1'))
+  assert.deepEqual(valuesOf(entryFacts('education', sparse, 'education/e1')), ['BSN'])
+})
+
+// ------------------- stored bullets as context, candidates as neither
+
+test('writing a new bullet may draw on the ones they have already written', () => {
+  // Their own account of this job, in their own words. A sixth bullet written
+  // in ignorance of the first five is how an assistant repeats or contradicts
+  // what is already on the page.
+  const withBullets = { ...position(), bullets: [createBullet('Ran the sepsis protocol every shift.')] }
+  const sheet = factSheetForPosition(withBullets, 'critical_care', { includeWrittenBullets: true })
+  assert.ok(valuesOf(sheet.facts).includes('Ran the sepsis protocol every shift.'))
+})
+
+test('improving one bullet grounds in the facts, not in the bullets', () => {
+  // The default, and what an improve uses. There the bullets ARE the subject,
+  // and a claim allowed to ground itself would verify against itself.
+  const withBullets = { ...position(), bullets: [createBullet('Ran the sepsis protocol every shift.')] }
+  const sheet = factSheetForPosition(withBullets, 'critical_care')
+  assert.equal(valuesOf(sheet.facts).includes('Ran the sepsis protocol every shift.'), false)
+})
+
+test('an AI sentence never grounds the next generation', () => {
+  // The recursion that must not happen: a figure invented once, accepted, and
+  // then treated as a supplied fact forever after.
+  const aiBullet = acceptProposal(
+    propose(createAuthoredText(''), {
+      text: 'Maintained a 2:1 assignment.', model: 'test', groundedIn: [], requestedAt: NOW,
+    }),
+    NOW
+  )
+  const sheet = factSheetForPosition(
+    { ...position(), bullets: [aiBullet] }, 'critical_care', { includeWrittenBullets: true }
+  )
+  assert.equal(
+    valuesOf(sheet.facts).some((v) => v.includes('2:1')), false,
+    'a fabrication became grounding for the next round'
+  )
+})
+
+test('their own words survive an assistant having tightened them', () => {
+  // The distinction this rule turns on: the proposal is not a fact, but the
+  // applicant's source underneath it never stopped being one.
+  const mine = createAuthoredText('I ran the sepsis protocol on every night shift.')
+  const tightened = acceptProposal(
+    propose(mine, {
+      text: 'Ran sepsis protocols nightly.', model: 'test', groundedIn: [], requestedAt: NOW,
+    }),
+    NOW
+  )
+  const values = valuesOf(factSheetForPosition(
+    { ...position(), bullets: [tightened] }, 'critical_care', { includeWrittenBullets: true }
+  ).facts)
+
+  assert.ok(
+    values.includes('I ran the sepsis protocol on every night shift.'),
+    'their own source was thrown away with the assistant’s wording'
+  )
+  assert.equal(values.includes('Ran sepsis protocols nightly.'), false, 'the AI’s sentence became a fact')
+})
+
+test('a generation sheet still carries only that position', () => {
+  const other = createClinicalPosition('p2', { employer: 'Another Hospital' })
+  const values = valuesOf(factSheetForPosition(
+    { ...position(), bullets: [createBullet('Mine.')] }, 'critical_care', { includeWrittenBullets: true }
+  ).facts)
+  assert.equal(values.includes('Another Hospital'), false)
+  assert.equal(
+    valuesOf(positionFacts(other, 'critical_care', { includeWrittenBullets: true })).includes('Mine.'),
+    false
+  )
+})
+
+test('a bullet used as context is a fact like any other', () => {
+  const sheet = factSheetForPosition(
+    { ...position(), bullets: [createBullet('Mine.')] }, 'critical_care', { includeWrittenBullets: true }
+  )
+  const bullet = sheet.facts.find((f) => f.value === 'Mine.')
+  assert.ok(bullet, 'the bullet reached the sheet without a fact of its own')
+  assert.match(bullet!.id, /^f:/, 'a bullet fact cannot be cited')
+  assert.equal(bullet!.path, 'critical_care/p1/bullets#0')
+  assert.ok(['user', 'import'].includes(bullet!.provenance), bullet!.provenance)
 })

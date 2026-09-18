@@ -92,15 +92,29 @@ test('the Professional Summary heading is fixed, whatever label is stored', () =
 })
 
 test('every other section type still takes its label', () => {
-  // Filtered on the literal rather than on the rule itself, so a rule that
+  // Filtered on the literals rather than on the rule itself, so a rule that
   // grew by mistake cannot quietly shrink the list this checks.
-  for (const type of SECTION_TYPES.filter((t) => t !== 'summary')) {
+  for (const type of SECTION_TYPES.filter((t) => t !== 'summary' && t !== 'education')) {
     assert.equal(headingFor(createSection(type, 'x', { label: 'Renamed' })), 'Renamed', type)
   }
 })
 
-test('only the Professional Summary has a fixed heading, for now', () => {
-  for (const type of SECTION_TYPES) assert.equal(hasFixedHeading(type), type === 'summary', type)
+test('Education is headed "Education", whatever label a row carries', () => {
+  // A programme reading the resume looks for the word. A section renamed
+  // "School" or "Academics" is the applicant's own work made harder to find,
+  // and rows saved before the heading was fixed still carry those labels --
+  // so the label is ignored rather than migrated away.
+  for (const label of [null, '', '  ', 'Academics', 'School']) {
+    assert.equal(
+      headingFor(createSection('education', 'e1', { label })), 'Education', JSON.stringify(label)
+    )
+  }
+})
+
+test('the Professional Summary and Education have fixed headings', () => {
+  for (const type of SECTION_TYPES) {
+    assert.equal(hasFixedHeading(type), type === 'summary' || type === 'education', type)
+  }
 })
 
 test('Leadership, Quality Improvement and Research are separate sections', () => {

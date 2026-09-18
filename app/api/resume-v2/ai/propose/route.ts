@@ -11,6 +11,8 @@ import {
 import {
   factSheetForEntryField, factSheetForPosition, factSheetForSummary,
 } from '@/lib/resume/ai/factSheet'
+import { assistDecision } from '@/lib/resume/ai/gating'
+import { usableCandidates } from '@/lib/resume/ai/candidates'
 import { descriptorFor } from '@/lib/resume/studio/fields'
 import { buildPrompt, needsCurrentText, parseModelResponse } from '@/lib/resume/ai/prompts'
 import { verifyGrounding } from '@/lib/resume/ai/verify'
@@ -105,6 +107,24 @@ export async function POST(request: NextRequest) {
   const resume = read.value.resume
   if (!resume) return NextResponse.json({ error: 'not-found' }, { status: 404 })
 
+  // A sixth question, asked before the five layers: is there enough of the
+  // applicant's own work for a proposal to be an improvement rather than an
+  // invention? The editor disables the control for the same reason and in the
+  // same words, so this is the floor under that rather than a second opinion.
+  const section = resume.sections.find((s) => s.id === command.sectionId)
+  if (!section) return NextResponse.json({ error: 'unknown-target' }, { status: 400 })
+
+  const decision = assistDecision({
+    resume,
+    section,
+    operation: command.operation,
+    targetId: command.targetId,
+    field: command.field,
+  })
+  if (!decision.allowed) {
+    return NextResponse.json({ error: 'not-available', message: decision.reason }, { status: 400 })
+  }
+
   // Invisible ceiling. Checked before the model call, so abuse costs no tokens.
   const rate = await rateDecision(db, auth.userId)
   if (!rate.allowed) {
@@ -114,7 +134,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const grounding = groundingFor(resume, command.sectionId, command.targetId, command.field)
+  const grounding = groundingFor(resume, command)
   if (!grounding) return NextResponse.json({ error: 'unknown-target' }, { status: 400 })
 
   const currentText = needsCurrentText(command.operation)
@@ -173,10 +193,20 @@ export async function POST(request: NextRequest) {
     else violations.push(...verdict.violations)
   }
 
-  await settle(db, usageId, violations.length > 0 && proposals.length === 0 ? 'rejected' : 'proposed')
+  // A choice of five that says one thing five ways is not a choice, and a
+  // suggestion to write what is already written is not a suggestion. Compared
+  // against the STORED bullets, for the same reason the grounding is built from
+  // them: the browser's copy is not what this server can vouch for.
+  const alreadyWritten =
+    section.type === 'critical_care' || section.type === 'other_clinical'
+      ? (section.positions.find((p) => p.id === command.targetId)?.bullets ?? []).map((b) => b.accepted)
+      : []
+  const offered = usableCandidates(proposals, alreadyWritten)
+
+  await settle(db, usageId, violations.length > 0 && offered.length === 0 ? 'rejected' : 'proposed')
 
   return NextResponse.json({
-    proposals,
+    proposals: offered,
     opportunities: model.value.opportunities,
     // Echoed so an acceptance can record what produced it and what it was
     // allowed to know. The server re-derives both before storing anything, so
@@ -200,10 +230,15 @@ export async function POST(request: NextRequest) {
  */
 function groundingFor(
   resume: ResumeV2,
-  sectionId: string,
-  targetId: string | null,
-  field: string | null
+  command: {
+    readonly sectionId: string
+    readonly targetId: string | null
+    readonly field: string | null
+    readonly operation: AiOperation
+  }
 ): FactSheet | null {
+  const { sectionId, targetId, field, operation } = command
+
   const section = resume.sections.find((s) => s.id === sectionId)
   if (!section) return null
 
@@ -211,7 +246,17 @@ function groundingFor(
 
   if (section.type === 'critical_care' || section.type === 'other_clinical') {
     const position = section.positions.find((p) => p.id === targetId)
-    return position ? factSheetForPosition(position, section.type) : null
+    if (!position) return null
+    // WRITING a new bullet may draw on the ones the applicant has already
+    // written for this same job: those are stored text of their own, and a
+    // sixth bullet written in ignorance of the first five repeats or
+    // contradicts them. IMPROVING one may not -- there the bullets are the
+    // subject, and a claim allowed to ground itself would verify against
+    // itself. A new candidate is in neither case: it is checked against this
+    // sheet, so it can never be in it.
+    return factSheetForPosition(position, section.type, {
+      includeWrittenBullets: operation === 'generate-bullets',
+    })
   }
 
   // Every other list-shaped section: leadership, quality improvement, research,

@@ -16,7 +16,43 @@ import { descriptorFor } from '../studio/fields.ts'
 
 export type { AiOperation }
 
+/**
+ * The ceiling for an ordinary request: alternative wordings of ONE field.
+ *
+ * The applicant picks one of them, and six is already more than anyone reads.
+ */
 export const MAX_ITEMS = 6
+
+/**
+ * The ceiling for bullet generation, which is a different question.
+ *
+ * Generation is the one operation whose answer is genuinely plural: an
+ * applicant may recognise five of eight bullets as true of their work and take
+ * all five. It is a SEPARATE constant so that letting generation offer more
+ * cannot quietly let every other operation return more than a person can choose
+ * between -- the ceiling is decided per operation, by `maxItemsFor`.
+ */
+export const MAX_BULLET_ITEMS = 8
+
+/**
+ * How many bullet candidates a generation asks for.
+ *
+ * Eight rather than one. A single suggestion is an ultimatum -- the applicant
+ * cannot tell whether a better phrasing existed, and the only choice on offer
+ * is take it or leave it. Several distinct candidates put the writing back in
+ * their hands, which is the whole point of the human gate.
+ *
+ * It is an upper bound on what is ASKED for, never a target for what is shown:
+ * the verifier removes anything unsupported and near-duplicates are dropped, so
+ * a position with four facts still yields the few bullets those facts carry
+ * rather than eight paraphrases of the same one.
+ */
+export const BULLET_CANDIDATES = 8
+
+/** The most this operation may ask for. Generation is the only exception. */
+export function maxItemsFor(operation: AiOperation): number {
+  return operation === 'generate-bullets' ? MAX_BULLET_ITEMS : MAX_ITEMS
+}
 
 export interface ProposeCommand {
   readonly resumeId: string
@@ -76,10 +112,13 @@ export function parseProposeRequest(body: unknown): ParseProposeResult {
     bulletIndex = b.bulletIndex
   }
 
+  // Per operation, not one number for all of them: only generation may ask for
+  // more than MAX_ITEMS, and it may not ask for more than its own ceiling.
+  const ceiling = maxItemsFor(operation)
   let maxItems = 3
   if (b.maxItems !== undefined) {
     if (typeof b.maxItems !== 'number' || !Number.isInteger(b.maxItems) ||
-        b.maxItems < 1 || b.maxItems > MAX_ITEMS) {
+        b.maxItems < 1 || b.maxItems > ceiling) {
       return { ok: false, error: 'A valid maxItems is required.' }
     }
     maxItems = b.maxItems

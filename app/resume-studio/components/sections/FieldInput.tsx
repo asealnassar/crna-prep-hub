@@ -1,11 +1,13 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import { rawDateText } from '@/lib/resume/model/dates'
 import type { ResumeDate, ResumeDateRange } from '@/lib/resume/model/dates'
 import type { AuthoredText } from '@/lib/resume/model/authoredText'
 import type { GpaValue } from '@/lib/resume/model/types'
 import type { FieldDescriptor } from '@/lib/resume/studio/fields'
 import type { FieldValue } from '@/lib/resume/studio/patch'
+import { CheckboxField, TextAreaField, TextField, cx, field as fieldStyle } from '../ui'
 
 /**
  * One field, rendered from its descriptor.
@@ -19,49 +21,41 @@ import type { FieldValue } from '@/lib/resume/studio/patch'
  * and "expected 2026" and keeps them intact; a native date picker would force a
  * day-precision value nobody has and reject the honest answer.
  */
-const INPUT =
-  'w-full bg-white/10 border border-white/25 rounded-lg px-3 py-2 text-white placeholder-indigo-300/50 ' +
-  'focus:outline-none focus:ring-2 focus:ring-indigo-300'
-const LABEL = 'block text-xs font-semibold text-indigo-200 mb-1'
-
 export default function FieldInput({
   descriptor,
   value,
   id,
   onChange,
+  footer,
 }: {
   descriptor: FieldDescriptor
   value: unknown
   id: string
   onChange: (value: FieldValue) => void
+  /** Authored prose only: a toolbar inside the field, where its AI actions live. */
+  footer?: ReactNode
 }) {
   switch (descriptor.kind) {
     case 'text':
       return (
-        <div>
-          <label className={LABEL} htmlFor={id}>{descriptor.label}</label>
-          <input
-            id={id}
-            className={INPUT}
-            value={String(value ?? '')}
-            placeholder={descriptor.placeholder}
-            onChange={(e) => onChange(e.target.value)}
-          />
-        </div>
+        <TextField
+          id={id}
+          label={descriptor.label}
+          value={String(value ?? '')}
+          placeholder={descriptor.placeholder}
+          onChange={(e) => onChange(e.target.value)}
+        />
       )
 
     case 'date':
       return (
-        <div>
-          <label className={LABEL} htmlFor={id}>{descriptor.label}</label>
-          <input
-            id={id}
-            className={INPUT}
-            value={rawDateText((value ?? { kind: 'absent' }) as ResumeDate)}
-            placeholder="2024-05 or Spring 2024"
-            onChange={(e) => onChange(e.target.value)}
-          />
-        </div>
+        <TextField
+          id={id}
+          label={descriptor.label}
+          value={rawDateText((value ?? { kind: 'absent' }) as ResumeDate)}
+          placeholder="2024-05 or Spring 2024"
+          onChange={(e) => onChange(e.target.value)}
+        />
       )
 
     case 'daterange': {
@@ -75,12 +69,12 @@ export default function FieldInput({
         })
       return (
         <div>
-          <span className={LABEL}>{descriptor.label}</span>
-          <div className="flex flex-wrap items-center gap-2">
+          <span className={fieldStyle.label}>{descriptor.label}</span>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <label className="sr-only" htmlFor={`${id}-start`}>{descriptor.label} start</label>
             <input
               id={`${id}-start`}
-              className={`${INPUT} flex-1 min-w-[7rem]`}
+              className={cx(fieldStyle.control, 'min-w-[7rem] flex-1')}
               value={rawDateText(range.start)}
               placeholder="Start"
               onChange={(e) => emit({ start: e.target.value })}
@@ -88,21 +82,20 @@ export default function FieldInput({
             <label className="sr-only" htmlFor={`${id}-end`}>{descriptor.label} end</label>
             <input
               id={`${id}-end`}
-              className={`${INPUT} flex-1 min-w-[7rem]`}
+              className={cx(fieldStyle.control, 'min-w-[7rem] flex-1')}
               value={range.isCurrent ? '' : rawDateText(range.end)}
               placeholder={range.isCurrent ? 'Present' : 'End'}
               disabled={range.isCurrent}
               onChange={(e) => emit({ end: e.target.value })}
             />
           </div>
-          <label className="mt-2 flex items-center gap-2 text-sm text-indigo-100">
-            <input
-              type="checkbox"
-              checked={range.isCurrent}
-              onChange={(e) => emit({ isCurrent: e.target.checked })}
-            />
-            Still in this role
-          </label>
+          <CheckboxField
+            id={`${id}-current`}
+            label="Still in this role"
+            className="mt-2"
+            checked={range.isCurrent}
+            onChange={(e) => emit({ isCurrent: e.target.checked })}
+          />
         </div>
       )
     }
@@ -111,54 +104,47 @@ export default function FieldInput({
       const gpa = (value ?? { raw: '', value: null, showOnResume: false }) as GpaValue
       return (
         <div>
-          <label className={LABEL} htmlFor={id}>{descriptor.label}</label>
-          <input
+          <TextField
             id={id}
-            className={INPUT}
+            label={descriptor.label}
             value={gpa.raw}
             placeholder="3.85"
             onChange={(e) => onChange({ raw: e.target.value, showOnResume: gpa.showOnResume })}
           />
           {/* Off by default. V1 printed whatever was entered, with no way to
               withhold a GPA a programme had not asked for. */}
-          <label className="mt-2 flex items-center gap-2 text-sm text-indigo-100">
-            <input
-              type="checkbox"
-              checked={gpa.showOnResume}
-              onChange={(e) => onChange({ raw: gpa.raw, showOnResume: e.target.checked })}
-            />
-            Show on resume
-          </label>
+          <CheckboxField
+            id={`${id}-show`}
+            label="Show on resume"
+            className="mt-2"
+            checked={gpa.showOnResume}
+            onChange={(e) => onChange({ raw: gpa.raw, showOnResume: e.target.checked })}
+          />
         </div>
       )
     }
 
     case 'boolean':
       return (
-        <label className="flex items-center gap-2 text-sm text-indigo-100">
-          <input
-            id={id}
-            type="checkbox"
-            checked={value === true}
-            onChange={(e) => onChange(e.target.checked)}
-          />
-          {descriptor.label}
-        </label>
+        <CheckboxField
+          id={id}
+          label={descriptor.label}
+          checked={value === true}
+          onChange={(e) => onChange(e.target.checked)}
+        />
       )
 
     case 'authored': {
       const text = (value ?? null) as AuthoredText | null
       return (
-        <div>
-          <label className={LABEL} htmlFor={id}>{descriptor.label}</label>
-          <textarea
-            id={id}
-            className={`${INPUT} min-h-[5rem]`}
-            value={text?.accepted ?? ''}
-            placeholder={descriptor.placeholder}
-            onChange={(e) => onChange(e.target.value)}
-          />
-        </div>
+        <TextAreaField
+          id={id}
+          label={descriptor.label}
+          value={text?.accepted ?? ''}
+          placeholder={descriptor.placeholder}
+          footer={footer}
+          onChange={(e) => onChange(e.target.value)}
+        />
       )
     }
   }

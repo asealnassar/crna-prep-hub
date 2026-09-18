@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  IDLE, canRegenerate, canRestoreOriginal, canRestoreUserText, reduceProposal,
-  selectedProposal,
+  IDLE, canRegenerate, canRestoreOriginal, canRestoreUserText, isSelected,
+  reduceProposal, selectedProposal, selectedProposals,
 } from './proposalFlow.ts'
 import type { ProposalState } from './proposalFlow.ts'
 import {
@@ -172,5 +172,80 @@ test('the reducer mutates nothing', () => {
   const before = JSON.stringify(state)
   reduceProposal(state, { type: 'choose', index: 1 })
   reduceProposal(state, { type: 'accepted' })
+  assert.equal(JSON.stringify(state), before)
+})
+
+// ------------------------------------------- taking more than one
+
+test('nothing arrives already ticked', () => {
+  // The choice is the whole point of the gate. A pre-ticked candidate is a
+  // default answer to a question only the applicant can answer.
+  const state = offered()
+  assert.deepEqual(selectedProposals(state), [])
+  assert.equal(isSelected(state, 0), false)
+})
+
+test('candidates can be ticked and unticked', () => {
+  const ticked = reduceProposal(offered(), { type: 'toggle', index: 1 })
+  assert.deepEqual(selectedProposals(ticked), ['Two.'])
+  assert.equal(isSelected(ticked, 1), true)
+  assert.equal(isSelected(ticked, 0), false)
+
+  const unticked = reduceProposal(ticked, { type: 'toggle', index: 1 })
+  assert.deepEqual(selectedProposals(unticked), [])
+})
+
+test('several can be taken at once, in the order they were offered', () => {
+  const both = reduceProposal(
+    reduceProposal(offered(), { type: 'toggle', index: 1 }),
+    { type: 'toggle', index: 0 }
+  )
+  assert.deepEqual(selectedProposals(both), ['One.', 'Two.'], 'ticking order leaked into the resume')
+})
+
+test('ticking something that is not there changes nothing', () => {
+  const state = offered()
+  for (const index of [-1, 2, 99]) {
+    assert.equal(reduceProposal(state, { type: 'toggle', index }), state, String(index))
+  }
+})
+
+test('ticking is only possible while something is offered', () => {
+  for (const state of [IDLE, { kind: 'working' as const }]) {
+    assert.equal(reduceProposal(state, { type: 'toggle', index: 0 }), state)
+    assert.deepEqual(selectedProposals(state), [])
+  }
+})
+
+test('choosing and ticking do not disturb each other', () => {
+  // One offer, two ways of reading it: `index` for a single-answer field,
+  // `selected` for bullets. Neither may quietly move the other.
+  const ticked = reduceProposal(offered(), { type: 'toggle', index: 1 })
+  const chosen = reduceProposal(ticked, { type: 'choose', index: 1 })
+  assert.equal(selectedProposal(chosen), 'Two.')
+  assert.deepEqual(selectedProposals(chosen), ['Two.'])
+
+  const back = reduceProposal(chosen, { type: 'choose', index: 0 })
+  assert.deepEqual(selectedProposals(back), ['Two.'], 'a switch of view unticked a candidate')
+})
+
+test('a fresh offer starts unticked again', () => {
+  const ticked = reduceProposal(offered(), { type: 'toggle', index: 0 })
+  const again = reduceProposal(ticked, {
+    type: 'received', proposals: ['Three.', 'Four.'], opportunities: [], rejected: [],
+  })
+  assert.deepEqual(selectedProposals(again), [], 'a previous tick carried into a new set of candidates')
+})
+
+test('taking the selection resets, like taking one does', () => {
+  const ticked = reduceProposal(offered(), { type: 'toggle', index: 0 })
+  assert.deepEqual(reduceProposal(ticked, { type: 'accepted' }), IDLE)
+  assert.deepEqual(reduceProposal(ticked, { type: 'keep-original' }), IDLE)
+})
+
+test('ticking mutates nothing', () => {
+  const state = offered()
+  const before = JSON.stringify(state)
+  reduceProposal(state, { type: 'toggle', index: 0 })
   assert.equal(JSON.stringify(state), before)
 })

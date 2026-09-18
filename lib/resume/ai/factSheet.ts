@@ -16,9 +16,16 @@
  *
  * 2. NOTHING AI-AUTHORED. A Fact's provenance admits 'user' and 'import' only,
  *    so the type already forbids it -- but text that an AI wrote and a person
- *    accepted is still AI-authored, and letting it back in as grounding would
- *    launder a fabrication into a fact over two turns. Text being improved is
- *    passed to the prompt SEPARATELY, as the subject, never as grounding.
+ *    accepted is still AI-authored, and letting that SENTENCE back in as
+ *    grounding would launder a fabrication into a fact over two turns.
+ *
+ *    Two cases that look alike and are not. Text the applicant STORED is theirs
+ *    and may ground what comes next, even where an assistant later tightened it
+ *    -- their own words are still recorded underneath, and
+ *    `factsFromApplicantSource` reads those rather than the proposal. A NEW
+ *    candidate is a different thing entirely: it is never in the sheet it is
+ *    checked against, because it is verified before it is anything at all. Text
+ *    being improved is likewise passed to the prompt SEPARATELY, as the subject.
  *
  * 3. NOTHING OUT OF SCOPE. One position's sheet carries that position's facts.
  *    A proposal for one bullet cannot see another job, another applicant's
@@ -53,13 +60,55 @@ function factsFromAuthored(
 }
 
 /**
+ * The applicant's own words behind a piece of stored text.
+ *
+ * `factsFromAuthored` discards AI-accepted text whole, which is right where the
+ * question is "did a person write this sentence". It is wrong where the question
+ * is "what has this applicant told us about this job": someone who wrote a
+ * bullet and then let an assistant tighten it has not stopped having written it.
+ * Their source is kept in `userSource` precisely so it stays recoverable, and it
+ * is what grounds here -- never the proposal that replaced it.
+ *
+ * So an AI sentence can never support the next generation, while the applicant's
+ * own account of the same work still can. A bullet with no applicant source
+ * behind it contributes nothing, which is the recursion closing.
+ */
+function factsFromApplicantSource(
+  text: AuthoredText | undefined,
+  kind: Fact['kind'],
+  path: string
+): Fact[] {
+  if (!text || isBlankAuthoredText(text)) return []
+  const own = isAiAuthored(text) ? text.userSource : text.accepted
+  return factFromValue(own, kind, path, text.userOrigin === 'import' ? 'import' : 'user')
+}
+
+/**
  * Facts for one clinical position.
  *
  * The date range is formatted with the document's own formatter rather than a
  * second one, so a model is told the same dates the resume prints. It is the
  * range as supplied -- no duration is computed from it.
  */
-export function positionFacts(position: ClinicalPosition, sectionType: string): Fact[] {
+export function positionFacts(
+  position: ClinicalPosition,
+  sectionType: string,
+  options: {
+    /**
+     * Include the bullets the APPLICANT wrote for this position.
+     *
+     * Off by default, because the caller that improves ONE bullet must not be
+     * handed the bullets: there they are the subject, and a claim allowed to
+     * ground itself would verify against itself. On for GENERATION, where what
+     * they have already written about this job is exactly the context a sixth
+     * bullet needs in order not to repeat or contradict the first five.
+     *
+     * A new candidate is never here. Only STORED text reaches a sheet, and a
+     * candidate is checked against this one before it is anything at all.
+     */
+    readonly includeWrittenBullets?: boolean
+  } = {}
+): Fact[] {
   const base = `${sectionType}/${position.id}`
   const f = position.facts
 
@@ -88,6 +137,14 @@ export function positionFacts(position: ClinicalPosition, sectionType: string): 
     // What the applicant said in their own words, before anything was written.
     ...position.guided.flatMap((response, i) =>
       factsFromAuthored(response.answer, 'applicant_note', `${base}/guided#${i}`)),
+    // Their own words, whoever tightened them afterwards: an assistant's
+    // sentence is never a fact, and `factsFromApplicantSource` reads the source
+    // recorded underneath it instead. A bullet with no applicant source behind
+    // it contributes nothing, which is where the recursion closes.
+    ...(options.includeWrittenBullets
+      ? position.bullets.flatMap((bullet, i) =>
+          factsFromApplicantSource(bullet, 'applicant_note', `${base}/bullets#${i}`))
+      : []),
   ]
 }
 
@@ -99,57 +156,37 @@ export function positionFacts(position: ClinicalPosition, sectionType: string): 
  */
 export function factSheetForPosition(
   position: ClinicalPosition,
-  sectionType: string
+  sectionType: string,
+  options: { readonly includeWrittenBullets?: boolean } = {}
 ): FactSheet {
-  return factSheet(`${sectionType}/${position.id}/bullets`, [positionFacts(position, sectionType)])
+  return factSheet(
+    `${sectionType}/${position.id}/bullets`,
+    [positionFacts(position, sectionType, options)]
+  )
 }
 
 /**
  * The sheet for tightening the professional summary.
  *
- * A summary is about the whole applicant, so this is the one sheet that spans
- * sections -- and it is still built from named fields, never from the resume
- * object. Nothing is counted, nothing is totalled, and no span of years is
- * derived from the dates it includes.
+ * THE SUMMARY IS THE GROUNDING. Tightening means rewriting the paragraph the
+ * applicant wrote, so what licenses a claim is that paragraph and nothing else.
+ *
+ * It once spanned the whole resume, on the reasoning that a summary is about
+ * the whole applicant. That was the wrong envelope: a fact sheet is permission,
+ * so listing a degree, a certification and four employers invited a "tightened"
+ * summary to introduce claims the applicant had never made ABOUT THEMSELVES --
+ * true statements, in the wrong paragraph, that they never chose to say. The
+ * rest of the resume still cross-checks the result, because the verifier
+ * refuses anything this sheet cannot support.
+ *
+ * `factsFromApplicantSource` means a summary an assistant has already tightened
+ * grounds in the applicant's own words underneath, never in the last proposal.
  */
 export function factSheetForSummary(resume: ResumeV2): FactSheet {
-  const facts: Fact[] = []
-
-  for (const section of resume.sections) {
-    if (!section.visible) continue
-
-    if (section.type === 'critical_care' || section.type === 'other_clinical') {
-      for (const position of section.positions) {
-        facts.push(...positionFacts(position, section.type))
-      }
-    }
-
-    if (section.type === 'education') {
-      for (const entry of section.entries) {
-        const base = `education/${entry.id}`
-        facts.push(
-          ...factFromValue(entry.degree, 'credential', `${base}/degree`),
-          ...factFromValue(entry.field, 'credential', `${base}/field`),
-          ...factFromValue(entry.institution, 'organization', `${base}/institution`),
-        )
-      }
-    }
-
-    if (section.type === 'certifications') {
-      for (const entry of section.certifications) {
-        facts.push(...factFromValue(entry.name, 'credential', `certifications/${entry.id}/name`))
-      }
-    }
-
-    if (section.type === 'licensure') {
-      for (const entry of section.licenses) {
-        facts.push(
-          ...factFromValue(entry.licenseType, 'credential', `licensure/${entry.id}/type`),
-          ...factFromValue(entry.state, 'location', `licensure/${entry.id}/state`),
-        )
-      }
-    }
-  }
+  const summary = resume.sections.find((section) => section.type === 'summary')
+  const facts = summary?.type === 'summary'
+    ? factsFromApplicantSource(summary.text, 'applicant_note', 'summary/text')
+    : []
 
   return factSheet('summary/text', [facts])
 }
@@ -211,12 +248,18 @@ export function entryFacts(
     const value = entry[field.name]
     const path = `${base}/${field.name}`
 
+    // A field declared after some records were written is ABSENT on those
+    // records, not empty -- education gained a start date long after people had
+    // saved degrees. Formatters read `.kind` off the value, so an absent one is
+    // treated as no date here rather than read.
     if (field.kind === 'date') {
-      facts.push(...factFromValue(formatResumeDate(value as never), factKindFor(field.name, field.kind), path))
+      const formatted = value ? formatResumeDate(value as never) : ''
+      facts.push(...factFromValue(formatted, factKindFor(field.name, field.kind), path))
       continue
     }
     if (field.kind === 'daterange') {
-      facts.push(...factFromValue(formatDateRange(value as never), factKindFor(field.name, field.kind), path))
+      const formatted = value ? formatDateRange(value as never) : ''
+      facts.push(...factFromValue(formatted, factKindFor(field.name, field.kind), path))
       continue
     }
     if (field.kind === 'gpa') {

@@ -70,7 +70,7 @@ export const OPERATIONS: readonly AiOperation[] = [
 
 const OPERATION_BRIEF: Record<AiOperation, string> = {
   'generate-bullets':
-    'Write resume bullets for this position using only the facts below.',
+    'Write resume bullets for this position using only the facts below. Offer several DIFFERENT bullets rather than one idea reworded: each should draw on a different part of the facts, so the applicant can pick the ones that are true of their work and discard the rest.',
   'improve-bullet':
     'Rewrite the single bullet below so it reads more clearly and professionally.',
   'improve-text':

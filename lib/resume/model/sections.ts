@@ -44,7 +44,7 @@ export const SECTION_HEADINGS: Record<ResumeSectionType, string> = {
  * rule -- stays in its row and is ignored everywhere a heading is shown.
  */
 export function hasFixedHeading(type: ResumeSectionType): boolean {
-  return type === 'summary'
+  return type === 'summary' || type === 'education'
 }
 
 export function headingFor(section: ResumeSectionV2): string {
