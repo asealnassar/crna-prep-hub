@@ -40,10 +40,11 @@
 --
 -- THE LEGITIMATE PATH IS UNAFFECTED. The only writer of subscription_tier in
 -- the application is app/api/webhook/route.ts, the Stripe webhook, which uses
--- the service-role key. Service-role connections carry no `sub` claim, so
--- auth.uid() is null and the guard returns the row untouched -- the same
--- exemption 007 uses, for the same reason. handle_new_user() and the
--- server-side interview counter are exempt on the same basis.
+-- the service-role key. The guard reads request.jwt.claims and exempts only a
+-- request whose JWT role is service_role. Direct database work with no request
+-- JWT (SQL editor, migrations and admin scripts) is also left unrestricted.
+-- handle_new_user() and the server-side interview counter remain on trusted
+-- server-side paths.
 --
 -- PRE-FLIGHT (read-only). Expect authenticated / SELECT only, and no rows for
 -- anon. Anything else means a browser write privilege is live.
@@ -74,11 +75,20 @@ language plpgsql
 security definer
 set search_path = ''
 as $fn$
+declare
+  claims text := current_setting('request.jwt.claims', true);
+  jwt_role text;
 begin
-  -- No end-user session: the Stripe webhook, handle_new_user(), the interview
-  -- counter, admin routes. These are the only writers of the column, and all
-  -- of them are server-side.
-  if auth.uid() is null then
+  -- Direct database work (SQL editor, migrations, admin scripts) has no
+  -- request JWT and remains unrestricted.
+  if claims is null then
+    return new;
+  end if;
+
+  jwt_role := claims::json ->> 'role';
+
+  -- The Stripe webhook and other trusted backend writes use service_role.
+  if jwt_role = 'service_role' then
     return new;
   end if;
 
@@ -179,10 +189,14 @@ select p.proname, p.prosecdef as security_definer, p.proconfig
 from   pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where  n.nspname = 'public' and p.proname = 'guard_resume_entitlement_fields';
 
--- Expect no rows: the guard must be executable by nobody.
+-- Expect no anon or authenticated rows. postgres (the owner) and service_role
+-- may retain EXECUTE; neither is a browser-carried role.
 select grantee, privilege_type
 from   information_schema.routine_privileges
-where  routine_schema = 'public' and routine_name = 'guard_resume_entitlement_fields';
+where  routine_schema = 'public'
+  and  routine_name = 'guard_resume_entitlement_fields'
+  and  grantee in ('anon', 'authenticated', 'service_role', 'postgres')
+order  by grantee, privilege_type;
 
 -- Expect the tier distribution to be UNCHANGED. This migration writes no data.
 select coalesce(subscription_tier, 'null') as tier, count(*)

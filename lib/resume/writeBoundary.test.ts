@@ -386,7 +386,23 @@ test('the guard forces the tier back for any end-user write', () => {
   )
   assert.ok(fnBody.includes('security definer'))
   assert.ok(fnBody.includes("set search_path = ''"))
-  assert.ok(fnBody.includes('if auth.uid() is null then'), 'the service-role exemption is missing')
+  assert.ok(
+    fnBody.includes("current_setting('request.jwt.claims', true)"),
+    'the guard does not inspect request JWT claims'
+  )
+  assert.ok(
+    fnBody.includes("jwt_role := claims::json ->> 'role'"),
+    'the guard does not read the JWT role'
+  )
+  assert.ok(
+    fnBody.includes("if jwt_role = 'service_role' then"),
+    'the service-role exemption is missing'
+  )
+  assert.equal(
+    fnBody.includes('if auth.uid() is null then'),
+    false,
+    'anonymous requests must not share the service-role exemption'
+  )
   assert.ok(fnBody.includes("new.subscription_tier := 'free'"), 'an insert can claim a tier')
   assert.ok(
     fnBody.includes('new.subscription_tier := old.subscription_tier'),
