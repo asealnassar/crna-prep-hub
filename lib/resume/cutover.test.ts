@@ -194,14 +194,28 @@ test('the migration script is the only migration code holding a service-role key
     .concat(walk(join(ROOT, 'scripts')))
     .filter((file) => /SUPABASE_SERVICE_ROLE_KEY/.test(readFileSync(file, 'utf8')))
     .map((file) => file.slice(ROOT.length))
-  assert.deepEqual(holders, ['scripts/migrate-v1-resumes.ts'])
+    .sort()
+  // An exact allow-list, not a minimum: the two offline runners and nothing
+  // else. The production runner is the one-off cutover counterpart and is
+  // guarded by productionTarget.ts, which refuses every project but production
+  // exactly as target.ts refuses production. A third holder fails here.
+  assert.deepEqual(holders, [
+    'scripts/migrate-v1-resumes-production.ts',
+    'scripts/migrate-v1-resumes.ts',
+  ])
 })
 
 test('nothing the application can reach imports the migration script', () => {
+  // An IMPORT, not a mention. Importing is the only mechanism by which a
+  // privileged script could be pulled into the bundle, and it is what this
+  // test is named for. Naming a sibling script in a comment or in an operator-
+  // facing refusal message -- which productionTarget.ts does, deliberately --
+  // reaches nothing. Covers static, dynamic and CommonJS forms.
+  const IMPORTS = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"][^'"]*migrate-v1-resumes/
   const offenders: string[] = []
   for (const dir of ['app', 'components', 'lib']) {
     for (const file of walk(join(ROOT, dir))) {
-      if (/migrate-v1-resumes/.test(readFileSync(file, 'utf8'))) offenders.push(file.slice(ROOT.length))
+      if (IMPORTS.test(readFileSync(file, 'utf8'))) offenders.push(file.slice(ROOT.length))
     }
   }
   assert.deepEqual(offenders, [], 'the migration script must be unreachable from the app')

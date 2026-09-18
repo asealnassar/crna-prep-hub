@@ -86,8 +86,25 @@ test('the template mapping matches the locked table', () => {
 test('unknown keys are reported', () => {
   const report = run()
   assert.ok(report.notes.unmappedKeys > 0, 'volunteer_work was not reported')
-  assert.ok(report.notes.unmappedValues >= 13, 'the 13 other-degree GPAs were not all reported')
+  // The 13 other-degree GPAs are no longer "unmapped": each is migrated into
+  // its own entry's overallGpa, hidden. Only a GPA with nowhere left to go --
+  // a degree carrying both overall_gpa and the legacy gpa -- is still counted,
+  // and the fixture has none.
+  assert.equal(report.notes.unmappedValues, 0, 'a GPA with a V2 home is still reported as unmapped')
   assert.equal(named(report, 'unknown-keys-reported').passed, true)
+})
+
+test('the 13 other-degree GPAs are migrated, hidden, rather than reported away', () => {
+  const report = run()
+  const check = named(report, 'migrated-gpa-visible')
+  assert.equal(check.passed, true, check.detail)
+  // Not one resume still reports a GPA as having nowhere to go.
+  for (const entry of report.resumes) {
+    assert.equal(
+      entry.notes.filter((n) => n.kind === 'unmapped-value' && n.path.includes('/gpa')).length, 0,
+      `${entry.v1ResumeId} still reports a GPA as unmapped`
+    )
+  }
 })
 
 test('AuthoredText provenance is correct throughout', () => {

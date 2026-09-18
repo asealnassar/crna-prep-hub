@@ -378,16 +378,55 @@ function buildEducation(
   const entries = degrees
     .map((degree, i) => {
       recordExtras(notes, `${resumeId}/education/degree#${i}`, degree.extras)
-      // LOCKED: other_degrees[].gpa has no legitimate V2 destination. It is
-      // reported, never guessed into overallGpa -- which slot it belongs to is
-      // exactly the thing nobody can know.
-      if (degree.gpaRaw.trim() !== '') {
-        notes.push({
-          kind: 'unmapped-value',
-          path: `${resumeId}/education/degree#${i}/gpa`,
-          detail: `"${degree.gpaRaw}" — V1 stored it, rendered it nowhere, and V2 has no field for it`,
-        })
+
+      const gpaPath = `${resumeId}/education/degree#${i}/gpa`
+      // Index 0 is the nursing degree; 1 upward are other_degrees[], which is
+      // the only place V1's own form ever writes the bare `gpa` key.
+      const isOtherDegree = i > 0
+      const legacyGpa = degree.gpaRaw.trim()
+      const hasOverallGpa = degree.overallGpaRaw.trim() !== ''
+
+      // Migrated GPA values keep the visibility V1 gave them, which for
+      // overall_gpa and science_gpa was always visible. New V2 entries still
+      // default to hidden.
+      let overallGpa = parseGpa(degree.overallGpaRaw, hasOverallGpa)
+
+      if (legacyGpa !== '') {
+        if (!isOtherDegree) {
+          // UNCHANGED. The nursing degree has its own overall_gpa and
+          // science_gpa fields and V1's form does not write `gpa` here, so a
+          // value in this slot came from somewhere unknown and which field it
+          // means is exactly what nobody can know. Reported, never guessed.
+          notes.push({
+            kind: 'unmapped-value',
+            path: gpaPath,
+            detail: `"${degree.gpaRaw}" — on the nursing degree, where V1 has no such field`,
+          })
+        } else if (hasOverallGpa) {
+          // TWO SOURCES, NO WAY TO CHOOSE. Both legacy fields are populated on
+          // the same degree and they may disagree. overall_gpa is the one V1
+          // rendered, so it wins the field and is not overwritten; the other
+          // is surfaced rather than silently discarded or silently preferred.
+          notes.push({
+            kind: 'unmapped-value',
+            path: gpaPath,
+            detail:
+              `"${degree.gpaRaw}" conflicts with overall_gpa "${degree.overallGpaRaw}" on the ` +
+              'same degree. overall_gpa is kept, this value is not migrated. Needs a human.',
+          })
+        } else {
+          // other_degrees[].gpa IS this degree's overall GPA -- it is the only
+          // GPA field V1's other-degree form has, and the slot is free. The
+          // string is preserved exactly; only the numeric parse is derived.
+          //
+          // HIDDEN, deliberately. V1 stored these and rendered them nowhere,
+          // so showing them now would change what the applicant's resume says
+          // without them asking. The data is preserved; the document is not
+          // altered. One switch in the editor turns it on.
+          overallGpa = parseGpa(degree.gpaRaw, false)
+        }
       }
+
       return {
         id: nextId(),
         degree: degree.degree,
@@ -396,9 +435,7 @@ function buildEducation(
         location: '',
         // Preserved exactly, unparseable or absent.
         graduationDate: degree.graduationDate,
-        // LOCKED: migrated GPA values keep the visibility V1 gave them, which
-        // was always visible. New V2 entries still default to hidden.
-        overallGpa: parseGpa(degree.overallGpaRaw, degree.overallGpaRaw.trim() !== ''),
+        overallGpa,
         scienceGpa: parseGpa(degree.scienceGpaRaw, degree.scienceGpaRaw.trim() !== ''),
         honors: '',
       }

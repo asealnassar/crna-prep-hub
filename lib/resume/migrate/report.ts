@@ -14,6 +14,7 @@
 
 import { planDocument } from '../document/plan.ts'
 import { authoredTextsIn } from '../model/sections.ts'
+import { readV1Education } from '../model/v1Shapes.ts'
 import type { AuthoredText } from '../model/authoredText.ts'
 import type { ResumeSectionV2, ResumeV2 } from '../model/types.ts'
 import { TEMPLATE_MAP, mapTemplate, mapV1Resume, migratedIndex } from './mapV1.ts'
@@ -419,22 +420,47 @@ function runChecks(
     lostDates.length === 0 ? 'every unparseable date survives as the applicant typed it' : lostDates.join('; ')
   ))
 
-  // 8. Migrated GPA values are visible.
-  const hiddenGpa: string[] = []
-  for (const { resume, row } of mappedResumes) {
+  // 8. Migrated GPA values keep the visibility V1 gave them -- BOTH ways.
+  //
+  // V1 rendered overall_gpa and science_gpa. It rendered other_degrees[].gpa
+  // NOWHERE, and that value is now migrated into overallGpa hidden. So this
+  // check is no longer "everything is visible": a GPA the applicant could see
+  // must still be visible, and one they could not see must stay hidden, or the
+  // migration would silently add a number to somebody's resume.
+  const wrongVisibility: string[] = []
+  for (const { resume, row, sections } of mappedResumes) {
+    const educationRow = sections.find((s) => s.section_type === 'education')
+    const v1Rendered = new Set<string>()
+    if (educationRow) {
+      const v1 = readV1Education(educationRow.section_data)
+      for (const degree of [v1.nursingDegree, ...v1.otherDegrees]) {
+        if (degree.overallGpaRaw.trim() !== '') v1Rendered.add(degree.overallGpaRaw.trim())
+        if (degree.scienceGpaRaw.trim() !== '') v1Rendered.add(degree.scienceGpaRaw.trim())
+      }
+    }
     for (const section of resume.sections) {
       if (section.type !== 'education') continue
       for (const entry of section.entries) {
         for (const [name, gpa] of [['overall', entry.overallGpa], ['science', entry.scienceGpa]] as const) {
-          if (gpa.raw.trim() !== '' && !gpa.showOnResume) hiddenGpa.push(`${row.id}/${name}`)
+          const raw = gpa.raw.trim()
+          if (raw === '') continue
+          const wasShown = v1Rendered.has(raw)
+          if (wasShown && !gpa.showOnResume) {
+            wrongVisibility.push(`${row.id}/${name}: V1 showed "${raw}", migration hid it`)
+          }
+          if (!wasShown && gpa.showOnResume) {
+            wrongVisibility.push(`${row.id}/${name}: V1 never showed "${raw}", migration would render it`)
+          }
         }
       }
     }
   }
   checks.push(check(
     'migrated-gpa-visible',
-    hiddenGpa.length === 0,
-    hiddenGpa.length === 0 ? 'every migrated GPA keeps the visibility V1 gave it' : hiddenGpa.join('; ')
+    wrongVisibility.length === 0,
+    wrongVisibility.length === 0
+      ? 'every migrated GPA keeps the visibility V1 gave it, shown and hidden alike'
+      : wrongVisibility.join('; ')
   ))
 
   // 9. Template mapping matches the locked table exactly.
@@ -524,7 +550,17 @@ const KNOWN_KEYS: Record<string, readonly string[]> = {
   research: ['projects'],
 }
 
-/** Top-level legacy keys with no V2 destination, plus stray other-degree GPAs. */
+/**
+ * Top-level legacy keys with no V2 destination, plus other-degree GPAs that
+ * still have none.
+ *
+ * other_degrees[].gpa USED to be counted unconditionally, because it had no V2
+ * home. It does now -- that entry's overallGpa, hidden -- so a migrated one is
+ * not an unmapped key and counting it here would demand a note that should no
+ * longer exist. What is still counted is the case that genuinely has nowhere
+ * to go: a degree carrying BOTH overall_gpa and the legacy gpa, where the two
+ * may disagree and the mapper refuses to choose.
+ */
 function countLegacyExtras(sections: readonly V1SectionRow[]): number {
   let total = 0
   for (const section of sections) {
@@ -538,8 +574,13 @@ function countLegacyExtras(sections: readonly V1SectionRow[]): number {
       const others = (data as { other_degrees?: unknown }).other_degrees
       if (Array.isArray(others)) {
         for (const degree of others) {
-          const gpa = (degree as { gpa?: unknown } | null)?.gpa
-          if (typeof gpa === 'string' && gpa.trim() !== '') total += 1
+          const row = degree as { gpa?: unknown; overall_gpa?: unknown } | null
+          const gpa = row?.gpa
+          const overall = row?.overall_gpa
+          const hasLegacy = typeof gpa === 'string' && gpa.trim() !== ''
+          const hasOverall = typeof overall === 'string' && overall.trim() !== ''
+          // Only the unresolvable pair. A lone legacy gpa is migrated.
+          if (hasLegacy && hasOverall) total += 1
         }
       }
     }

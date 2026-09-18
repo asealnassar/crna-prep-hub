@@ -116,18 +116,139 @@ test('other_degrees graduation dates migrate, malformed ones verbatim', () => {
   }
 })
 
-test('other_degrees[].gpa is reported, never guessed into a field', () => {
+/**
+ * other_degrees[].gpa -- preserved, not reported away.
+ *
+ * It used to be a locked refusal: V1 stored the value, rendered it nowhere,
+ * and the mapper would not guess which V2 slot it meant. It is the only GPA
+ * field V1's other-degree form has, so the slot is not in doubt after all, and
+ * eight real values across six production resumes were about to be dropped.
+ *
+ * The rule now: it becomes that entry's overallGpa, hidden. Hidden is the
+ * whole point -- the data is preserved and the rendered document is unchanged
+ * from what the applicant had, which is what makes this a migration rather
+ * than an edit of somebody's resume.
+ */
+
+/** A one-off V1 resume carrying exactly the education section under test. */
+function mapEducation(education: Record<string, unknown>) {
+  const row = { ...fixture.resumes[0], id: 'gpa-fixture' } as V1ResumeRow
+  const sections = [{
+    id: 'gpa-fixture-education',
+    resume_id: row.id,
+    section_type: 'education',
+    section_data: education,
+    order_index: 1,
+  }] as unknown as V1SectionRow[]
+  const out = mapV1Resume(row, sections, ctx(row.id))
+  assert.equal(out.kind, 'mapped', 'the education fixture did not map')
+  const mapping = out as Extract<typeof out, { kind: 'mapped' }>
+  const education2 = mapping.resume.sections.find((s) => s.type === 'education')
+  assert.ok(education2 && education2.type === 'education', 'no education section')
+  return {
+    entries: (education2 as Extract<typeof education2, { type: 'education' }>).entries,
+    gpaNotes: mapping.notes.filter((n) => n.kind === 'unmapped-value' && n.path.includes('/gpa')),
+  }
+}
+
+const NURSING = { degree: 'BSN', field: 'Nursing', university: 'State University', graduation_date: '2018-05' }
+
+test('1-3: other_degrees[].gpa becomes that entry overallGpa, parsed and hidden', () => {
+  const { entries, gpaNotes } = mapEducation({
+    nursing_degree: NURSING,
+    other_degrees: [{ degree: 'BA', field: 'Biology', university: 'Other College', gpa: '3.83' }],
+  })
+  const other = entries[1]
+  assert.equal(other.overallGpa.raw, '3.83', 'the GPA did not survive')
+  assert.equal(other.overallGpa.value, 3.83, 'the parsed value is wrong')
+  assert.equal(other.overallGpa.showOnResume, false, 'it would now render where V1 never did')
+  assert.deepEqual(gpaNotes, [], 'it is preserved, so nothing is left to report')
+})
+
+test('4: the raw string survives unusual-but-valid text, byte for byte', () => {
+  for (const [raw, value] of [
+    ['3.084', 3.084], ['4.0', 4], ['3.2', 3.2], ['0.0', 0], ['5', 5],
+  ] as const) {
+    const { entries } = mapEducation({
+      nursing_degree: NURSING,
+      other_degrees: [{ degree: 'BA', university: 'Other College', gpa: raw }],
+    })
+    assert.equal(entries[1].overallGpa.raw, raw, `"${raw}" was rewritten`)
+    assert.equal(entries[1].overallGpa.value, value, `"${raw}" parsed wrong`)
+  }
+})
+
+test('4b: text the parser cannot read is still preserved, with a null value', () => {
+  for (const raw of ['3.9/4.0', '3.5 (major)', 'A- average', '12.0']) {
+    const { entries } = mapEducation({
+      nursing_degree: NURSING,
+      other_degrees: [{ degree: 'BA', university: 'Other College', gpa: raw }],
+    })
+    assert.equal(entries[1].overallGpa.raw, raw, `"${raw}" was altered`)
+    assert.equal(entries[1].overallGpa.value, null, `"${raw}" was guessed into a number`)
+    assert.equal(entries[1].overallGpa.showOnResume, false)
+  }
+})
+
+test('5: it never populates scienceGpa', () => {
+  const { entries } = mapEducation({
+    nursing_degree: NURSING,
+    other_degrees: [{ degree: 'BA', university: 'Other College', gpa: '3.83' }],
+  })
+  assert.equal(entries[1].scienceGpa.raw, '', 'the legacy GPA landed in the science slot')
+  assert.equal(entries[1].scienceGpa.value, null)
+})
+
+test('6: a real overall_gpa is never overwritten by the legacy field', () => {
+  const { entries } = mapEducation({
+    nursing_degree: NURSING,
+    other_degrees: [{ degree: 'BA', university: 'Other College', overall_gpa: '3.50', gpa: '3.83' }],
+  })
+  assert.equal(entries[1].overallGpa.raw, '3.50', 'the legacy gpa overwrote a real overall_gpa')
+  assert.equal(entries[1].overallGpa.value, 3.5)
+  // overall_gpa is what V1 rendered, so it keeps the visibility it had.
+  assert.equal(entries[1].overallGpa.showOnResume, true)
+})
+
+test('7: two populated legacy GPA fields are surfaced, not silently resolved', () => {
+  const { gpaNotes } = mapEducation({
+    nursing_degree: NURSING,
+    other_degrees: [{ degree: 'BA', university: 'Other College', overall_gpa: '3.50', gpa: '3.83' }],
+  })
+  assert.equal(gpaNotes.length, 1, 'the conflict was not reported')
+  assert.match(gpaNotes[0].detail, /conflicts with overall_gpa/)
+  assert.match(gpaNotes[0].detail, /3\.83/)
+  assert.match(gpaNotes[0].detail, /3\.50/)
+  assert.match(gpaNotes[0].detail, /Needs a human/)
+})
+
+test('the nursing degree is unchanged: a stray gpa there is still only reported', () => {
+  const { entries, gpaNotes } = mapEducation({
+    nursing_degree: { ...NURSING, gpa: '3.91' },
+    other_degrees: [],
+  })
+  assert.equal(entries[0].overallGpa.raw, '', 'a nursing-degree gpa was guessed into a field')
+  assert.equal(entries[0].scienceGpa.raw, '')
+  assert.equal(gpaNotes.length, 1)
+  assert.match(gpaNotes[0].detail, /on the nursing degree, where V1 has no such field/)
+})
+
+test('8: the fixture other-degree GPAs migrate, and their notes are gone', () => {
   const out = mapOne(16)
   assert.equal(out.kind, 'mapped')
   if (out.kind !== 'mapped') return
   const notes = out.notes.filter((n) => n.kind === 'unmapped-value' && n.path.includes('/gpa'))
-  assert.equal(notes.length, 3, 'one note per other-degree GPA')
-  // And it is nowhere in the resume.
+  assert.deepEqual(notes, [], 'a preserved GPA is still being reported as unmapped')
+
   const education = out.resume.sections.find((s) => s.type === 'education')
   if (education?.type !== 'education') return
+  // The fixture gives each other degree 3.20, 3.21, 3.22 and no overall_gpa.
+  assert.deepEqual(
+    education.entries.slice(1).map((e) => [e.overallGpa.raw, e.overallGpa.value, e.overallGpa.showOnResume]),
+    [['3.20', 3.2, false], ['3.21', 3.21, false], ['3.22', 3.22, false]]
+  )
   for (const entry of education.entries.slice(1)) {
-    assert.equal(entry.overallGpa.raw, '', 'a stray GPA was guessed into overallGpa')
-    assert.equal(entry.scienceGpa.raw, '')
+    assert.equal(entry.scienceGpa.raw, '', 'a legacy GPA reached the science slot')
   }
 })
 
