@@ -56,6 +56,7 @@ export default function ExportMenu({
   pageSpan,
   compact = false,
   onNotNow,
+  onUpgrade,
 }: {
   resumeId: string
   /** Presentation only. The route refuses a non-Ultimate caller regardless. */
@@ -69,11 +70,17 @@ export default function ExportMenu({
   /** Phone toolbar: an icon-sized control. */
   compact?: boolean
   /**
-   * The applicant answered "Not now" at the upgrade modal. The only thing that
-   * locks the finished output -- closing the modal any other way must not call
-   * this. See lib/resume/studio/outputLock.ts.
+   * The applicant answered "Not now" at the upgrade modal. Locks the finished
+   * output -- closing the modal any other way must not call this.
+   * See lib/resume/studio/outputLock.ts.
    */
   onNotNow?: () => void
+  /**
+   * The applicant answered "Upgrade to Ultimate". Locks the finished output
+   * too, and resolves only once that answer is stored, because this one leaves
+   * the page. Closing the modal any other way must not call it either.
+   */
+  onUpgrade?: () => Promise<boolean>
 }) {
   const [state, setState] = useState<State>({ kind: 'idle' })
   const [upgrading, setUpgrading] = useState(false)
@@ -184,6 +191,9 @@ export default function ExportMenu({
         ))}
       </Menu>
 
+      {/* Upgrade deliberately leaves the modal open: it shows that the answer
+          is being stored, and closing it early would flash the unlocked
+          preview behind it on the way out. */}
       <UpgradeDialog
         open={upgrading}
         onClose={() => setUpgrading(false)}
@@ -191,6 +201,7 @@ export default function ExportMenu({
           setUpgrading(false)
           onNotNow?.()
         }}
+        onUpgrade={onUpgrade}
       />
 
       {(working || state.kind === 'failed') && (

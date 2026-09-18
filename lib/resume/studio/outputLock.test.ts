@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  OUTPUT_LOCK_COPY, downloadNeedsUpgrade, isOutputLocked, protectComposedOutput,
+  OUTPUT_LOCK_COPY, downloadNeedsUpgrade, isOutputLocked, protectComposedOutput, upgradeAfterLock,
 } from './outputLock.ts'
 import { applyPatch } from './patch.ts'
 import { parsePatch } from './parse.ts'
@@ -25,9 +25,16 @@ import type { ResumeV2 } from '../model/types.ts'
  * The locked model: everyone builds the whole resume, and Ultimate is what
  * takes the finished file away.
  *
- * The lock is not a tier flag. It is one answer the applicant gave -- "Not
- * now", at the upgrade modal, after pressing Download -- and these check that
- * nothing else sets it, that it survives a save, and that Ultimate ignores it.
+ * The lock is not a tier flag. It is the answer the applicant gave at the
+ * upgrade modal after pressing Download -- EITHER answer, "Not now" or
+ * "Upgrade to Ultimate" -- and these check that nothing else sets it, that
+ * Upgrade cannot leave the page before it is stored, that it survives a save,
+ * and that Ultimate ignores it.
+ *
+ * Upgrade used to be an <a href> that navigated on the spot while only "Not
+ * now" locked anything, so pressing it, declining to pay and coming back left
+ * the finished resume fully readable. That is the bypass the regression test
+ * at the end of this file reproduces end to end.
  */
 
 const NOW = '2026-09-17T09:00:00.000Z'
@@ -163,7 +170,12 @@ test('14: the modal offers the real upgrade flow, and claims only real benefits'
   assert.match(html, /Upgrade to Ultimate/)
   assert.match(html, /Your resume is ready\. Upgrade to Ultimate to download your finished resume\./)
   assert.match(html, /Not now/)
-  assert.ok(html.includes(`href="${UPGRADE_HREF}"`), 'the upgrade button does not use the pricing flow')
+  // It reaches the one pricing flow -- but as a BUTTON, not a link, so the
+  // answer is stored first. An href here would also carry middle-click and
+  // cmd-click, which leave for /pricing without running any handler at all.
+  assert.match(dialog(), /window\.location\.assign\(UPGRADE_HREF\)/, 'it does not use the pricing flow')
+  assert.equal(html.includes(`href="${UPGRADE_HREF}"`), false, 'the upgrade action is a link again')
+  assert.equal(/<a\s/.test(html), false, 'the dialog has a link that can skip the answer')
 
   // Every benefit is a rule this codebase enforces, for Ultimate and nobody else.
   const holds: Record<string, (tier: string) => boolean> = {
@@ -184,12 +196,20 @@ test('14: the modal offers the real upgrade flow, and claims only real benefits'
 
 // ------------------------------------------------------------- 15-24: the lock
 
-test('15: "Not now" is what locks the finished resume', () => {
+test('15: answering the modal locks the finished resume, either way', () => {
   const locked = applyPatch(sample(), { op: 'output-lock' }, { now: LATER })
   assert.equal(locked.outputLockedAt, LATER)
   assert.equal(isOutputLocked(locked, 'free'), true)
-  // The Studio sends it from the modal's answer, and saves at once.
-  assert.match(studio(), /onNotNow=\{\(\) => \{\s*emit\(\{ op: 'output-lock' \}\)\s*flush\(\)\s*\}\}/)
+  // ONE handler, wired to BOTH answers. "Not now" stays on the page, so it
+  // emits and flushes; Upgrade leaves, so it waits for the queue to land.
+  const code = studio()
+  assert.match(code, /const lockOutput = useCallback\(\(\) => \{\s*emit\(\{ op: 'output-lock' \}\)\s*flush\(\)\s*\}/)
+  assert.match(code, /onNotNow=\{lockOutput\}/)
+  assert.match(code, /onUpgrade=\{lockOutputAndWait\}/)
+  assert.match(code, /lockOutput\(\); return whenSettled\(\)/, 'Upgrade does not wait for the save')
+  // The wait is the real autosave queue, not a second way to persist things.
+  assert.equal(/fetch\(/.test(code.slice(code.indexOf('const lockOutput'))), false,
+    'the lock got its own request path')
   // A second answer is not a second decision.
   assert.equal(applyPatch(locked, { op: 'output-lock' }, { now: '2026-10-01T00:00:00.000Z' }), locked)
   assert.equal(lockResumeOutput(locked, '2026-10-01T00:00:00.000Z').outputLockedAt, LATER)
@@ -197,14 +217,61 @@ test('15: "Not now" is what locks the finished resume', () => {
 
 test('16-18: Escape, the close button and a press outside do not lock anything', () => {
   const code = dialog()
-  // Two separate props, and only one of them is wired to the answer.
+  // Three separate props, and the dismissal is wired to neither answer.
   assert.match(code, /useDismiss\(open, \[panel\], onClose\)/, 'Escape and outside-press must call onClose')
   assert.match(code, /<IconButton icon=\{X\} label="Close"[^>]*onClick=\{onClose\}/)
-  assert.match(code, /<Button variant="tertiary" onClick=\{onNotNow\}>Not now<\/Button>/)
+  assert.match(code, /<Button variant="tertiary" onClick=\{onNotNow\} disabled=\{leaving\}>Not now<\/Button>/)
   assert.equal((code.match(/onNotNow/g) ?? []).length, 3, 'onNotNow is reachable from more than "Not now"')
-  // And the menu only forwards the answer.
+  assert.equal((code.match(/onUpgrade/g) ?? []).length, 4, 'onUpgrade is reachable from more than Upgrade')
+  // onClose does none of the locking, whatever route reaches it.
+  const dismissals = code.match(/onClose[^\n]*/g) ?? []
+  for (const line of dismissals) {
+    assert.equal(/output-lock|onNotNow|onUpgrade|upgradeAfterLock/.test(line), false, line)
+  }
+  // And the menu only forwards the answers.
   assert.match(exportMenu(), /onClose=\{\(\) => setUpgrading\(false\)\}/)
   assert.match(exportMenu(), /onNotNow=\{\(\) => \{\s*setUpgrading\(false\)\s*onNotNow\?\.\(\)\s*\}\}/)
+  assert.match(exportMenu(), /onUpgrade=\{onUpgrade\}/)
+})
+
+// ------------------------------------- the upgrade answer, and its ordering
+
+test('the upgrade answer stores the lock BEFORE it leaves for pricing', async () => {
+  const order: string[] = []
+  const outcome = await upgradeAfterLock({
+    lock: async () => { order.push('lock'); return true },
+    navigate: () => { order.push('navigate') },
+  })
+  assert.equal(outcome, 'navigated')
+  assert.deepEqual(order, ['lock', 'navigate'])
+})
+
+test('an upgrade whose lock did not save does not navigate at all', async () => {
+  const landed: string[] = []
+  const outcome = await upgradeAfterLock({
+    lock: async () => false,
+    navigate: () => landed.push(UPGRADE_HREF),
+  })
+  assert.equal(outcome, 'not-saved')
+  assert.deepEqual(landed, [], 'it left for /pricing with the answer unsaved')
+})
+
+test('an upgrade whose save has not answered yet waits, rather than navigating', async () => {
+  const landed: string[] = []
+  let release: (saved: boolean) => void = () => {}
+  const pending = upgradeAfterLock({
+    lock: () => new Promise<boolean>((resolve) => { release = resolve }),
+    navigate: () => landed.push(UPGRADE_HREF),
+  })
+  // Several turns of the event loop. The old implementation -- navigate now,
+  // let the save catch up -- would have gone by this point, which is the bug.
+  for (let i = 0; i < 5; i += 1) await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(landed, [], 'it navigated before the lock was stored')
+
+  release(true)
+  assert.equal(await pending, 'navigated')
+  assert.deepEqual(landed, [UPGRADE_HREF])
 })
 
 test('19-20: a locked resume is unreadable, and still fully editable', () => {
@@ -310,6 +377,54 @@ test('27-28: the composed document is protected, the editor is not', () => {
   for (const guard of ['select-none', 'onCopy', 'onCut']) {
     assert.equal(sections.includes(guard), false, `a field blocks ${guard}`)
   }
+})
+
+test('REGRESSION: Upgrade, then /pricing, then back, does not reveal the resume', async () => {
+  // The exact sequence reported from local testing: a Free applicant presses
+  // Download, is shown the modal, presses "Upgrade to Ultimate", lands on
+  // /pricing, thinks better of paying, and returns to Resume Studio.
+  const database: ResumeV2[] = []
+  const landed: string[] = []
+
+  let inStudio = sample()
+  assert.equal(isOutputLocked(inStudio, 'free'), false, 'something locked it before any answer')
+
+  const outcome = await upgradeAfterLock({
+    // What StudioClient does behind the button: apply the patch to the open
+    // document, put it through the save, and report that it landed.
+    lock: async () => {
+      inStudio = applyPatch(inStudio, { op: 'output-lock' }, { now: LATER })
+      database.push(reloaded(inStudio))
+      return true
+    },
+    navigate: () => landed.push(UPGRADE_HREF),
+  })
+
+  assert.equal(outcome, 'navigated')
+  assert.deepEqual(landed, [UPGRADE_HREF])
+  assert.equal(database.length, 1, 'the answer never reached the database')
+
+  // Coming back is a fresh read of the stored resume -- Back, a reload, a
+  // direct visit and reopening it from the dashboard are all this read.
+  const onReturn = database[0]
+  assert.equal(onReturn.outputLockedAt, LATER)
+  for (const tier of ['free', 'premium']) {
+    assert.equal(isOutputLocked(onReturn, tier), true, `${tier} can still read the finished resume`)
+  }
+
+  // The dashboard card is the other way back in, and it is obscured too.
+  const card = renderToStaticMarkup(createElement(PreviewSurface, {
+    state: previewLoaded(onReturn, 2), template: 'classic', scale: 0.24, tier: 'free',
+  }))
+  assert.match(card, /data-preview-state="locked"/)
+  assert.match(card, /blur-\[3px\]/)
+
+  // The document itself is untouched: this locks the finished form, not the work.
+  assert.deepEqual(onReturn.sections.map((s) => s.id), sample().sections.map((s) => s.id))
+  assert.equal(onReturn.contact.fullName, 'Jordan Ellery')
+
+  // And an Ultimate account reading the very same row is unaffected.
+  assert.equal(isOutputLocked(onReturn, 'ultimate'), false)
 })
 
 test('the lock crosses the wire as an answer, carrying nothing', () => {

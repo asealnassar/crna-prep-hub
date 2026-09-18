@@ -1,20 +1,29 @@
 'use client'
 
-import { useCallback, useEffect, useId, useRef } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Check, X } from 'lucide-react'
 import { ULTIMATE_RESUME_BENEFITS, UPGRADE_HREF } from '@/lib/resume/upgrade'
-import { Button, IconButton, buttonClass, cx, floating, text } from '../ui'
+import { upgradeAfterLock } from '@/lib/resume/studio/outputLock'
+import { Button, IconButton, cx, floating, text } from '../ui'
 import { useDismiss } from '../ui'
 
 /**
  * What Ultimate adds, shown when a download is attempted without it.
  *
- * THE ANSWER MATTERS, NOT THE DISMISSAL. "Not now" is an answer: the applicant
- * has seen the finished resume, been told what unlocking it costs, and decided
- * not to today -- so the finished document locks from then on. Escape, the
- * close button and a press outside are not answers, and they change nothing.
- * `onClose` and `onNotNow` are separate props for exactly that reason, and the
- * distinction is tested.
+ * THE ANSWER MATTERS, NOT THE DISMISSAL. Both buttons are answers: the
+ * applicant has seen the finished resume and been told what unlocking it
+ * costs, so "Not now" and "Upgrade to Ultimate" alike lock the finished
+ * document from then on. Escape, the close button and a press outside are not
+ * answers, and they change nothing. `onClose` is a separate prop from the two
+ * answers for exactly that reason, and the distinction is tested.
+ *
+ * THE UPGRADE CONTROL IS A BUTTON, NOT A LINK, and that is the fix for a real
+ * bypass. As an <a href> it navigated the moment it was pressed, so the lock
+ * was still sitting in the save queue when the page unloaded -- press Upgrade,
+ * think better of paying, come back, and the finished resume was readable. A
+ * link also carries middle-click and cmd-click, which reach /pricing without
+ * running any handler at all, so there is deliberately no href here that could
+ * skip the answer. The ordering rule itself is upgradeAfterLock().
  *
  * The benefits come from lib/resume/upgrade.ts, where each one names the rule
  * that makes it true. Nothing is claimed here that the product does not do.
@@ -22,19 +31,49 @@ import { useDismiss } from '../ui'
 export default function UpgradeDialog({
   open,
   onNotNow,
+  onUpgrade,
   onClose,
 }: {
   open: boolean
-  /** The applicant answered. This is the only thing that locks the output. */
+  /** The applicant answered. Locks the finished output, and stays on the page. */
   onNotNow: () => void
+  /**
+   * The applicant answered by upgrading. Resolves true once the output lock has
+   * reached the server -- only then does this dialog leave for the pricing
+   * page. Absent means there is nothing to wait for.
+   */
+  onUpgrade?: () => Promise<boolean>
   /** Escape, the X, or a press outside. Changes nothing about the resume. */
   onClose: () => void
 }) {
   const panel = useRef<HTMLDivElement>(null)
-  const firstAction = useRef<HTMLAnchorElement>(null)
+  const firstAction = useRef<HTMLButtonElement>(null)
   const titleId = useId()
+  /** Saving the answer before leaving. Not a download and not a payment. */
+  const [leaving, setLeaving] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   useDismiss(open, [panel], onClose)
+
+  useEffect(() => {
+    if (open) return
+    setLeaving(false)
+    setFailed(false)
+  }, [open])
+
+  const upgrade = useCallback(async () => {
+    if (leaving) return
+    setFailed(false)
+    setLeaving(true)
+    const outcome = await upgradeAfterLock({
+      lock: async () => (await onUpgrade?.()) ?? true,
+      navigate: () => window.location.assign(UPGRADE_HREF),
+    })
+    if (outcome === 'not-saved') {
+      setLeaving(false)
+      setFailed(true)
+    }
+  }, [leaving, onUpgrade])
 
   useEffect(() => {
     if (!open) return
@@ -99,10 +138,21 @@ export default function UpgradeDialog({
           </ul>
 
           <div className="mt-5 flex items-center justify-end gap-2">
-            <Button variant="tertiary" onClick={onNotNow}>Not now</Button>
-            <a ref={firstAction} href={UPGRADE_HREF} className={buttonClass('primary')}>
-              Upgrade to Ultimate
-            </a>
+            {failed && (
+              <p role="alert" className="mr-auto text-xs leading-snug text-amber-800">
+                Could not save your answer. Check your connection and try again.
+              </p>
+            )}
+            <Button variant="tertiary" onClick={onNotNow} disabled={leaving}>Not now</Button>
+            <Button
+              ref={firstAction}
+              variant="primary"
+              onClick={() => void upgrade()}
+              disabled={leaving}
+              aria-busy={leaving}
+            >
+              {leaving ? 'One moment...' : 'Upgrade to Ultimate'}
+            </Button>
           </div>
         </div>
       </div>

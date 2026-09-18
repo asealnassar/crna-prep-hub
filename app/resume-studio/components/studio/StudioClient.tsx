@@ -48,6 +48,14 @@ import PreviewPane from './PreviewPane'
 
 const ENDPOINT = '/api/resume-v2/draft'
 
+/**
+ * How long "Upgrade to Ultimate" waits for its answer to be stored before it
+ * gives up and says so. Long enough to cover a slow save and a retry, short
+ * enough that nobody is held in a modal wondering. It never navigates on
+ * expiry -- a lock that did not save must not become a resume that reads clean.
+ */
+const LOCK_SAVE_TIMEOUT_MS = 8_000
+
 export default function StudioClient({
   initialResume,
   tier,
@@ -98,6 +106,44 @@ export default function StudioClient({
   // moment ago have to have landed before the request goes -- otherwise they
   // tick twelve things and the model is handed the four that were already there.
   const flush = useCallback(() => setSave((s) => reduce(s, { type: 'flush', at: Date.now() })), [])
+
+  // --- knowing when the queue has landed ----------------------------------
+
+  /**
+   * Autosave is fire-and-forget by design: an edit applies locally and the save
+   * catches up. Exactly one caller cannot live with that. "Upgrade to Ultimate"
+   * leaves this page for /pricing, and if the output lock is still queued when
+   * the browser navigates, the applicant returns to a fully readable resume.
+   *
+   * This is NOT a second persistence path. It is the same queue, the same
+   * flush and the same performSave, with a way to be told when they finished.
+   */
+  const settleWaiters = useRef<Array<(saved: boolean) => void>>([])
+
+  useEffect(() => {
+    if (settleWaiters.current.length === 0) return
+    // `retrying` is still trying, so it is not yet an answer either way.
+    const saved =
+      !hasUnsavedWork(save) ? true
+      : save.status === 'failed' || save.status === 'conflict' ? false
+      : null
+    if (saved === null) return
+    const waiting = settleWaiters.current
+    settleWaiters.current = []
+    for (const resolve of waiting) resolve(saved)
+  }, [save])
+
+  /**
+   * Resolves once everything queued has reached the server, false if it could
+   * not. Deliberately does NOT short-circuit on the state it can see: a caller
+   * has just queued a patch whose setSave has not been applied yet, so reading
+   * `saveRef` here would report the CLEAN state from before that edit and wave
+   * the caller off the page with an unsaved lock -- the bug this closes.
+   */
+  const whenSettled = useCallback(
+    () => new Promise<boolean>((resolve) => { settleWaiters.current.push(resolve) }),
+    []
+  )
 
   // --- the save -----------------------------------------------------------
 
@@ -229,6 +275,31 @@ export default function StudioClient({
     />
   )
 
+  /**
+   * The applicant answered the download modal. BOTH answers lock the finished
+   * output -- the decision is having been shown the price and responded, not
+   * which way they went. See lib/resume/studio/outputLock.ts.
+   */
+  const lockOutput = useCallback(() => {
+    emit({ op: 'output-lock' })
+    flush()
+  }, [emit, flush])
+
+  /**
+   * The same answer, for the one button that leaves the page. It waits for the
+   * lock to be stored and reports whether it was, so the dialog can keep the
+   * applicant here rather than navigate away from work that never saved. The
+   * bound is not a policy, only a refusal to hang on a request that never
+   * answers: an unbounded wait would strand them in the modal.
+   */
+  const lockOutputAndWait = useCallback(
+    () => Promise.race([
+      (() => { lockOutput(); return whenSettled() })(),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), LOCK_SAVE_TIMEOUT_MS)),
+    ]),
+    [lockOutput, whenSettled]
+  )
+
   // Exports the STORED resume, so an edit still in flight would not be in the
   // file. The control is disabled until the document is settled.
   const exportControl = (compact: boolean) => (
@@ -238,12 +309,8 @@ export default function StudioClient({
       disabled={unsaved}
       pageSpan={pageSpan}
       compact={compact}
-      // The one thing that locks the finished output, and it saves at once so
-      // the answer survives a reload. See lib/resume/studio/outputLock.ts.
-      onNotNow={() => {
-        emit({ op: 'output-lock' })
-        flush()
-      }}
+      onNotNow={lockOutput}
+      onUpgrade={lockOutputAndWait}
     />
   )
 
