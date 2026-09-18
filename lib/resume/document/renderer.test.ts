@@ -125,3 +125,35 @@ test('the only raw HTML injected is the stylesheet', () => {
     }
   }
 })
+
+test('detail is a list only when the plan says it is one', () => {
+  // Both were rendered as <li> and told apart only by the absence of a marker,
+  // so giving bullets a glyph would have bulleted every narrative paragraph.
+  const code = SOURCES.find((f) => f.path === 'sections/EntriesBlock.tsx')!.code
+  assert.match(code, /detailStyle === 'bullets'/, 'every detail is still rendered as a list')
+  assert.ok(code.includes('rd-bullets'), 'bullets have no list markup')
+  assert.ok(code.includes('rd-paragraph'), 'prose detail has no paragraph markup')
+})
+
+test('every block carries its reading position, taken from the reading order', () => {
+  // Drawn by column, read by reading order: the two are decided separately, and
+  // this is where the second reaches the markup.
+  const renderer = SOURCES.find((f) => f.path === 'ResumeDocument.tsx')!.code
+  assert.ok(renderer.includes('readingOrder('), 'the renderer does not consult the reading order')
+  for (const path of ['sections/EntriesBlock.tsx', 'sections/ProseBlock.tsx']) {
+    const code = SOURCES.find((f) => f.path === path)!.code
+    assert.ok(code.includes('--rd-reading-order'), `${path} does not carry its reading position`)
+    assert.ok(code.includes('data-reading-order'), `${path} does not expose its reading position`)
+  }
+})
+
+test('a section names its type and flags a heading no gutter can hold', () => {
+  for (const path of ['sections/EntriesBlock.tsx', 'sections/ProseBlock.tsx']) {
+    const code = SOURCES.find((f) => f.path === path)!.code
+    assert.ok(code.includes('data-section-type'), `${path} does not name its section type`)
+    assert.ok(code.includes('data-long-heading'), `${path} does not flag a long heading`)
+    // The rule lives in the document layer, so the two blocks cannot disagree
+    // about what "too long" means.
+    assert.ok(code.includes('isLongHeading'), `${path} has its own idea of a long heading`)
+  }
+})

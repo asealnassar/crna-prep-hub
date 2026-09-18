@@ -16,6 +16,9 @@
  */
 
 import type { TemplateDefinition } from './templates.ts'
+import {
+  PAGE_CONTENT_HEIGHT_PX, PAGE_CONTENT_WIDTH_PX, PAGE_FLOW_GAP_PX, PRINT_BODY_MARGIN_PX,
+} from './pages.ts'
 
 /** CSS custom properties for one template. Consumed as an inline style. */
 export function cssVariablesFor(template: TemplateDefinition): Record<string, string> {
@@ -98,9 +101,15 @@ export const DOCUMENT_CSS = `
 /* --- columns ---------------------------------------------------------- */
 
 .rd-columns { display: block; }
+/* Roughly a quarter to the sidebar, the rest to the narrative. The sidebar
+   holds lines -- a certification, a licence, a degree -- and a line needs
+   little width; bullets and paragraphs need a lot, and at the old 1:2.1 the
+   clinical experience that decides an application was the column being
+   squeezed. Aligning to start keeps a short sidebar short rather than
+   stretching it into a tall empty column beside the page. */
 .rd-root[data-layout="sidebar"] .rd-columns {
   display: grid;
-  grid-template-columns: 1fr 2.1fr;
+  grid-template-columns: 1fr 2.85fr;
   gap: var(--rd-section-gap);
   align-items: start;
 }
@@ -113,6 +122,20 @@ export const DOCUMENT_CSS = `
 .rd-root[data-layout="sidebar"] .rd-main { grid-column: 2; grid-row: 1; }
 .rd-aside { min-width: 0; }
 .rd-main { min-width: 0; }
+
+/* READ IN ORDER, WHATEVER THE COLUMN. Where a section is drawn is the
+   applicant's choice; the order it is read in is not. Chromium writes a PDF's
+   text layer in paint order, and positioned elements with a z-index paint in
+   z-index order across both columns -- so each section's reading position is
+   its z-index, and the text layer follows the reading order even when Critical
+   Care has been moved into the sidebar. Relative positioning with no offset
+   moves nothing and no section overlaps another, so the page looks exactly as
+   it did. When watermarked, the columns are their own stacking context, which
+   keeps every section beneath the mark. */
+.rd-root[data-layout="sidebar"] .rd-section {
+  position: relative;
+  z-index: var(--rd-reading-order, auto);
+}
 
 /* --- sections --------------------------------------------------------- */
 
@@ -132,23 +155,43 @@ export const DOCUMENT_CSS = `
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
-/* Inline headings sit in a narrow gutter beside their content, which is where
-   the compact template finds most of the vertical space it saves. */
+/* Inline headings sit in a gutter beside their content, which is where the
+   compact template finds most of the vertical space it saves. The gutter is
+   1.55in -- wide enough for two words per line, where 1.15in stacked
+   "VOLUNTEER / AND / COMMUNITY / SERVICE" one word at a time. */
 .rd-root[data-heading-style="inline"] .rd-section {
   display: grid;
-  grid-template-columns: 1.15in 1fr;
+  grid-template-columns: 1.55in 1fr;
   gap: 0 10pt;
 }
 .rd-root[data-heading-style="inline"] .rd-heading {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin: 0;
+  /* Break inside a word only when a word alone cannot fit. */
+  overflow-wrap: break-word;
+  hyphens: none;
+}
+/* The fallback for a heading no gutter can hold: it spans the section instead
+   of shredding the body width beside it. See isLongHeading in templates.ts. */
+.rd-root[data-heading-style="inline"] .rd-section[data-long-heading="true"] {
+  display: block;
+}
+.rd-root[data-heading-style="inline"] .rd-section[data-long-heading="true"] .rd-heading {
+  margin-bottom: 3pt;
 }
 
 /* --- entries ---------------------------------------------------------- */
 
 .rd-entry { margin-bottom: var(--rd-entry-gap); }
 .rd-entry:last-child { margin-bottom: 0; }
+
+/* A credential is one line. Six of them separated by an entry gap meant for a
+   job with bullets reads as a list with holes punched in it, so the sections
+   made of single-line entries close up. */
+.rd-section[data-section-type="certifications"] .rd-entry {
+  margin-bottom: calc(var(--rd-entry-gap) * 0.35);
+}
 
 .rd-entry-head { display: block; }
 .rd-root[data-entry-layout="opposed"] .rd-entry-head {
@@ -157,6 +200,30 @@ export const DOCUMENT_CSS = `
   align-items: baseline;
   gap: 12pt;
 }
+/* The title side yields; the date does not. A long employer name wraps onto a
+   second line rather than pushing "Mar 2021 – Present" off the edge or
+   breaking it in half. */
+.rd-root[data-entry-layout="opposed"] .rd-entry-head > :first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.rd-root[data-entry-layout="opposed"] .rd-meta { flex: 0 0 auto; }
+
+/* Except in the sidebar, where an opposed head has nowhere to go: the title
+   wraps to three cramped lines while the date hangs at a right edge two inches
+   away, and neither is easy to read. A credential there stacks -- what it is,
+   then when -- and keeps the full column width for the name. */
+.rd-root[data-layout="sidebar"] .rd-aside .rd-entry-head { display: block; }
+
+/* And the two halves stack rather than running together behind an em dash.
+   "BSN, Nursing -- Rutgers University" does not fit in two inches, so it breaks
+   wherever the line runs out -- often mid-name. A reader loses nothing; a
+   parser searching for the institution loses the name. Given a line of its own,
+   the name stays whole. */
+.rd-root[data-layout="sidebar"] .rd-aside .rd-title,
+.rd-root[data-layout="sidebar"] .rd-aside .rd-subtitle { display: block; }
+.rd-root[data-layout="sidebar"] .rd-aside .rd-entry-head [aria-hidden="true"] { display: none; }
+
 .rd-title { font-weight: 700; }
 .rd-subtitle { color: var(--rd-ink); }
 .rd-meta { color: var(--rd-muted); white-space: nowrap; }
@@ -171,8 +238,27 @@ export const DOCUMENT_CSS = `
   list-style: none;
 }
 
-.rd-bullets { margin: 3pt 0 0; padding-left: 14pt; }
-.rd-bullets li { margin-bottom: 1pt; }
+/* REAL BULLETS, STATED HERE RATHER THAN INHERITED. The marker was left to the
+   browser default, and the preview mounts inside an application whose reset
+   sets list-style to none on every ul -- so the glyphs vanished in the Studio
+   while surviving in the PDF. A class selector states it outright and beats any
+   host reset.
+
+   An outside marker is what gives the hanging indent: it sits in the padding,
+   so every wrapped line aligns with the text above it, not under the glyph. */
+.rd-bullets {
+  list-style: disc outside;
+  margin: 3pt 0 0;
+  padding-left: 13pt;
+}
+.rd-bullets li { margin-bottom: 2pt; padding-left: 1pt; }
+.rd-bullets li:last-child { margin-bottom: 0; }
+.rd-bullets li::marker { font-size: 0.85em; }
+
+/* Authored prose inside an entry: a shadowing reflection, what a volunteer role
+   involved, a citation. Paragraphs, because that is what the applicant wrote --
+   a bullet glyph here would turn a sentence into a claim about its own shape. */
+.rd-details { margin: 3pt 0 0; }
 .rd-paragraph { margin: 0 0 4pt; }
 .rd-paragraph:last-child { margin-bottom: 0; }
 
@@ -221,6 +307,35 @@ export const DOCUMENT_CSS = `
 .rd-root[data-watermarked="true"] .rd-header {
   position: relative;
   z-index: 1;
+}
+
+/* --- paginated preview ------------------------------------------------- */
+
+/*
+ * The preview shows the pages the PDF will have, and lets the browser decide
+ * where they break. A multi-column flow whose column is exactly one printed
+ * page's content box is broken into columns by the same fragmentation engine,
+ * under the same rules in this stylesheet, that breaks the printed document
+ * into pages. Each preview sheet then shows one column.
+ *
+ * Inside it, the page is laid out as it is in print: the page element loses
+ * its screen padding and minimum height exactly as the print rules below take
+ * them away, and the flow body carries the default body margin the exported
+ * PDF keeps. Nothing here cuts content at a pixel height.
+ */
+.rd-flow {
+  width: ${PAGE_CONTENT_WIDTH_PX}px;
+  height: ${PAGE_CONTENT_HEIGHT_PX}px;
+  column-width: ${PAGE_CONTENT_WIDTH_PX}px;
+  column-gap: ${PAGE_FLOW_GAP_PX}px;
+  column-fill: auto;
+}
+.rd-flow-body { margin: ${PRINT_BODY_MARGIN_PX}px; }
+.rd-root[data-paginated="true"] .rd-page {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
 }
 
 /* --- print ------------------------------------------------------------ */

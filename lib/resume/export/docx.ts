@@ -146,9 +146,12 @@ export async function docxFromResume(resume: ResumeV2, template?: string): Promi
       }
       for (const detail of entry.detail) {
         // A real Word bullet list, not a hyphen typed at the start of a line:
-        // a parser reading this sees list items.
+        // a parser reading this sees list items. Applied to what the MODEL
+        // calls a list -- a position's bullets -- and not to authored prose,
+        // which is written as ordinary paragraphs exactly as it reads in the
+        // PDF. See `detailStyle` in lib/resume/document/plan.ts.
         children.push(new Paragraph({
-          bullet: { level: 0 },
+          ...(entry.detailStyle === 'bullets' ? { bullet: { level: 0 } } : {}),
           spacing: { after: 40 },
           children: [new TextRun({ text: detail, size: hp(body), font })],
         }))

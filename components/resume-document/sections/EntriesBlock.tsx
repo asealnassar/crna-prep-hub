@@ -1,4 +1,5 @@
 import type { DocumentBlock, DocumentEntry } from '@/lib/resume/document/plan'
+import { isLongHeading } from '@/lib/resume/document/templates'
 
 /**
  * Titled items under a heading: jobs, degrees, certifications, awards.
@@ -6,6 +7,10 @@ import type { DocumentBlock, DocumentEntry } from '@/lib/resume/document/plan'
  * Every field is optional at render time — the plan has already removed the
  * blanks, so an absent subtitle simply produces no element rather than an empty
  * one that still occupies a line.
+ *
+ * `detailStyle` decides whether the written part is a list or prose. The plan
+ * makes that call from the model: only a clinical position holds bullets, and
+ * everything else holds paragraphs someone wrote.
  */
 function Entry({ entry }: { entry: DocumentEntry }) {
   return (
@@ -28,17 +33,39 @@ function Entry({ entry }: { entry: DocumentEntry }) {
       )}
 
       {entry.detail.length > 0 && (
-        <ul className="rd-bullets">
-          {entry.detail.map((line, i) => <li key={`${entry.id}-d${i}`}>{line}</li>)}
-        </ul>
+        entry.detailStyle === 'bullets' ? (
+          <ul className="rd-bullets">
+            {entry.detail.map((line, i) => <li key={`${entry.id}-d${i}`}>{line}</li>)}
+          </ul>
+        ) : (
+          <div className="rd-details">
+            {entry.detail.map((line, i) => (
+              <p className="rd-paragraph" key={`${entry.id}-d${i}`}>{line}</p>
+            ))}
+          </div>
+        )
       )}
     </div>
   )
 }
 
-export default function EntriesBlock({ block }: { block: Extract<DocumentBlock, { kind: 'entries' }> }) {
+export default function EntriesBlock({
+  block,
+  readingRank,
+}: {
+  block: Extract<DocumentBlock, { kind: 'entries' }>
+  /** Position in reading order, independent of the column this block is drawn in. */
+  readingRank: number
+}) {
   return (
-    <section className="rd-section" aria-labelledby={`h-${block.sectionId}`}>
+    <section
+      className="rd-section"
+      aria-labelledby={`h-${block.sectionId}`}
+      data-section-type={block.sectionType}
+      data-long-heading={isLongHeading(block.heading) ? 'true' : 'false'}
+      data-reading-order={readingRank}
+      style={{ '--rd-reading-order': readingRank } as React.CSSProperties}
+    >
       <h2 className="rd-heading" id={`h-${block.sectionId}`}>{block.heading}</h2>
       <div>
         {block.entries.map((entry) => <Entry entry={entry} key={entry.id} />)}

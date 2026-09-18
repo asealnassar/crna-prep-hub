@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { TEMPLATES, TEMPLATE_LIST, readingOrder, splitPlan, templateFor } from './templates.ts'
+import {
+  LONG_HEADING_CHARS, TEMPLATES, TEMPLATE_LIST, isLongHeading, readingOrder,
+  splitPlan, templateFor,
+} from './templates.ts'
 import type { TemplateDefinition } from './templates.ts'
 import { planDocument } from './plan.ts'
 import { createResume, emptyContact } from '../model/resume.ts'
@@ -253,4 +256,134 @@ test('narrative order inside the main column is untouched by the split', () => {
     .filter((b) => !sidebarTypes.has(b.sectionType))
     .map((b) => b.sectionType)
   assert.deepEqual(actual, expected)
+})
+
+// ------------------------------------------------ what each one is for
+
+test('Classic is the default, and puts dates opposite the title', () => {
+  // A date is two words. Giving it a line of its own cost one line per entry,
+  // which on a developed resume is most of a page.
+  assert.equal(templateFor(undefined).id, 'classic')
+  assert.equal(TEMPLATES.classic.entryLayout, 'opposed')
+  assert.equal(TEMPLATES.classic.layout, 'single-column')
+  assert.equal(TEMPLATES.classic.headerAlign, 'center')
+  assert.equal(TEMPLATES.classic.headingStyle, 'ruled', 'Classic lost its ruled headings')
+})
+
+test('Modern sidebars what reads as a line and nothing that reads as prose', () => {
+  const sidebar = new Set<string>(TEMPLATES.modern.sidebarSections)
+  for (const short of ['education', 'certifications', 'licensure']) {
+    assert.ok(sidebar.has(short), `${short} belongs in the sidebar`)
+  }
+  for (const narrative of [
+    'summary', 'critical_care', 'other_clinical', 'shadowing', 'leadership',
+    'volunteer', 'quality_improvement', 'research', 'publications', 'custom',
+  ]) {
+    assert.equal(sidebar.has(narrative), false, `${narrative} was squeezed into the narrow column`)
+  }
+})
+
+test('the clinical narrative keeps the main column', () => {
+  const plan = planDocument(fullResume())
+  const { main, sidebar } = splitPlan(plan, TEMPLATES.modern)
+  const inMain = new Set(main.map((b) => b.sectionType))
+  for (const narrative of [
+    'summary', 'critical_care', 'shadowing', 'leadership', 'volunteer', 'quality_improvement',
+  ] as const) {
+    assert.ok(inMain.has(narrative), `${narrative} left the main column`)
+  }
+  assert.ok(sidebar.length > 0, 'the sidebar is empty, so the layout is single-column in disguise')
+})
+
+test('the three templates stay three different documents', () => {
+  // Compact is not Classic with smaller type: it keeps its own heading style
+  // and its own density.
+  assert.notEqual(TEMPLATES.compact.headingStyle, TEMPLATES.classic.headingStyle)
+  assert.notEqual(TEMPLATES.compact.density, TEMPLATES.classic.density)
+  assert.notEqual(TEMPLATES.modern.layout, TEMPLATES.classic.layout)
+})
+
+// --------------------------------------------------- long headings
+
+test('a heading the compact gutter can hold stays in it', () => {
+  for (const heading of [
+    'Professional Summary', 'Critical Care Experience', 'Other Clinical Experience',
+    'Volunteer & Community Service', 'Volunteer and Community Service',
+    'Publications & Presentations', 'Professional Organizations',
+  ]) {
+    assert.equal(isLongHeading(heading), false, `${heading} (${heading.length}) would give up the gutter`)
+  }
+})
+
+test('a heading no gutter can hold is recognised as one', () => {
+  assert.equal(isLongHeading('Volunteer, Community Service and Outreach Leadership'), true)
+  assert.equal(isLongHeading('x'.repeat(LONG_HEADING_CHARS + 1)), true)
+  assert.equal(isLongHeading(`  ${'x'.repeat(LONG_HEADING_CHARS)}  `), false, 'trimmed length is what counts')
+  assert.equal(isLongHeading(''), false)
+})
+
+// ------------------------------------- the applicant's own column choice
+
+/** The same full resume, with one section moved out of its default column. */
+function planWithPlacement(type: ResumeSectionType, column: 'sidebar' | 'main') {
+  const resume = fullResume()
+  return planDocument({
+    ...resume,
+    sections: resume.sections.map((s) => (s.type === type ? { ...s, modernColumn: column } as ResumeSectionV2 : s)),
+  })
+}
+
+test('a section the applicant moved is drawn where they put it', () => {
+  const plan = planWithPlacement('critical_care', 'sidebar')
+  const { main, sidebar } = splitPlan(plan, TEMPLATES.modern)
+  assert.ok(sidebar.some((b) => b.sectionType === 'critical_care'), 'the move was ignored')
+  assert.equal(main.some((b) => b.sectionType === 'critical_care'), false, 'it is drawn twice')
+})
+
+test('a supporting section can be pulled into the main column', () => {
+  const plan = planWithPlacement('certifications', 'main')
+  const { main, sidebar } = splitPlan(plan, TEMPLATES.modern)
+  assert.ok(main.some((b) => b.sectionType === 'certifications'))
+  assert.equal(sidebar.some((b) => b.sectionType === 'certifications'), false)
+})
+
+test('a placement never loses or duplicates a section', () => {
+  const plan = planWithPlacement('critical_care', 'sidebar')
+  const { main, sidebar } = splitPlan(plan, TEMPLATES.modern)
+  assert.equal(main.length + sidebar.length, plan.blocks.length)
+  assert.deepEqual(
+    [...main, ...sidebar].map((b) => b.sectionType).sort(),
+    plan.blocks.map((b) => b.sectionType).sort()
+  )
+})
+
+test('single-column templates ignore a placement entirely', () => {
+  const plan = planWithPlacement('certifications', 'main')
+  for (const template of [TEMPLATES.classic, TEMPLATES.compact]) {
+    const { main, sidebar } = splitPlan(plan, template)
+    assert.deepEqual(sidebar, [], template.id)
+    assert.equal(main.length, plan.blocks.length, template.id)
+  }
+})
+
+test('moving a section visually does not change the order it is read in', () => {
+  // The locked ATS order: header, then summary and the narrative, then the
+  // supporting sections. Someone who moves their clinical experience into the
+  // sidebar for the look of it has not decided that a parser should read their
+  // licences first.
+  const normal = readingOrder(planDocument(fullResume()), TEMPLATES.modern).map((b) => b.sectionType)
+  const moved = readingOrder(planWithPlacement('critical_care', 'sidebar'), TEMPLATES.modern)
+    .map((b) => b.sectionType)
+
+  assert.deepEqual(moved, normal, 'a layout choice reordered the document for a parser')
+  assert.equal(moved[0], 'summary', 'the document no longer opens with who they are')
+})
+
+test('a supporting section pulled into main still reads after the narrative', () => {
+  const order = readingOrder(planWithPlacement('certifications', 'main'), TEMPLATES.modern)
+    .map((b) => b.sectionType)
+  assert.ok(
+    order.indexOf('certifications') > order.indexOf('critical_care'),
+    'credentials climbed above the clinical narrative in reading order'
+  )
 })

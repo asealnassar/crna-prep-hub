@@ -48,6 +48,23 @@ export function formatDateRange(range: ResumeDateRange): string {
 }
 
 /**
+ * "Aug 2016 – May 2020", or whichever end is known.
+ *
+ * Two separate dates rather than a ResumeDateRange: education stores a start
+ * and a graduation date, and a record written before the start date existed
+ * carries only the graduation date -- which must still print exactly as it did.
+ */
+export function formatEducationDates(
+  start: ResumeDate | undefined,
+  end: ResumeDate | undefined
+): string {
+  const from = start ? formatResumeDate(start) : ''
+  const to = end ? formatResumeDate(end) : ''
+  if (from && to) return `${from}${RANGE_SEPARATOR}${to}`
+  return from || to
+}
+
+/**
  * "GPA 3.85", or nothing at all.
  *
  * Returns '' unless the applicant chose to show it. The raw text is printed

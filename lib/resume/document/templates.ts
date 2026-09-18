@@ -74,8 +74,15 @@ const SERIF = SERIF_STACK
 const SANS = SANS_STACK
 
 /**
- * Centred name, ruled headings, dates under the title, serif. What a CRNA
- * programme's admissions committee has seen a thousand times, done well.
+ * Centred name, ruled headings, serif. What a CRNA programme's admissions
+ * committee has seen a thousand times, done well -- and the default, because
+ * the safest document is the right default for an application.
+ *
+ * DATES SIT OPPOSITE THE TITLE rather than on a line of their own. A date is
+ * two words; giving it a whole line cost one line per entry, which on a
+ * well-developed resume is most of a page. The stylesheet lets the employer
+ * side wrap and keeps the date unbroken beside it, so a long hospital name
+ * takes two lines instead of colliding.
  */
 const CLASSIC: TemplateDefinition = {
   id: 'classic',
@@ -84,30 +91,37 @@ const CLASSIC: TemplateDefinition = {
   layout: 'single-column',
   headerAlign: 'center',
   headingStyle: 'ruled',
-  entryLayout: 'stacked',
+  entryLayout: 'opposed',
   density: 'roomy',
   sidebarSections: [],
   tokens: {
     bodyPt: 10.5, headingPt: 12, namePt: 22,
-    leading: 1.45, sectionGapPt: 16, entryGapPt: 10, fontStack: SERIF,
+    leading: 1.45, sectionGapPt: 14, entryGapPt: 8, fontStack: SERIF,
   },
 }
 
 /**
- * A real second column. Licences, certifications, memberships and awards --
- * the short factual sections -- move out of the narrative flow entirely, which
- * is a different document, not a different colour.
+ * A real second column. The short factual sections -- what the applicant holds
+ * and where they trained -- move out of the narrative flow entirely, which is a
+ * different document, not a different colour.
+ *
+ * WHAT GOES WHERE IS DECIDED BY SHAPE. A credential is a line: a name, a date,
+ * maybe a number. It reads perfectly in a narrow column and wastes a wide one.
+ * Clinical experience is paragraphs and bullets, and a narrow column turns each
+ * bullet into four cramped lines -- so every narrative section stays in the main
+ * column, which takes roughly three quarters of the width. Education is here
+ * because a degree is three short lines, not because it matters less.
  */
 const MODERN: TemplateDefinition = {
   id: 'modern',
   name: 'Modern',
-  summary: 'Left-aligned header with a sidebar for credentials. Two columns.',
+  summary: 'Left-aligned header with a sidebar for education and credentials. Two columns.',
   layout: 'sidebar',
   headerAlign: 'left',
   headingStyle: 'caps',
   entryLayout: 'opposed',
   density: 'normal',
-  sidebarSections: ['licensure', 'certifications', 'organizations', 'awards'],
+  sidebarSections: ['education', 'licensure', 'certifications', 'organizations', 'awards'],
   tokens: {
     bodyPt: 10, headingPt: 10.5, namePt: 20,
     leading: 1.35, sectionGapPt: 13, entryGapPt: 8, fontStack: SANS,
@@ -151,6 +165,26 @@ export function templateFor(id: string | null | undefined): TemplateDefinition {
   return CLASSIC
 }
 
+/**
+ * Longer than a heading gutter can hold.
+ *
+ * The compact template sets headings in a narrow column beside their content,
+ * which is where it finds most of the space it saves. That column fits two
+ * lines of a normal heading -- "Volunteer & Community Service" reads fine --
+ * but a long custom heading would stack one word per line and shred the body
+ * width beside it. Past this length the section gives up the gutter and puts
+ * its heading above the content instead: a little less dense, and legible.
+ *
+ * A length rather than a measurement because the renderer has no layout engine.
+ * Every heading this project ships is comfortably under it; what trips it is a
+ * heading the applicant wrote themselves.
+ */
+export const LONG_HEADING_CHARS = 34
+
+export function isLongHeading(heading: string): boolean {
+  return heading.trim().length > LONG_HEADING_CHARS
+}
+
 export interface SplitPlan {
   readonly main: readonly DocumentBlock[]
   readonly sidebar: readonly DocumentBlock[]
@@ -171,10 +205,16 @@ export function splitPlan(plan: DocumentPlan, template: TemplateDefinition): Spl
   if (template.layout !== 'sidebar' || template.sidebarSections.length === 0) {
     return { main: plan.blocks, sidebar: [] }
   }
-  const inSidebar = new Set<ResumeSectionType>(template.sidebarSections)
+  const byDefault = new Set<ResumeSectionType>(template.sidebarSections)
+  // The applicant's own choice wins over the default, including the choice to
+  // put something narrative in the sidebar. They can see the preview; the
+  // template's opinion is a starting point, not a rule.
+  const sidebar = (block: DocumentBlock) =>
+    block.modernColumn ? block.modernColumn === 'sidebar' : byDefault.has(block.sectionType)
+
   return {
-    main: plan.blocks.filter((b) => !inSidebar.has(b.sectionType)),
-    sidebar: plan.blocks.filter((b) => inSidebar.has(b.sectionType)),
+    main: plan.blocks.filter((b) => !sidebar(b)),
+    sidebar: plan.blocks.filter(sidebar),
   }
 }
 
@@ -191,6 +231,18 @@ export function splitPlan(plan: DocumentPlan, template: TemplateDefinition): Spl
  * For a single-column template this is simply the applicant's own order.
  */
 export function readingOrder(plan: DocumentPlan, template: TemplateDefinition): DocumentBlock[] {
-  const { main, sidebar } = splitPlan(plan, template)
-  return [...main, ...sidebar]
+  if (template.layout !== 'sidebar' || template.sidebarSections.length === 0) {
+    return [...plan.blocks]
+  }
+  // DELIBERATELY NOT `splitPlan`. Reading order follows what a section IS --
+  // narrative, or supporting -- and not where the applicant chose to draw it.
+  // Someone who moves their clinical experience into the sidebar for the look of
+  // it has not decided that a parser should read their licences first, and the
+  // locked order is header, then summary and experience, then the supporting
+  // sections. Moving a section is a layout edit; it is not an ATS decision.
+  const supporting = new Set<ResumeSectionType>(template.sidebarSections)
+  return [
+    ...plan.blocks.filter((b) => !supporting.has(b.sectionType)),
+    ...plan.blocks.filter((b) => supporting.has(b.sectionType)),
+  ]
 }

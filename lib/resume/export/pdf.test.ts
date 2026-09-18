@@ -12,6 +12,7 @@ import { createAuthoredText } from '../model/authoredText.ts'
 import { createBullet, createClinicalPosition, createSection, parseGpa } from '../model/sections.ts'
 import { resumeDateFromParts } from '../model/dates.ts'
 import { TEMPLATES } from '../document/templates.ts'
+import { pageSpanFromDocumentHeight } from '../document/pages.ts'
 import { FONT_FACES, SANS_FAMILY, SERIF_FAMILY, webFontSrc } from '../document/fonts.ts'
 import type { ResumeSectionV2, ResumeV2 } from '../model/types.ts'
 
@@ -535,6 +536,212 @@ test('an empty resume produces a valid, empty document rather than failing', { s
   assert.equal(bytes.subarray(0, 5).toString('latin1'), '%PDF-')
   const result = await extractPdf(bytes)
   assert.equal(result.numPages, 1)
+})
+
+type TemplateId = 'classic' | 'modern' | 'compact'
+
+/** What the preview measures: the page box's used height, unaffected by zoom. */
+async function measuredPageHeight(resume: ResumeV2, template: TemplateId): Promise<number> {
+  const page = await browser!.newPage()
+  try {
+    await page.setContent(await documentHtml(resume, template), { waitUntil: 'load' })
+    await page.evaluate(() => document.fonts.ready.then(() => undefined))
+    return await page.evaluate(() => {
+      const sheet = document.querySelector('.rd-page') as HTMLElement | null
+      return sheet ? parseFloat(getComputedStyle(sheet).height) : 0
+    })
+  } finally {
+    await page.close()
+  }
+}
+
+async function printedPages(resume: ResumeV2, template: TemplateId): Promise<number> {
+  return (await extractPdf(await exportResumePdf(resume, { browser: browser!, template }))).numPages
+}
+
+/** The sample resume with `extra` more bullets on its one position. */
+function withExtraBullets(extra: number): ResumeV2 {
+  const base = sampleResume()
+  return {
+    ...base,
+    sections: base.sections.map((section) => section.type !== 'critical_care' ? section : ({
+      ...section,
+      positions: section.positions.map((position) => ({
+        ...position,
+        bullets: [
+          ...position.bullets,
+          ...Array.from({ length: extra }, (_, i) => createBullet(
+            `Additional bullet ${i + 1}: coordinated care for a critically ill patient with the intensivist and the bedside team across a long night shift.`
+          )),
+        ],
+      })),
+    } as ResumeSectionV2)),
+  }
+}
+
+test('one page or multi-page, as shown before download, is what the PDF is', { skip }, async () => {
+  for (const [name, resume] of [['short', sampleResume()], ['long', longResume()]] as const) {
+    for (const template of ['classic', 'modern', 'compact'] as const) {
+      const span = pageSpanFromDocumentHeight(await measuredPageHeight(resume, template))
+      const printed = await printedPages(resume, template)
+      assert.equal(
+        span, printed === 1 ? 'single' : 'multi',
+        `${name}/${template}: the preview says ${span}, the PDF has ${printed} page(s)`
+      )
+    }
+  }
+})
+
+test('the one-page claim holds exactly at the page boundary', { skip }, async () => {
+  // The case that decides whether "1 page" can be trusted: the last layout that
+  // fits one page and the first that does not, found by growing the resume a
+  // bullet at a time. Measuring is cheap; only those two layouts are printed.
+  for (const template of ['classic', 'modern', 'compact'] as const) {
+    let fits: number | null = null
+    let overflows: number | null = null
+    for (let extra = 0; extra <= 60; extra += 1) {
+      const span = pageSpanFromDocumentHeight(await measuredPageHeight(withExtraBullets(extra), template))
+      if (span === 'single') {
+        fits = extra
+        continue
+      }
+      overflows = extra
+      break
+    }
+    assert.notEqual(fits, null, `${template}: the sample resume does not start on one page`)
+    assert.notEqual(overflows, null, `${template}: sixty extra bullets never overflowed a page`)
+    assert.equal(
+      await printedPages(withExtraBullets(fits!), template), 1,
+      `${template}: shown as 1 page with ${fits} extra bullets, but printed on more`
+    )
+    assert.ok(
+      await printedPages(withExtraBullets(overflows!), template) > 1,
+      `${template}: shown as multi-page with ${overflows} extra bullets, but printed on one`
+    )
+  }
+})
+
+test('changing the template changes the measurement the page span comes from', { skip }, async () => {
+  const resume = longResume()
+  assert.notEqual(
+    await measuredPageHeight(resume, 'classic'),
+    await measuredPageHeight(resume, 'compact'),
+    'Compact renders the same resume at the same height as Classic'
+  )
+})
+
+/**
+ * Text in the order the PDF itself stores it: the content stream, read
+ * straight through, with no re-sorting by position.
+ *
+ * `extractPdf` rebuilds lines from coordinates and splits detected columns, so
+ * it reads a page the way it LOOKS. The stored order is what a parser that does
+ * not do its own layout analysis reads, and what the renderer controls.
+ *
+ * Returned with whitespace removed. Chromium splits runs where it likes -- the
+ * licence number is stored as "26", "NR", "12345600" -- and writes spaces as
+ * items of their own, so spacing says nothing about order. Markers are compared
+ * the same way; see `squash`.
+ */
+const squash = (value: string) => value.replace(/\s+/g, '')
+
+async function streamOrderText(bytes: Buffer): Promise<string> {
+  const mod: any = await import('pdfjs-dist/legacy/build/pdf.js')
+  const pdfjs: any = mod.getDocument ? mod : mod.default
+  const doc = await pdfjs.getDocument({
+    data: new Uint8Array(bytes), useSystemFonts: true, isEvalSupported: false, disableAutoFetch: true,
+  }).promise
+  const parts: string[] = []
+  for (let p = 1; p <= doc.numPages; p++) {
+    const content = await (await doc.getPage(p)).getTextContent()
+    for (const item of content.items as any[]) if (typeof item.str === 'string') parts.push(item.str)
+  }
+  return squash(parts.join(''))
+}
+
+/** The locked semantic order: who they are, what they have done, then what supports it. */
+const SEMANTIC_ORDER = [
+  'Jordan Ellery',                        // header
+  'Critical care nurse with six years',   // summary
+  'University Hospital',                  // critical care: the position
+  'Managed vasoactive infusions',         // critical care: its first bullet
+  'Rutgers University',                   // education, supporting
+  '26NR12345600',                         // licensure, supporting
+]
+
+function assertInOrder(text: string, markers: readonly string[], label: string): void {
+  let previous = -1
+  for (const marker of markers) {
+    const at = text.indexOf(squash(marker))
+    assert.ok(at >= 0, `${label}: "${marker}" is missing from the PDF text`)
+    assert.ok(at > previous, `${label}: "${marker}" is read out of order`)
+    previous = at
+  }
+}
+
+test('Critical Care moved to the sidebar is drawn there and read in its semantic place', { skip }, async () => {
+  const base = sampleResume()
+  const moved: ResumeV2 = {
+    ...base,
+    sections: base.sections.map((section) =>
+      section.type === 'critical_care' ? ({ ...section, modernColumn: 'sidebar' } as ResumeSectionV2) : section),
+  }
+
+  // 1. Visually, it IS in the sidebar -- to the left of the main column, and
+  //    below Education, which precedes it there in the applicant's order.
+  const page = await browser!.newPage()
+  try {
+    await page.setContent(await documentHtml(moved, 'modern'), { waitUntil: 'load' })
+    await page.evaluate(() => document.fonts.ready.then(() => undefined))
+    const layout = await page.evaluate(() => {
+      const box = (selector: string) => {
+        const el = document.querySelector(selector) as HTMLElement | null
+        return el ? el.getBoundingClientRect() : null
+      }
+      const cc = document.querySelector('[data-section-type="critical_care"]') as HTMLElement | null
+      return {
+        inAside: Boolean(cc?.closest('.rd-aside')),
+        ccLeft: box('[data-section-type="critical_care"]')?.left ?? -1,
+        ccTop: box('[data-section-type="critical_care"]')?.top ?? -1,
+        mainLeft: box('.rd-main')?.left ?? -1,
+        educationTop: box('[data-section-type="education"]')?.top ?? -1,
+      }
+    })
+    assert.ok(layout.inAside, 'Critical Care is not drawn in the sidebar')
+    assert.ok(layout.ccLeft < layout.mainLeft, 'the sidebar is not to the left of the main column')
+    assert.ok(layout.educationTop < layout.ccTop, 'Education is not drawn above it, so the test would not discriminate')
+  } finally {
+    await page.close()
+  }
+
+  // 2. What the PDF stores still reads in the locked order -- the same order as
+  //    when nothing was moved. Drawn in DOM column order, Education would come
+  //    before Critical Care here; the reading position is what prevents it.
+  for (const [label, resume] of [['default placement', base], ['moved to sidebar', moved]] as const) {
+    const bytes = await exportResumePdf(resume, { browser: browser!, template: 'modern' })
+    const extracted = await extractPdf(bytes)
+    assert.equal(extracted.imageOnly, false, `${label}: the PDF lost its text layer`)
+    assertInOrder(await streamOrderText(bytes), SEMANTIC_ORDER, label)
+  }
+})
+
+test('reading-order painting keeps every line of a long Modern resume, once', { skip }, async () => {
+  // Paint order is the mechanism, so check what it could plausibly break: text
+  // dropped or duplicated where a positioned section crosses a page boundary.
+  const base = longResume()
+  const resume: ResumeV2 = {
+    ...base,
+    sections: base.sections.map((section) =>
+      section.type === 'critical_care' ? ({ ...section, modernColumn: 'sidebar' } as ResumeSectionV2) : section),
+  }
+  const text = await streamOrderText(await exportResumePdf(resume, { browser: browser!, template: 'modern' }))
+  for (let i = 0; i < 9; i++) {
+    for (let b = 0; b < 5; b++) {
+      const marker = `Position ${i + 1} bullet ${b + 1}:`
+      const count = text.split(squash(marker)).length - 1
+      assert.equal(count, 1, `"${marker}" appears ${count} times`)
+    }
+  }
 })
 
 test('all three templates export and carry the same content', { skip }, async () => {

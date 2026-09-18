@@ -2,7 +2,7 @@ import { DOCUMENT_CSS, cssVariablesFor } from '@/lib/resume/document/css'
 import { fontFaceCss } from '@/lib/resume/document/fonts'
 import { planDocument } from '@/lib/resume/document/plan'
 import type { DocumentBlock, DocumentPlan } from '@/lib/resume/document/plan'
-import { splitPlan, templateFor } from '@/lib/resume/document/templates'
+import { readingOrder, splitPlan, templateFor } from '@/lib/resume/document/templates'
 import type { TemplateDefinition } from '@/lib/resume/document/templates'
 import type { ResumeV2 } from '@/lib/resume/model/types'
 import DocumentHeader from './DocumentHeader'
@@ -33,6 +33,7 @@ export default function ResumeDocument({
   includeStyles = true,
   fontCss,
   watermark,
+  paginated = false,
 }: {
   /** The resume to render. Ignored when `plan` is supplied. */
   resume?: ResumeV2
@@ -56,10 +57,27 @@ export default function ResumeDocument({
    * path, which only Ultimate can reach. See lib/resume/entitlement.ts.
    */
   watermark?: string | null
+  /**
+   * Laid out as the printed page lays it out -- no screen padding, no minimum
+   * height -- for a caller that breaks it into pages itself. The Studio's
+   * paginated preview sets it; the export never does, because print applies the
+   * same rules on its own.
+   */
+  paginated?: boolean
 }) {
   const definition = resolveTemplate(template, resume)
   const document = plan ?? (resume ? planDocument(resume) : EMPTY_PLAN)
   const { main, sidebar } = splitPlan(document, definition)
+  // Where a block is DRAWN and where it is READ are separate decisions. The
+  // column comes from `splitPlan`, which honours the applicant's placement; the
+  // reading position comes from `readingOrder`, which deliberately does not.
+  // Each block carries its reading position so the stylesheet can paint it --
+  // and Chromium therefore writes it into the PDF's text layer -- in reading
+  // order, whichever column it sits in.
+  const readingRank = new Map(
+    readingOrder(document, definition).map((block, i) => [block.sectionId, i + 1] as const)
+  )
+  const render = (block: DocumentBlock) => renderBlock(block, readingRank.get(block.sectionId) ?? 0)
 
   return (
     <div
@@ -71,6 +89,7 @@ export default function ResumeDocument({
       data-density={definition.density}
       data-template={definition.id}
       data-watermarked={watermark ? 'true' : 'false'}
+      data-paginated={paginated ? 'true' : 'false'}
       style={cssVariablesFor(definition) as React.CSSProperties}
     >
       {includeStyles && (
@@ -78,13 +97,7 @@ export default function ResumeDocument({
       )}
       <article className="rd-page">
         {watermark && (
-          <div className="rd-watermark" aria-hidden="true" data-testid="rd-watermark">
-            {/* Repeated rather than tiled with a background image: a background
-                is the first thing a browser drops when printing. */}
-            {[0, 1, 2, 3, 4, 5].map((row) => (
-              <span key={row}>{watermark}</span>
-            ))}
-          </div>
+          <DocumentWatermark text={watermark} />
         )}
         <DocumentHeader plan={document} />
         {/* Main column FIRST in the DOM. The stylesheet places the sidebar to
@@ -92,9 +105,9 @@ export default function ResumeDocument({
             reads as a resume rather than opening with licence numbers. See
             `readingOrder` in lib/resume/document/templates.ts. */}
         <div className="rd-columns">
-          <div className="rd-main">{main.map(renderBlock)}</div>
+          <div className="rd-main">{main.map(render)}</div>
           {sidebar.length > 0 && (
-            <aside className="rd-aside">{sidebar.map(renderBlock)}</aside>
+            <aside className="rd-aside">{sidebar.map(render)}</aside>
           )}
         </div>
       </article>
@@ -119,8 +132,26 @@ function resolveTemplate(
  * mapper in plan.ts and nothing here — which is why "all three templates render
  * every section type" is a property rather than a checklist.
  */
-function renderBlock(block: DocumentBlock) {
+function renderBlock(block: DocumentBlock, readingRank: number) {
   return block.kind === 'prose'
-    ? <ProseBlock block={block} key={block.sectionId} />
-    : <EntriesBlock block={block} key={block.sectionId} />
+    ? <ProseBlock block={block} readingRank={readingRank} key={block.sectionId} />
+    : <EntriesBlock block={block} readingRank={readingRank} key={block.sectionId} />
+}
+
+/**
+ * The preview mark, drawn over whatever box contains it.
+ *
+ * Exported so a paginated preview draws the SAME mark on every sheet rather than
+ * a copy of it: one definition of what a tier that cannot export is shown.
+ */
+export function DocumentWatermark({ text }: { text: string }) {
+  return (
+    <div className="rd-watermark" aria-hidden="true" data-testid="rd-watermark">
+      {/* Repeated rather than tiled with a background image: a background
+          is the first thing a browser drops when printing. */}
+      {[0, 1, 2, 3, 4, 5].map((row) => (
+        <span key={row}>{text}</span>
+      ))}
+    </div>
+  )
 }

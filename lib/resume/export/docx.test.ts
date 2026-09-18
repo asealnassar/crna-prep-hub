@@ -117,8 +117,13 @@ test('PDF and DOCX carry the same content', async () => {
 })
 
 test('the content order is the reading order, for both formats', async () => {
+  // Modern's sidebar -- education and credentials -- is emitted AFTER the main
+  // column, so what a parser extracts opens with who the applicant is and what
+  // they have done rather than with a list of qualifications. Education reads
+  // after experience here because it sits in the sidebar, which is the same
+  // rule that has always put licences last.
   const text = await docxText(sample(), 'modern')
-  const sequence = ['Jordan Ellery', 'Critical care nurse of six years', 'Rutgers University', 'University Hospital']
+  const sequence = ['Jordan Ellery', 'Critical care nurse of six years', 'University Hospital', 'Rutgers University']
   let cursor = -1
   for (const marker of sequence) {
     const at = text.indexOf(marker, cursor + 1)
@@ -183,6 +188,38 @@ test('the document uses no tables, text boxes or columns', () => {
 test('bullets are real Word list items, not typed hyphens', () => {
   const source = readFileSync(fileURLToPath(new URL('./docx.ts', import.meta.url)), 'utf8')
   assert.match(source, /bullet:\s*\{\s*level:\s*0\s*\}/)
+})
+
+test('a position’s bullets are list items and authored prose is not', () => {
+  // Word gets the same distinction the PDF gets: what the model calls a list is
+  // a list, and a shadowing reflection is a paragraph.
+  const source = readFileSync(fileURLToPath(new URL('./docx.ts', import.meta.url)), 'utf8')
+  assert.match(
+    source,
+    /detailStyle === 'bullets'\s*\?\s*\{\s*bullet:\s*\{\s*level:\s*0\s*\}\s*\}\s*:\s*\{\}/,
+    'every detail line is written as a Word bullet'
+  )
+})
+
+test('prose detail still reaches the Word file', async () => {
+  const resume = sample()
+  const withProse = {
+    ...resume,
+    sections: [
+      ...resume.sections,
+      {
+        ...createSection('shadowing', 'sh'),
+        experiences: [{
+          id: 'sh1', providerName: 'A. Nurse', credential: 'CRNA', setting: 'Operating room',
+          facility: 'University Hospital', hours: '40',
+          dates: { start: { kind: 'absent' as const }, end: { kind: 'absent' as const }, isCurrent: false },
+          reflection: createAuthoredText('I watched an induction and saw the airway trolley prepared.'),
+        }],
+      } as ResumeSectionV2,
+    ],
+  }
+  const text = await docxText(withProse)
+  assert.ok(text.includes('I watched an induction'), 'a reflection was dropped from the Word file')
 })
 
 test('there is no second source of resume content', () => {

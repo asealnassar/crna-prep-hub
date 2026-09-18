@@ -334,3 +334,141 @@ test('a full resume plans every section into a block', () => {
   assert.equal(plan.blocks.length, SECTION_TYPES.length)
   assert.deepEqual(plan.blocks.map((b) => b.sectionType), [...SECTION_TYPES])
 })
+
+// ------------------------------------------------------ education dates
+
+/** One degree, with whatever dates the test is about. */
+function educationSection(over: Record<string, unknown> = {}): ResumeSectionV2 {
+  return {
+    ...createSection('education', 'ed'),
+    entries: [{
+      id: 'e1', degree: 'BSN', field: 'Nursing', institution: 'Rutgers University',
+      location: 'Newark, NJ', graduationDate: JUN_2023,
+      overallGpa: parseGpa(''), scienceGpa: parseGpa(''), honors: '',
+      ...over,
+    }],
+  } as ResumeSectionV2
+}
+
+const metaOf = (section: ResumeSectionV2): string => {
+  const block = blockFor(section)
+  assert.equal(block?.kind, 'entries')
+  return block?.kind === 'entries' ? block.entries[0].meta : ''
+}
+
+test('a degree prints the span the applicant gave', () => {
+  assert.equal(metaOf(educationSection({ startDate: resumeDateFromParts(2019, 9) })), 'Sep 2019 – Jun 2023')
+})
+
+test('a degree saved before start dates existed prints exactly as it did', () => {
+  // Nothing rewrites stored rows to add a start date, so the overwhelming
+  // majority of records have only the graduation date. They must not change.
+  assert.equal(metaOf(educationSection()), 'Jun 2023')
+  assert.equal(metaOf(educationSection({ startDate: ABSENT_DATE })), 'Jun 2023')
+})
+
+test('a degree in progress prints the start alone, without a dangling dash', () => {
+  assert.equal(
+    metaOf(educationSection({ startDate: resumeDateFromParts(2024, 9), graduationDate: ABSENT_DATE })),
+    'Sep 2024'
+  )
+})
+
+test('a degree with no dates prints nothing where the dates would be', () => {
+  assert.equal(metaOf(educationSection({ graduationDate: ABSENT_DATE })), '')
+})
+
+test('the applicant’s own wording survives in either date', () => {
+  assert.equal(
+    metaOf(educationSection({
+      startDate: { kind: 'unparsed', raw: 'Fall 2019' },
+      graduationDate: { kind: 'unparsed', raw: 'expected 2026' },
+    })),
+    'Fall 2019 – expected 2026'
+  )
+})
+
+// ------------------------------------------------------------ the name
+
+test('a name keeps the credentials as listed, commas and order intact', () => {
+  // "Jane Doe, BSN, RN, CCRN" is how a nurse writes their own name on a resume.
+  // Reordering or de-duplicating them would be the product editing a credential.
+  const resume = {
+    ...resumeWith([]),
+    contact: { ...emptyContact(), fullName: 'Jane Doe', credentials: 'BSN, RN, CCRN' },
+  }
+  assert.equal(planDocument(resume).name, 'Jane Doe, BSN, RN, CCRN')
+})
+
+test('a name with no credentials has no trailing comma', () => {
+  const resume = { ...resumeWith([]), contact: { ...emptyContact(), fullName: 'Jane Doe' } }
+  assert.equal(planDocument(resume).name, 'Jane Doe')
+})
+
+// --------------------------------------------- bullets versus paragraphs
+
+test('a position’s bullets are a list, because that is what the model holds', () => {
+  const block = blockFor(populated('critical_care'))
+  assert.equal(block?.kind, 'entries')
+  if (block?.kind === 'entries') assert.equal(block.entries[0].detailStyle, 'bullets')
+})
+
+test('authored prose is paragraphs, not a bullet list', () => {
+  // A shadowing reflection, what a volunteer role involved, a citation: these
+  // are sentences someone wrote. A glyph in front of one is the document making
+  // a claim about the shape of the content that the model never made.
+  for (const type of [
+    'shadowing', 'leadership', 'volunteer', 'quality_improvement', 'research',
+    'awards', 'publications', 'custom',
+  ] as const) {
+    const block = blockFor(populated(type))
+    assert.equal(block?.kind, 'entries', type)
+    if (block?.kind === 'entries') {
+      assert.equal(block.entries[0].detailStyle, 'paragraphs', type)
+    }
+  }
+})
+
+test('every entry says how its detail reads', () => {
+  const plan = planDocument(resumeWith(allPopulated()))
+  for (const block of plan.blocks) {
+    if (block.kind !== 'entries') continue
+    for (const entry of block.entries) {
+      assert.ok(
+        ['bullets', 'paragraphs'].includes(entry.detailStyle),
+        `${block.sectionType} entry has no detail style`
+      )
+    }
+  }
+})
+
+// ------------------------------------------------------- robustness
+
+test('long content reaches the page as written, not trimmed to fit', () => {
+  // The templates make room for content; they never edit it. Truncating an
+  // employer's name or a bullet to make a layout work would be the document
+  // rewriting the applicant.
+  const employer = 'The Presbyterian University Hospital of the Greater Metropolitan Health System'
+  const role = 'Registered Nurse, Critical Care Float Pool and Rapid Response Team'
+  const bullet = 'Coordinated care for critically ill patients across a twelve-hour night shift, '
+    + 'working with the intensivist team on ventilator weaning, sedation targets and family updates.'
+
+  const section = {
+    ...createSection('critical_care', 'cc-long'),
+    positions: [{
+      ...createClinicalPosition('p-long', { employer, role, unit: 'Medical ICU', dates: RANGE }),
+      bullets: Array.from({ length: 8 }, () => createBullet(bullet)),
+    }],
+  } as ResumeSectionV2
+
+  const block = blockFor(section)
+  assert.equal(block?.kind, 'entries')
+  if (block?.kind !== 'entries') return
+
+  const entry = block.entries[0]
+  assert.equal(entry.title, employer, 'the employer name was shortened')
+  assert.ok(entry.subtitle.includes(role), 'the job title was shortened')
+  assert.equal(entry.detail.length, 8, 'a bullet was dropped')
+  assert.equal(entry.detail[0], bullet, 'a bullet was rewritten to fit')
+  assert.equal(entry.detailStyle, 'bullets')
+})

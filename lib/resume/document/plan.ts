@@ -22,6 +22,7 @@
  */
 
 import { headingFor, isSectionRenderable } from '../model/sections.ts'
+import { isImportReviewSection } from '../model/importReview.ts'
 import { isBlankAuthoredText } from '../model/authoredText.ts'
 import type { AuthoredText } from '../model/authoredText.ts'
 import type {
@@ -31,8 +32,8 @@ import type {
   ShadowingEntry, VolunteerEntry,
 } from '../model/types.ts'
 import {
-  atsText, contactPieces, formatDateRange, formatGpa, formatName,
-  formatResumeDate, join, paragraphsOf,
+  atsText, contactPieces, formatDateRange, formatEducationDates, formatGpa,
+  formatName, formatResumeDate, join, paragraphsOf,
 } from './format.ts'
 
 /** One titled item: a job, a degree, a certification, an award. */
@@ -49,12 +50,30 @@ export interface DocumentEntry {
   readonly notes: readonly string[]
   /** Bullets or paragraphs. The written part. */
   readonly detail: readonly string[]
+  /**
+   * How `detail` reads: a bullet list, or a run of paragraphs.
+   *
+   * ONLY WHAT THE MODEL CALLS A LIST GETS A BULLET. A clinical position holds
+   * `bullets`, which are list items and have always been one per line. Every
+   * other section's detail is authored PROSE -- a shadowing reflection, what a
+   * volunteer role involved, a citation -- and prose that has been given a
+   * bullet glyph is a sentence pretending to be a resume line. Both were
+   * rendered as `<li>` and told apart only by the absence of a marker, which is
+   * why adding markers had to start here rather than in the stylesheet.
+   */
+  readonly detailStyle: 'bullets' | 'paragraphs'
 }
 
 interface BlockBase {
   readonly sectionId: string
   readonly sectionType: ResumeSectionType
   readonly heading: string
+  /**
+   * The applicant's own column choice, carried through so a two-column template
+   * can honour it. Absent means the template decides. Layout only: it has no
+   * bearing on what the document SAYS, which is everything else in this file.
+   */
+  readonly modernColumn?: 'sidebar' | 'main'
 }
 
 export type DocumentBlock =
@@ -75,6 +94,10 @@ export interface DocumentPlan {
 
 const EMPTY_ENTRY: Omit<DocumentEntry, 'id'> = {
   title: '', subtitle: '', meta: '', location: '', notes: [], detail: [],
+  // Prose unless a mapper says otherwise. A new section type that holds written
+  // text is a paragraph by default, which is the safe way round: a bullet glyph
+  // on a paragraph is a claim about the shape of the content.
+  detailStyle: 'paragraphs',
 }
 
 function entry(id: string, over: Partial<Omit<DocumentEntry, 'id'>>): DocumentEntry {
@@ -113,7 +136,9 @@ function educationEntry(e: EducationEntry): DocumentEntry {
   return entry(e.id, {
     title: join([e.degree, e.field], ', '),
     subtitle: e.institution,
-    meta: formatResumeDate(e.graduationDate),
+    // A span when the applicant gave both ends. A record from before education
+    // had a start date carries only graduation, and prints as it always did.
+    meta: formatEducationDates(e.startDate, e.graduationDate),
     location: e.location,
     notes: [formatGpa(e.overallGpa), formatGpa(e.scienceGpa, 'Science GPA'), e.honors],
   })
@@ -137,6 +162,8 @@ function positionEntry(p: ClinicalPosition): DocumentEntry {
     meta: formatDateRange(p.facts.dates),
     location: p.facts.location,
     detail: p.bullets.flatMap(accepted),
+    // The one place a resume genuinely has a list.
+    detailStyle: 'bullets',
   })
 }
 
@@ -234,7 +261,7 @@ function prose(section: ResumeSectionV2, paragraphs: readonly string[]): Documen
   if (paragraphs.length === 0) return null
   return {
     kind: 'prose', sectionId: section.id, sectionType: section.type,
-    heading: headingFor(section), paragraphs,
+    heading: headingFor(section), modernColumn: section.modernColumn, paragraphs,
   }
 }
 
@@ -243,7 +270,7 @@ function entries(section: ResumeSectionV2, list: readonly DocumentEntry[]): Docu
   if (kept.length === 0) return null
   return {
     kind: 'entries', sectionId: section.id, sectionType: section.type,
-    heading: headingFor(section), entries: kept,
+    heading: headingFor(section), modernColumn: section.modernColumn, entries: kept,
   }
 }
 
@@ -303,6 +330,9 @@ export function planDocument(resume: ResumeV2): DocumentPlan {
   const blocks: DocumentBlock[] = []
   for (const section of resume.sections) {
     if (!isSectionRenderable(section)) continue
+    // Imported text the applicant has not placed never prints -- decided by the
+    // section's flag, not only by its visibility.
+    if (isImportReviewSection(section)) continue
     const block = blockFor(section)
     if (block) blocks.push(block)
   }

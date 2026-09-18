@@ -152,3 +152,87 @@ test('the stylesheet cannot break out of the style tag it is inlined into', () =
   assert.equal(DOCUMENT_CSS.toLowerCase().includes('</style'), false)
   assert.equal(DOCUMENT_CSS.toLowerCase().includes('<script'), false)
 })
+
+// ------------------------------------------------------------- bullets
+
+test('bullets carry a marker of their own rather than inheriting one', () => {
+  // The preview mounts inside an application whose reset sets list-style: none
+  // on every ul, so the glyphs vanished in the Studio while surviving in the
+  // PDF. A class selector states the marker and beats any host reset.
+  assert.match(DOCUMENT_CSS, /\.rd-bullets\s*\{[^}]*list-style:\s*disc\s+outside/)
+})
+
+test('bullets hang, so a wrapped line aligns with the text and not the glyph', () => {
+  const rule = /\.rd-bullets\s*\{[^}]*\}/.exec(DOCUMENT_CSS)?.[0] ?? ''
+  assert.match(rule, /list-style:\s*disc\s+outside/, 'an inside marker would indent the wrap under the glyph')
+  assert.match(rule, /padding-left:\s*\d/, 'without padding there is no room for the marker')
+})
+
+test('there is readable space between one bullet and the next', () => {
+  assert.match(DOCUMENT_CSS, /\.rd-bullets li\s*\{[^}]*margin-bottom:\s*[1-9]/)
+})
+
+test('authored prose inside an entry is never given a bullet glyph', () => {
+  // A shadowing reflection is a sentence, not a resume line.
+  const rule = /\.rd-details\s*\{[^}]*\}/.exec(DOCUMENT_CSS)?.[0] ?? ''
+  assert.notEqual(rule, '', 'narrative detail has no rule of its own')
+  assert.equal(/list-style:\s*(disc|circle|square)/.test(rule), false, 'prose was given a marker')
+})
+
+// ------------------------------------------------------------ geometry
+
+test('the sidebar takes about a quarter of the width, not a third', () => {
+  const columns = /\[data-layout="sidebar"\][^{]*\.rd-columns\s*\{[^}]*grid-template-columns:\s*([\d.]+)fr\s+([\d.]+)fr/
+    .exec(DOCUMENT_CSS)
+  assert.ok(columns, 'the sidebar columns are not declared in fr units')
+  const [aside, main] = [Number(columns![1]), Number(columns![2])]
+  const share = aside / (aside + main)
+  assert.ok(share >= 0.25 && share <= 0.28, `the sidebar takes ${Math.round(share * 100)}% of the width`)
+})
+
+test('the compact heading gutter fits two words, not one', () => {
+  const gutter = /\[data-heading-style="inline"\][^{]*\.rd-section\s*\{[^}]*grid-template-columns:\s*([\d.]+)in/
+    .exec(DOCUMENT_CSS)
+  assert.ok(gutter, 'the inline heading gutter is not declared in inches')
+  const px = Number(gutter![1]) * 96
+  assert.ok(px >= 145 && px <= 160, `the gutter is ${px}px, which stacks a long heading one word per line`)
+})
+
+test('a heading no gutter can hold spans the section instead', () => {
+  assert.match(DOCUMENT_CSS, /\[data-long-heading="true"\]\s*\{\s*display:\s*block/)
+})
+
+test('a long employer name wraps rather than pushing the date off the line', () => {
+  assert.match(DOCUMENT_CSS, /\[data-entry-layout="opposed"\][^{]*:first-child\s*\{[^}]*min-width:\s*0/)
+  assert.match(DOCUMENT_CSS, /\.rd-meta\s*\{[^}]*white-space:\s*nowrap/)
+})
+
+test('single-line credential entries close up instead of standing apart', () => {
+  assert.match(DOCUMENT_CSS, /\[data-section-type="certifications"\]\s+\.rd-entry\s*\{[^}]*margin-bottom/)
+})
+
+test('the paginated preview is paged by the browser, one printed page per column', () => {
+  const flow = /\.rd-flow\s*\{[^}]*\}/.exec(DOCUMENT_CSS)?.[0] ?? ''
+  assert.match(flow, /width:\s*720px/)
+  assert.match(flow, /height:\s*960px/)
+  assert.match(flow, /column-width:\s*720px/)
+  // Balanced columns would share content out evenly; auto fills each page first.
+  assert.match(flow, /column-fill:\s*auto/)
+  // The export's body margin, reproduced inside each page.
+  assert.match(DOCUMENT_CSS, /\.rd-flow-body\s*\{\s*margin:\s*8px/)
+  // The page loses its screen padding and height exactly as print takes them away.
+  const page = /\[data-paginated="true"\] \.rd-page\s*\{[^}]*\}/.exec(DOCUMENT_CSS)?.[0] ?? ''
+  for (const rule of [/width:\s*auto/, /min-height:\s*0/, /padding:\s*0/, /margin:\s*0/]) {
+    assert.match(page, rule, `the paginated page does not match print: ${rule}`)
+  }
+})
+
+test('a two-column page paints its sections in reading order, not column order', () => {
+  // Chromium writes the PDF's text layer in paint order. The reading position
+  // as a z-index is what keeps that order when a section is moved between
+  // columns; relative positioning without an offset changes nothing visible.
+  assert.match(
+    DOCUMENT_CSS,
+    /\[data-layout="sidebar"\] \.rd-section\s*\{[^}]*position:\s*relative;[^}]*z-index:\s*var\(--rd-reading-order/
+  )
+})
