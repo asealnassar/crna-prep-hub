@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import {
   DEFAULT_AUTOSAVE, hasUnsavedWork, initialState, nextAction, reduce,
@@ -15,10 +16,13 @@ import {
 import type { PaneState } from '@/lib/resume/studio/panes'
 import type { ResumeSectionType, ResumeV2 } from '@/lib/resume/model/types'
 import type { StrengthResult } from '@/lib/resume/score/types'
-import { PREVIEW_WATERMARK, needsPreviewWatermark } from '@/lib/resume/entitlement'
+import type { PageSpan } from '@/lib/resume/document/pages'
+import { isOutputLocked, protectComposedOutput } from '@/lib/resume/studio/outputLock'
 import SaveIndicator from '../../components/dashboard/SaveIndicator'
 import ExportMenu from '../export/ExportMenu'
+import FeedbackButton from '../feedback/FeedbackButton'
 import StrengthPanel from '../strength/StrengthPanel'
+import { buttonClass, cx, field, iconButtonClass } from '../ui'
 import EditorPane from './EditorPane'
 import MobileToggle from './MobileToggle'
 import PreviewPane from './PreviewPane'
@@ -61,6 +65,8 @@ export default function StudioClient({
     () => new Set(initialResume.sections.slice(0, 1).map((s) => s.id))
   )
   const [pendingType, setPendingType] = useState<ResumeSectionType | ''>('')
+  /** One page or more, measured by the preview from the real page box. See lib/resume/document/pages.ts. */
+  const [pageSpan, setPageSpan] = useState<PageSpan | null>(null)
 
   // Resume Strength is on demand. `scoredAtRevision` is the document revision
   // the visible result describes, so staleness is "you have edited since this
@@ -86,6 +92,12 @@ export default function StudioClient({
     queue.current.push(patch)
     setSave((s) => reduce(s, { type: 'edited', at: Date.now() }))
   }, [])
+
+  // Saves what is queued now instead of at the end of the debounce. An AI route
+  // grounds a proposal in the STORED resume, so facts the applicant selected a
+  // moment ago have to have landed before the request goes -- otherwise they
+  // tick twelve things and the model is handed the four that were already there.
+  const flush = useCallback(() => setSave((s) => reduce(s, { type: 'flush', at: Date.now() })), [])
 
   // --- the save -----------------------------------------------------------
 
@@ -176,83 +188,159 @@ export default function StudioClient({
     })
 
   const visible = visiblePanes(panes)
+  const unsaved = hasUnsavedWork(save)
+  const phone = visible.toggleable
+
+  const saveIndicator = (size: 'sm' | 'xs') => (
+    <SaveIndicator
+      state={save}
+      size={size}
+      onRetry={() => setSave((s) => reduce(s, { type: 'retry', at: Date.now() }))}
+      onReload={() => window.location.reload()}
+    />
+  )
+
+  const titleInput = (className: string) => (
+    <>
+      <label className="sr-only" htmlFor="resume-title">Resume title</label>
+      <input
+        id="resume-title"
+        value={resume.title}
+        title={resume.title}
+        onChange={(e) => emit({ op: 'title', value: e.target.value })}
+        className={cx(field.inlineTitle, className)}
+      />
+    </>
+  )
+
+  const strengthControl = (presentation: 'popover' | 'sheet') => (
+    <StrengthPanel
+      resumeId={initialResume.id}
+      currentRevision={resume.revision}
+      result={strength}
+      scoredAtRevision={scoredAtRevision}
+      storedScore={initialResume.strength}
+      hasUnsavedWork={unsaved}
+      presentation={presentation}
+      onResult={(result, revision) => {
+        setStrength(result)
+        setScoredAtRevision(revision)
+      }}
+    />
+  )
+
+  // Exports the STORED resume, so an edit still in flight would not be in the
+  // file. The control is disabled until the document is settled.
+  const exportControl = (compact: boolean) => (
+    <ExportMenu
+      resumeId={initialResume.id}
+      tier={tier}
+      disabled={unsaved}
+      pageSpan={pageSpan}
+      compact={compact}
+      // The one thing that locks the finished output, and it saves at once so
+      // the answer survives a reload. See lib/resume/studio/outputLock.ts.
+      onNotNow={() => {
+        emit({ op: 'output-lock' })
+        flush()
+      }}
+    />
+  )
+
+  /** Quiet, beside the real actions. Carries the template on screen, never the document. */
+  const feedbackControl = (compact: boolean) => (
+    <FeedbackButton surface="studio" tier={tier} template={resume.template} compact={compact} />
+  )
+
+  const editor = (
+    <EditorPane
+      resume={resume}
+      openSections={openSections}
+      pendingType={pendingType}
+      newId={newId}
+      emit={emit}
+      unsaved={unsaved}
+      onFlush={flush}
+      onToggleSection={toggleSection}
+      onPendingTypeChange={setPendingType}
+      compact={phone}
+    />
+  )
+
+  // Complete and clean for every tier while it is being built. It blurs only
+  // after a download attempt was answered with "Not now".
+  const preview = (
+    <PreviewPane
+      resume={resume}
+      locked={isOutputLocked(resume, tier)}
+      protectCopy={protectComposedOutput(tier)}
+      onTemplateChange={(template) => emit({ op: 'template', template })}
+      onPageSpanChange={setPageSpan}
+      compact={phone}
+    />
+  )
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
-        <div className="max-w-[110rem] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div className="flex min-h-screen bg-[#F7F8FC]">
+      <div className={`min-w-0 flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
 
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <Link href="/resume-studio" className="text-xs text-indigo-300 hover:underline">
-                ← All resumes
+        {phone ? (
+          <header className="sticky top-0 z-30 border-b border-slate-200 bg-white">
+            {/* pl-16 keeps clear of the app's own fixed menu button once this sticks to the top. */}
+            <div className="flex h-14 items-center gap-0.5 pl-16 pr-1.5">
+              <Link href="/resume-studio" aria-label="Back to resumes" className={iconButtonClass('touch')}>
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               </Link>
-              <label className="sr-only" htmlFor="resume-title">Resume title</label>
-              <input
-                id="resume-title"
-                value={resume.title}
-                onChange={(e) => emit({ op: 'title', value: e.target.value })}
-                className="block w-full bg-transparent text-2xl sm:text-3xl font-bold text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 rounded-lg px-1"
-              />
-              <SaveIndicator
-                state={save}
-                onRetry={() => setSave((s) => reduce(s, { type: 'retry', at: Date.now() }))}
-                onReload={() => window.location.reload()}
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              {/* Exports the STORED resume, so an edit still in flight would
-                  not be in the file. Disabled until the document is settled. */}
-              <ExportMenu
-                resumeId={initialResume.id}
-                tier={tier}
-                disabled={hasUnsavedWork(save)}
-              />
-              {visible.toggleable && <MobileToggle state={panes} onChange={setPanes} />}
-            </div>
-          </div>
-
-          <div className={visible.edit && visible.preview ? 'grid grid-cols-2 gap-6 items-start' : ''}>
-            {visible.edit && (
-              <div className="min-w-0 space-y-6">
-                <StrengthPanel
-                  resumeId={initialResume.id}
-                  currentRevision={resume.revision}
-                  result={strength}
-                  scoredAtRevision={scoredAtRevision}
-                  storedScore={initialResume.strength}
-                  hasUnsavedWork={hasUnsavedWork(save)}
-                  onResult={(result, revision) => {
-                    setStrength(result)
-                    setScoredAtRevision(revision)
-                  }}
-                />
-
-                <EditorPane
-                  resume={resume}
-                  openSections={openSections}
-                  pendingType={pendingType}
-                  newId={newId}
-                  emit={emit}
-                  onToggleSection={toggleSection}
-                  onPendingTypeChange={setPendingType}
-                />
+              <div className="min-w-0 flex-1 leading-tight">
+                {titleInput('w-full px-1 py-0')}
+                <div className="px-1">{saveIndicator('xs')}</div>
               </div>
-            )}
-            {visible.preview && (
-              <div className="min-w-0 lg:sticky lg:top-6">
-                {/* The preview is complete for every tier -- not blurred, not
-                    truncated. What a tier that cannot export gets is a mark
-                    across it, which survives browser print. */}
-                <PreviewPane
-                  resume={resume}
-                  watermark={needsPreviewWatermark(tier) ? PREVIEW_WATERMARK : null}
-                />
-              </div>
-            )}
-          </div>
+              {exportControl(true)}
+            </div>
+            <div className="flex items-center gap-2 px-3 pb-2.5">
+              <MobileToggle state={panes} onChange={setPanes} className="flex-1" />
+              {strengthControl('sheet')}
+              {feedbackControl(true)}
+            </div>
+          </header>
+        ) : (
+          <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b border-slate-200 bg-white px-3">
+            {/* The title side gives way first: a long title truncates and the actions never move. */}
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <Link href="/resume-studio" aria-label="Back to resumes" className={buttonClass('tertiary', 'sm')}>
+                <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                Resumes
+              </Link>
+              <span className="h-5 w-px shrink-0 bg-slate-200" aria-hidden="true" />
+              {titleInput('w-full max-w-[26rem] flex-1')}
+              <div className="shrink-0">{saveIndicator('sm')}</div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {feedbackControl(false)}
+              {strengthControl('popover')}
+              {exportControl(false)}
+            </div>
+          </header>
+        )}
 
-        </div>
+        {visible.edit && visible.preview ? (
+          <div className="grid grid-cols-[minmax(26rem,38rem)_minmax(0,1fr)]">
+            <main className="min-w-0 px-6 pb-24 pt-6">{editor}</main>
+            {/* A hairline and a faint inner shade: the editor ends here and the document begins. */}
+            <aside className="sticky top-14 h-[calc(100vh-3.5rem)] min-w-0 border-l border-slate-200">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 left-0 z-10 w-3 bg-gradient-to-r from-slate-900/[0.04] to-transparent"
+              />
+              {preview}
+            </aside>
+          </div>
+        ) : visible.edit ? (
+          <main className="px-3 pb-16 pt-3">{editor}</main>
+        ) : (
+          <main>{preview}</main>
+        )}
+
       </div>
     </div>
   )

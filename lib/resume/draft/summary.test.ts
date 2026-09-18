@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  groupByStatus, lastEditedLabel, nextStatus, sortForDashboard, statusLabel,
-  statusToggleLabel, templateLabel,
+  RESUME_SORTS, dashboardMeta, groupByStatus, lastEditedLabel, nextStatus, pageCountLabel,
+  sortForDashboard, sortResumes, statusLabel, statusToggleLabel, strengthLabel, templateLabel,
 } from './summary.ts'
 import type { ResumeSummary } from './summary.ts'
 
@@ -106,6 +106,64 @@ test('a row with no usable timestamp sorts last instead of disappearing', () => 
   const sorted = sortForDashboard(list)
   assert.equal(sorted.length, 2, 'nothing is dropped')
   assert.equal(sorted[1].id, 'broken')
+})
+
+// --------------------------------------------------- the card's metadata line
+
+test('a card describes a resume in one line: template, pages, last edited', () => {
+  const resume = summary({ template: 'modern', pages: 2, updatedAt: ago(9 * 60_000) })
+  assert.equal(dashboardMeta(resume, NOW).join(' · '), 'Modern · 2 pages · Edited 9 minutes ago')
+})
+
+test('a page count nobody measured is left out rather than guessed', () => {
+  const line = dashboardMeta(summary({ template: 'compact' }), NOW).join(' · ')
+  assert.equal(line, 'Compact · Edited just now')
+  assert.equal(/page/.test(line), false, 'a page count was invented')
+  for (const absent of [undefined, null, 0, -1, Number.NaN]) {
+    assert.equal(pageCountLabel(absent as number), null, String(absent))
+  }
+  assert.equal(pageCountLabel(1), '1 page')
+  assert.equal(pageCountLabel(3), '3 pages')
+})
+
+test('a Strength score is shown only when the list carries one', () => {
+  assert.equal(strengthLabel(82), 'Strength 82')
+  assert.equal(strengthLabel(81.6), 'Strength 82')
+  for (const absent of [undefined, null, Number.NaN]) {
+    assert.equal(strengthLabel(absent as number), null, String(absent))
+  }
+})
+
+// ------------------------------------------------------------- sorting
+
+test('the applicant can order by title, and ties keep the last-edited order', () => {
+  const list = [
+    summary({ id: 'b', title: 'Emory', updatedAt: ago(5000) }),
+    summary({ id: 'a', title: 'duke', updatedAt: ago(1000) }),
+    summary({ id: 'c', title: 'Duke', updatedAt: ago(10) }),
+  ]
+  assert.deepEqual(sortResumes(list, 'title').map((r) => r.id), ['c', 'a', 'b'])
+  // The default is what the dashboard has always done.
+  assert.deepEqual(sortResumes(list).map((r) => r.id), sortForDashboard(list).map((r) => r.id))
+  assert.deepEqual(sortResumes(list, 'edited').map((r) => r.id), ['c', 'a', 'b'])
+  assert.deepEqual(list.map((r) => r.id), ['b', 'a', 'c'], 'the caller’s array was reordered')
+})
+
+test('each sort the dashboard offers is one this module implements', () => {
+  assert.deepEqual(RESUME_SORTS.map((option) => option.key), ['edited', 'title'])
+  for (const option of RESUME_SORTS) {
+    assert.notEqual(option.label, '', option.key)
+    assert.equal(sortResumes([summary({})], option.key).length, 1, option.key)
+  }
+})
+
+test('a group is ordered the way the applicant asked', () => {
+  const list = [
+    summary({ id: 'z', title: 'Zurich', status: 'draft', updatedAt: ago(10) }),
+    summary({ id: 'a', title: 'Alabama', status: 'draft', updatedAt: ago(5000) }),
+  ]
+  assert.deepEqual(groupByStatus(list, 'title').drafts.map((r) => r.id), ['a', 'z'])
+  assert.deepEqual(groupByStatus(list).drafts.map((r) => r.id), ['z', 'a'])
 })
 
 // ------------------------------------------------------------ grouping

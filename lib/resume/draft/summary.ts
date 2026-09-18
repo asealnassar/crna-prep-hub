@@ -20,6 +20,18 @@ export interface ResumeSummary {
   readonly revision: number
   readonly updatedAt: string
   readonly createdAt: string
+  /**
+   * How many pages the resume exports to, when the caller knows.
+   *
+   * OPTIONAL BECAUSE IT IS NOT DERIVABLE HERE. A page count comes from a
+   * rendered document and a Strength score from the scorer; the list response
+   * carries neither today. A card shows each one only when it is there, and
+   * nothing below infers either -- "2 pages" on a resume nobody measured would
+   * be a guess presented as a fact.
+   */
+  readonly pages?: number | null
+  /** The stored Resume Strength headline, 0-100, when the caller knows it. */
+  readonly strength?: number | null
 }
 
 /**
@@ -81,6 +93,34 @@ export function lastEditedLabel(updatedAt: string | null | undefined, now: numbe
   })}`
 }
 
+/** "2 pages", or nothing at all when the page count is not known. */
+export function pageCountLabel(pages: number | null | undefined): string | null {
+  if (typeof pages !== 'number' || !Number.isFinite(pages)) return null
+  const whole = Math.round(pages)
+  if (whole < 1) return null
+  return `${whole} page${whole === 1 ? '' : 's'}`
+}
+
+/**
+ * The one line under a card's title: "Modern · 2 pages · Edited 9 minutes ago".
+ *
+ * Facts only, in a fixed order. A piece the summary does not carry is left out
+ * rather than filled in, so the line shortens instead of lying.
+ */
+export function dashboardMeta(resume: ResumeSummary, now: number): string[] {
+  return [
+    templateLabel(String(resume.template)),
+    pageCountLabel(resume.pages),
+    lastEditedLabel(resume.updatedAt, now),
+  ].filter((part): part is string => part !== null && part !== '')
+}
+
+/** The Strength headline as a card shows it, or nothing when there is none. */
+export function strengthLabel(strength: number | null | undefined): string | null {
+  if (typeof strength !== 'number' || !Number.isFinite(strength)) return null
+  return `Strength ${Math.round(strength)}`
+}
+
 /** Most recently edited first; ties broken by id so the order never flickers. */
 export function sortForDashboard(list: readonly ResumeSummary[]): ResumeSummary[] {
   return [...list].sort((a, b) => {
@@ -93,15 +133,34 @@ export function sortForDashboard(list: readonly ResumeSummary[]): ResumeSummary[
   })
 }
 
+/** How the dashboard may order a group. Last edited is what it has always done. */
+export const RESUME_SORTS = [
+  { key: 'edited', label: 'Last edited' },
+  { key: 'title', label: 'Title' },
+] as const
+export type ResumeSort = (typeof RESUME_SORTS)[number]['key']
+
+/**
+ * The list in the applicant's chosen order.
+ *
+ * Titles compare case-insensitively and fall back to the last-edited order, so
+ * two resumes called "Duke" keep a stable, explainable position.
+ */
+export function sortResumes(list: readonly ResumeSummary[], sort: ResumeSort = 'edited'): ResumeSummary[] {
+  const byDate = sortForDashboard(list)
+  if (sort !== 'title') return byDate
+  return byDate.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }))
+}
+
 /**
  * Drafts and complete resumes, each already sorted. Both lists are returned
  * even when empty, so the dashboard renders a stable shape.
  */
-export function groupByStatus(list: readonly ResumeSummary[]): {
+export function groupByStatus(list: readonly ResumeSummary[], sort: ResumeSort = 'edited'): {
   readonly drafts: ResumeSummary[]
   readonly complete: ResumeSummary[]
 } {
-  const sorted = sortForDashboard(list)
+  const sorted = sortResumes(list, sort)
   return {
     drafts: sorted.filter((r) => r.status !== 'complete'),
     complete: sorted.filter((r) => r.status === 'complete'),

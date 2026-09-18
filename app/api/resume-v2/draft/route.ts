@@ -47,6 +47,8 @@ import type { RepoResult } from '@/lib/resume/repo/resumeRepo'
 /** Ids and timestamps are generated here so the pure planners stay deterministic. */
 const now = () => new Date().toISOString()
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 type Caller = { userId: string; db: SupabaseClient; tier: string }
 
 /**
@@ -125,10 +127,29 @@ function failed(result: Extract<RepoResult<unknown>, { ok: false }>): NextRespon
   )
 }
 
-export async function GET() {
+/**
+ * GET ?id= returns ONE resume in full; GET with no id lists summaries.
+ *
+ * The full read exists so a dashboard card can draw the applicant's own resume
+ * as its thumbnail, with the same renderer the export uses. It is the read the
+ * Studio page already performs when that resume is opened -- same repository
+ * function, same caller-scoped client, so RLS decides what may be read and
+ * somebody else's resume is simply not found. Nothing about it is cached or
+ * stored; a card asks when it is scrolled to.
+ */
+export async function GET(request: NextRequest) {
   const admitted = await admit()
   if (admitted instanceof NextResponse) return admitted
   const { db, userId } = admitted
+
+  const id = request.nextUrl.searchParams.get('id')
+  if (id !== null) {
+    if (!UUID.test(id)) return NextResponse.json({ error: 'malformed-payload' }, { status: 400 })
+    const read = await readResume(db, id)
+    if (!read.ok) return failed(read)
+    if (!read.value.resume) return NextResponse.json({ error: 'not-found' }, { status: 404 })
+    return NextResponse.json({ resume: read.value.resume })
+  }
 
   const list = await listResumes(db, userId)
   if (!list.ok) return failed(list)

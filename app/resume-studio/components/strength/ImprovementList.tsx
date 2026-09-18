@@ -19,16 +19,24 @@ export default function ImprovementList({ result }: { result: StrengthResult }) 
 
   if (items.length === 0) {
     return (
-      <p className="text-xs text-emerald-200">
+      <p className="text-xs text-emerald-700">
         Nothing outstanding — every category that could be assessed came back clean.
       </p>
     )
   }
 
   return (
-    <ol className="space-y-1.5 list-decimal list-inside">
+    <ol className="space-y-2">
       {items.slice(0, 8).map((item, i) => (
-        <li key={i} className="text-xs text-indigo-100">{item}</li>
+        <li key={i} className="flex gap-2.5 text-[13px] leading-snug text-slate-700">
+          <span
+            aria-hidden="true"
+            className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600"
+          >
+            {i + 1}
+          </span>
+          {item}
+        </li>
       ))}
     </ol>
   )
