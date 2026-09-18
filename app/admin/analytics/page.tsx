@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import Sidebar from '@/components/Sidebar'
+import { feedbackSourceLabel, feedbackSourceOf, feedbackTypeOf } from '@/lib/resume/feedback/submission'
 
 export default function Analytics() {
   const [users, setUsers] = useState<any[]>([])
@@ -25,6 +26,9 @@ export default function Analytics() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [activeTab, setActiveTab] = useState<'users' | 'feedback' | 'features' | 'unlocks'>('users')
   const [unlockRequests, setUnlockRequests] = useState<any[]>([])
+  // Feedback arrives from the interview, from Resume Builder V1 and now from
+  // V2, all in one table. The filter reads the tag each one already carries.
+  const [feedbackSource, setFeedbackSource] = useState<'all' | 'v1' | 'v2'>('all')
   const router = useRouter()
   const supabase = createClient()
 
@@ -137,6 +141,11 @@ export default function Analytics() {
 
     init()
   }, [])
+
+  /** The feedback list, narrowed to one product when asked. */
+  const visibleFeedback = feedbackSource === 'all'
+    ? feedback
+    : feedback.filter(item => feedbackSourceOf(item.message) === feedbackSource)
 
   const deleteFeedback = async (id: string) => {
     if (!confirm('Delete this feedback?')) return
@@ -295,28 +304,59 @@ export default function Analytics() {
 
           {activeTab === 'feedback' && (
             <div className="space-y-4">
-              {feedback.length === 0 ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {([['all', 'All'], ['v2', 'Resume Builder V2'], ['v1', 'Resume Builder V1']] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setFeedbackSource(key)}
+                    className={`px-3 py-1 rounded-full text-xs font-semibold transition ${
+                      feedbackSource === key ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'
+                    }`}
+                  >
+                    {label} ({key === 'all' ? feedback.length : feedback.filter(f => feedbackSourceOf(f.message) === key).length})
+                  </button>
+                ))}
+              </div>
+              {visibleFeedback.length === 0 ? (
                 <div className="bg-white rounded-2xl p-12 text-center">
                   <p className="text-gray-500">No feedback yet</p>
                 </div>
               ) : (
-                feedback.map((item) => (
-                  <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg relative">
-                    <button
-                      onClick={() => deleteFeedback(item.id)}
-                      className="absolute top-4 right-4 px-3 py-1 bg-red-100 text-red-600 rounded-lg text-sm font-semibold hover:bg-red-200 transition"
-                    >
-                      Delete
-                    </button>
-                    <div className="flex justify-between items-start mb-4 pr-20">
-                      <div>
-                        <p className="font-semibold text-gray-800">{item.user_email}</p>
-                        <p className="text-sm text-gray-500">{new Date(item.created_at).toLocaleString()}</p>
+                visibleFeedback.map((item) => {
+                  const source = feedbackSourceOf(item.message)
+                  const type = feedbackTypeOf(item.message)
+                  return (
+                    <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg relative">
+                      <button
+                        onClick={() => deleteFeedback(item.id)}
+                        className="absolute top-4 right-4 px-3 py-1 bg-red-100 text-red-600 rounded-lg text-sm font-semibold hover:bg-red-200 transition"
+                      >
+                        Delete
+                      </button>
+                      <div className="flex justify-between items-start mb-4 pr-20">
+                        <div>
+                          <p className="font-semibold text-gray-800">{item.user_email}</p>
+                          <p className="text-sm text-gray-500">{new Date(item.created_at).toLocaleString()}</p>
+                        </div>
                       </div>
+                      {source && (
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                            source === 'v2' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {feedbackSourceLabel(source)}
+                          </span>
+                          {type && (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
+                              {type}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-gray-700 whitespace-pre-wrap">{item.message}</p>
                     </div>
-                    <p className="text-gray-700 whitespace-pre-wrap">{item.message}</p>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
           )}
