@@ -10,6 +10,8 @@ import {
   normalizeState,
 } from '@/lib/interview/state'
 import { ALL_FORMATS } from '@/lib/interview/types'
+import { buildModelInput } from '@/lib/interview/modelInput'
+import { TurnTimeoutError, turnFailureBody } from '@/lib/interview/turnProtocol'
 import { authenticateRequest } from '@/lib/apiAuth'
 import {
   chargeInterview,
@@ -187,17 +189,12 @@ export async function POST(request: Request) {
     const systemPrompt = buildSystemPrompt(state, { recentQuestions, seed })
     const schema = buildTurnSchema(state)
 
-    const input = [
-      { role: 'developer', content: systemPrompt },
-      ...messages.map((msg: any) => ({
-        role: msg.role === 'assistant' ? 'assistant' : 'user',
-        content: String(msg.content ?? ''),
-      })),
-    ]
-
-    if (isOpeningTurn(state) && messages.length === 0) {
-      input.push({ role: 'user', content: 'Begin the interview.' })
-    }
+    // Same assembly as before for every legitimate message; a system notice
+    // (e.g. a timeout message a browser saved by mistake) is never replayed to
+    // the model as something the interviewer said.
+    const input = buildModelInput(systemPrompt, messages, {
+      opening: isOpeningTurn(state) && messages.length === 0,
+    })
 
     const { turn, degraded } = await runTurn(input, schema, state)
     const nextState = applyTurn(state, turn)
@@ -253,23 +250,13 @@ export async function POST(request: Request) {
     })
   } catch (error: any) {
     console.error('Interview API error:', error)
-    const timedOut = /took too long/i.test(error?.message || '')
-    return NextResponse.json(
-      {
-        message: timedOut
-          ? error.message
-          : 'Interview service temporarily unavailable. Please try again.',
-        render: null,
-        // Echo state back untouched so a failed turn never corrupts the interview.
-        state,
-        turnKind: state?.turnKind ?? 'opening',
-        questionAsked: '',
-        evaluation: null,
-        finalReport: null,
-        complete: false,
-      },
-      { status: 500 }
-    )
+    // Nothing turn-shaped in a failure: no state, no render, no question. The
+    // old body echoed the state, which made the page treat the timeout notice
+    // as an interviewer turn -- storing it in the transcript and replaying it
+    // to the model. The applicant's state is untouched either way: the model
+    // call failed before applyTurn, and the browser keeps its own copy.
+    const code = error instanceof TurnTimeoutError ? 'timeout' : 'unavailable'
+    return NextResponse.json(turnFailureBody(code), { status: code === 'timeout' ? 504 : 500 })
   }
 }
 
@@ -331,7 +318,7 @@ async function callModel(payload: Record<string, any>): Promise<{ data: any; dro
       })
     } catch (err: any) {
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
-        throw new Error('The interviewer took too long to respond. Send your answer again.')
+        throw new TurnTimeoutError()
       }
       throw err
     }

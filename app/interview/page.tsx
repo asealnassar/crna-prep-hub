@@ -5,7 +5,14 @@ import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
-import type { ChatMessage, InterviewMode, InterviewState, InterviewTurnResponse, TurnRender } from '@/lib/interview/types'
+import type { ChatMessage, InterviewMode, InterviewState, TurnRender } from '@/lib/interview/types'
+import { readTurnResponse, type TurnOutcome } from '@/lib/interview/turnProtocol'
+import {
+  createSessionSaver,
+  supabaseSessionWriter,
+  type SaveStatus,
+  type SessionSaver,
+} from '@/lib/interview/sessionSaver'
 import { InterviewMessage } from '@/components/InterviewFeedback'
 import { FREE_INTERVIEW_ALLOWANCE } from '@/lib/plans'
 import {
@@ -30,12 +37,6 @@ import {
 } from 'lucide-react'
 
 const MAX_PRIMARY_QUESTIONS = 10
-
-/**
- * Set false the first time an insert with the newer columns fails, so we stop
- * paying for a doomed round-trip on every save when the migration hasn't run.
- */
-let extendedColumnsAvailable = true
 
 export default function Interview() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -105,7 +106,14 @@ export default function Interview() {
   const [showFeedbackWidget, setShowFeedbackWidget] = useState(false)
   const { sidebarCollapsed } = useSidebarCollapsed()
   const [interviewHistory, setInterviewHistory] = useState<any[]>([])
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  /**
+   * Persistence for the interview in progress. The saver owns the session row
+   * id and serializes writes, so no save can read a stale id from React state
+   * and insert a second row. `saveStatus` is what the applicant is told: a
+   * failed save is shown, never assumed to have worked.
+   */
+  const saverRef = useRef<SessionSaver | null>(null)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [filterType, setFilterType] = useState('all')
   const [filterMode, setFilterMode] = useState('all')
   const [filterReviewed, setFilterReviewed] = useState('all')
@@ -220,53 +228,24 @@ export default function Interview() {
   /**
    * Takes the messages and state explicitly rather than reading them from the
    * closure — a deferred save used to persist the previous turn's transcript.
+   *
+   * Writes go through the interview's saver (created in startInterview), which
+   * retries transient failures, owns the row id, and reports rather than hides
+   * a save that did not land. The row it writes has exactly the columns this
+   * function always wrote.
    */
-  const saveSession = async (
-    convo: ChatMessage[],
-    state: InterviewState | null,
-    sessionRowId: string | null
-  ) => {
-    if (!userId || convo.length === 0) return sessionRowId
+  const saveSession = async (convo: ChatMessage[], state: InterviewState | null) => {
+    const saver = saverRef.current
+    if (!saver || convo.length === 0) return null
+    const result = await saver.save({ conversation: convo, state })
+    if (result.ok && userId) await loadInterviewHistory(userId)
+    return result
+  }
 
-    const base: Record<string, any> = {
-      user_id: userId,
-      school_type: interviewType,
-      interview_type: customTopic || interviewType,
-      conversation: convo,
-      question_count: state?.primaryQuestionNumber ?? 0,
-      reviewed: false,
-    }
-
-    const extended: Record<string, any> = {
-      ...base,
-      mode: state?.mode ?? interviewMode,
-      engine_state: state,
-      overall_score: state?.finalReport?.overall_score ?? null,
-      readiness: state?.finalReport?.readiness ?? null,
-    }
-
-    const write = async (payload: Record<string, any>) => {
-      if (sessionRowId) {
-        return supabase.from('interview_sessions').update(payload).eq('id', sessionRowId)
-      }
-      return supabase.from('interview_sessions').insert(payload).select().single()
-    }
-
-    let result = extendedColumnsAvailable ? await write(extended) : await write(base)
-    if (result.error && extendedColumnsAvailable) {
-      // The engine columns haven't been migrated in yet — fall back permanently.
-      extendedColumnsAvailable = false
-      result = await write(base)
-    }
-
-    let nextRowId = sessionRowId
-    if (!sessionRowId && (result as any).data?.id) {
-      nextRowId = (result as any).data.id
-      setCurrentSessionId(nextRowId)
-    }
-
-    if (userId) await loadInterviewHistory(userId)
-    return nextRowId
+  /** The applicant's "Retry now" when a save has failed. */
+  const retrySave = async () => {
+    const result = await saverRef.current?.retry()
+    if (result?.ok && userId) await loadInterviewHistory(userId)
   }
 
   const markAsReviewed = async (sessionRowId: string) => {
@@ -477,7 +456,7 @@ export default function Interview() {
     convo: {role: string, content: string}[],
     state: InterviewState | null,
     recent: string[]
-  ): Promise<InterviewTurnResponse> => {
+  ): Promise<TurnOutcome> => {
     const response = await fetch('/api/interview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -500,9 +479,12 @@ export default function Interview() {
         grantId: grantIdRef.current,
       }),
     })
-    const data = await response.json()
-    if (typeof data?.grantId === 'string') grantIdRef.current = data.grantId
-    return data
+    // A turn exists only when the request succeeded and the body carries the
+    // engine state. A timeout or any other failure comes back as a notice for
+    // the applicant -- never as something the interviewer said.
+    const outcome = readTurnResponse(response.ok, await response.json())
+    if (outcome.ok && typeof outcome.data.grantId === 'string') grantIdRef.current = outcome.data.grantId
+    return outcome
   }
 
   const startInterview = async () => {
@@ -529,17 +511,37 @@ export default function Interview() {
     setInterviewEnded(false)
     setSessionId(Date.now().toString(36) + Math.random().toString(36).substring(2))
     grantIdRef.current = null
-    setCurrentSessionId(null)
+    // A fresh saver per interview: its own row and its own retry state. A saver
+    // still finishing the previous interview's last write cannot change the
+    // status shown for this one.
+    const saver = userId
+      ? createSessionSaver({
+          writer: supabaseSessionWriter(supabase, userId),
+          meta: { userId, interviewType, customTopic, mode: interviewMode },
+          startedAt: new Date(),
+          onStatus: (status) => {
+            if (saverRef.current === saver) setSaveStatus(status)
+          },
+        })
+      : null
+    saverRef.current = saver
+    setSaveStatus('idle')
 
     try {
-      const data = await requestTurn([], null, recent)
-      if (!data?.state) {
+      const outcome = await requestTurn([], null, recent)
+      if (!outcome.ok) {
         // Nothing was consumed and nothing was saved — drop straight back to setup.
+        saverRef.current = null
         setStarted(false)
-        setTurnError(data?.message || 'Could not start the interview. Please try again.')
+        setTurnError(
+          outcome.code === 'timeout'
+            ? 'The interviewer took too long to respond. Please try again.'
+            : outcome.notice
+        )
         setLoading(false)
         return
       }
+      const data = outcome.data
 
       const convo = [toAssistantMessage(data.render, data.message)]
       setMessages(convo)
@@ -553,8 +555,9 @@ export default function Interview() {
         setInterviewCount(interviewCount + 1)
       }
       if (data.turnKind === 'primary') await saveQuestion(data.questionAsked, interviewType)
-      await saveSession(convo, data.state, null)
+      await saveSession(convo, data.state)
     } catch (error) {
+      saverRef.current = null
       setStarted(false)
       setTurnError('Interview service temporarily unavailable. Please try again.')
     }
@@ -589,11 +592,17 @@ export default function Interview() {
     }
 
     try {
-      const data = await requestTurn(newMessages, engineState, recentQuestions)
-      if (!data?.state) {
-        rollback(data?.message || 'Something went wrong. Send your answer again.')
+      const outcome = await requestTurn(newMessages, engineState, recentQuestions)
+      if (!outcome.ok) {
+        // A failed turn -- a timeout included -- is a notice for the applicant,
+        // not a turn. The transcript and engine state stay exactly as they were
+        // before the answer was sent: nothing is appended, counted, saved, or
+        // replayed to the model, and resending retries the same turn from the
+        // same place.
+        rollback(outcome.notice)
         return
       }
+      const data = outcome.data
 
       const turnMessage = toAssistantMessage(data.render, data.message)
 
@@ -641,7 +650,7 @@ export default function Interview() {
         // Saved as the applicant sees it: the review, and the state the review
         // belongs to. The checkpoint action commits the rest -- including, on
         // the final turn, `complete`.
-        await saveSession(shown, engineState, currentSessionId)
+        await saveSession(shown, engineState)
         return
       }
 
@@ -651,7 +660,7 @@ export default function Interview() {
       // Follow-ups deliberately aren't logged — the anti-repetition list
       // tracks primary scenarios only.
       if (data.turnKind === 'primary') await saveQuestion(data.questionAsked, interviewType)
-      await saveSession(updatedMessages, data.state, currentSessionId)
+      await saveSession(updatedMessages, data.state)
       if (data.complete) {
         setInterviewEnded(true)
         stopDictation()
@@ -696,7 +705,7 @@ export default function Interview() {
         // primary. The final turn asks nothing, so it logs nothing.
         await saveQuestion(next.questionAsked, interviewType)
       }
-      await saveSession(revealed, next.state, currentSessionId)
+      await saveSession(revealed, next.state)
     } finally {
       continueInFlight.current = false
     }
@@ -719,7 +728,10 @@ export default function Interview() {
     setTurnError('')
     setRecentQuestions([])
     setSessionId('')
-    setCurrentSessionId(null)
+    // The finished interview's saver keeps any retry it is running; it is just
+    // no longer the one whose status is shown.
+    saverRef.current = null
+    setSaveStatus('idle')
   }
 
   return (
@@ -1416,6 +1428,24 @@ export default function Interview() {
               </div>
 
               <div className="border-t border-slate-100 p-3 sm:p-4">
+                {saveStatus === 'error' && (
+                  // A save that did not land is said out loud. The saver keeps the
+                  // newest progress and retries it on the next turn; this is the
+                  // applicant's way to retry now.
+                  <div
+                    role="status"
+                    className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:text-sm"
+                  >
+                    <span>Your progress isn&apos;t saving right now. Keep this tab open and we&apos;ll keep trying.</span>
+                    <button
+                      type="button"
+                      onClick={retrySave}
+                      className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
+                    >
+                      Retry now
+                    </button>
+                  </div>
+                )}
                 {pendingNext ? (
                   /*
                     The composer is replaced, not merely disabled: the next

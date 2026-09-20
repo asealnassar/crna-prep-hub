@@ -577,10 +577,11 @@ test('what is persisted matches what the applicant has seen', () => {
   // While the checkpoint is open the session is saved with the review and the
   // PRE-turn state, so a restore cannot land past the checkpoint holding a
   // question that was never shown.
+  // (The row id is no longer passed in: the interview's saver owns it.)
   const send = page.slice(page.indexOf('const sendMessage = async'), page.indexOf('const advanceFromCheckpoint'))
-  assert.match(send, /await saveSession\(shown, engineState, currentSessionId\)/)
+  assert.match(send, /await saveSession\(shown, engineState\)/)
   const cont = page.slice(page.indexOf('const advanceFromCheckpoint'), page.indexOf('const resetInterview'))
-  assert.match(cont, /await saveSession\(revealed, next\.state, currentSessionId\)/)
+  assert.match(cont, /await saveSession\(revealed, next\.state\)/)
 })
 
 test('completed historical interviews still render', () => {
