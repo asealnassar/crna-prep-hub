@@ -75,28 +75,34 @@ test('the rule separates detailed context from a focused ask', () => {
   assert.match(p, /The ask that follows it should be one thing/)
 })
 
+// These three tests originally pinned worked example questions (a
+// norepinephrine pair, a MAP-determinants checklist, an intubated-patient vent
+// scenario). Production showed the model copying exactly those examples into
+// real interviews, so Phase 1 replaced them with shape descriptions. The RULE
+// each one protected is unchanged and is what they pin now.
+
 test('the pharmacology checklist shape is named and forbidden', () => {
   const p = promptFor(base())
-  // The exact bad question from the report, given as a counter-example.
-  assert.match(p, /Bad:\s+"Tell me about norepinephrine: what receptors it works on/)
-  assert.match(p, /Good:\s+"Tell me what you know about norepinephrine\."/)
+  assert.match(p, /Good shape: name one agent, one parameter or one concept/)
+  assert.match(p, /hang four questions off it in one breath — mechanism, effect, dosing, monitoring/)
   assert.match(p, /Never build a primary question as a list of asks/)
   assert.match(p, /define X, explain the mechanism, give the dosing, list the side effects/)
 })
 
-test('the MAP checklist shape is named and forbidden', () => {
+test('the stacked-ask shape is named and forbidden', () => {
   assert.match(
     promptFor(base()),
-    /Bad:\s+"What are the determinants of MAP, how can you raise it, what drugs would you use, and what are you monitoring\?"/
+    /Bad shape:\s+the same scene followed by a stack of asks — interpret it, explain the physiology, list the causes/
   )
 })
 
 test('a clinical scenario may keep rich context with a single ask', () => {
   const p = promptFor(base())
-  assert.match(p, /You are caring for an intubated patient on volume control/)
-  assert.match(p, /What are you going to do in the next one to two minutes\?/)
-  // And the multi-part version of the same scenario is the counter-example.
-  assert.match(p, /list five causes, tell me how you would troubleshoot each one/)
+  assert.match(p, /The context may be as detailed as the scenario needs/)
+  assert.match(p, /Good shape: set the scene, then ask one question about it/)
+  // What the worked vent scenario used to demonstrate is now stated outright.
+  assert.match(p, /A scenario's context runs one to three sentences/)
+  assert.match(p, /Do not name the diagnosis you are testing for/)
 })
 
 test('the format guides are labelled as territory, not question templates', () => {
@@ -138,7 +144,11 @@ test('the rule reaches every interview type', () => {
 })
 
 test('the behavioural example is a single ask too', () => {
-  assert.match(promptFor(base()), /Good:\s+"Tell me about a time you disagreed with a provider\."/)
+  // Was a worked "tell me about a time you disagreed with a provider" example;
+  // that phrasing became the default Behavioral opener in production.
+  const p = promptFor(base())
+  assert.match(p, /Good shape \(behavioral\): one situation, one ask/)
+  assert.match(p, /Bad shape \(behavioral\):\s+the story plus the lesson plus what they would change/)
 })
 
 // ==========================================================================

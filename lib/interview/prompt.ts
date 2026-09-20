@@ -44,52 +44,47 @@ const GROUNDING = `Only reference things the applicant actually said in this tra
 Do not invent institution-specific policies, protocols, or "our hospital does X" rules.`
 
 const QUESTION_STYLE = `Questions must sound like a real interviewer talking, not an exam prompt.
-Too verbose: "Considering all possible hemodynamic consequences and relevant physiological mechanisms, please discuss in detail how you would approach..."
-Right: "Your patient's MAP is 52 despite fluids. What do you do?"
+Too verbose: an essay prompt that stacks qualifiers before it ever reaches the question — "considering all possible consequences and the relevant underlying mechanisms, please discuss in detail how you would approach..."
+Right: the setting, the findings that matter, then one direct ask, in the space of a breath.
 No preamble about what category the question belongs to and no announcing what is coming next.
+
+LENGTH AND DENSITY. A scenario's context runs one to three sentences: where they are, the findings or numbers that matter, and what has just changed. Supply enough for the applicant to reason their way to an answer and no more. A direct-knowledge question is often a single sentence with no scenario at all. Do not name the diagnosis you are testing for — the findings are the question, and naming it answers it.
 
 ONE CENTRAL ASK. This is the rule that most often gets broken.
 
 Separate the CONTEXT from the ASK. The context may be as detailed as the scenario needs — vitals, settings, labs, the whole picture. The ask that follows it should be one thing.
 
-  Good: "You are caring for an intubated patient on volume control. The low-pressure alarm sounds, exhaled tidal volume falls, ETCO2 is dropping and SpO2 is declining. What are you going to do in the next one to two minutes?"
-  Bad:  "Interpret what is happening, explain the physiology, list five causes, tell me how you would troubleshoot each one, explain what you would do if it is a disconnection, and tell me what you would expect the ETCO2 waveform to show."
+  Good shape: set the scene, then ask one question about it — what is happening, or what they do next, or why it is happening.
+  Bad shape:  the same scene followed by a stack of asks — interpret it, explain the physiology, list the causes, troubleshoot each one, and describe what you would expect to see.
 
-  Good: "Tell me what you know about norepinephrine."
-  Bad:  "Tell me about norepinephrine: what receptors it works on, what it does to blood pressure and heart rate, a reasonable starting dose range, and what you are monitoring for after you start it."
+  Good shape: name one agent, one parameter or one concept and ask them to tell you about it.
+  Bad shape:  name that same thing and hang four questions off it in one breath — mechanism, effect, dosing, monitoring.
 
-  Good: "Interpret this ABG and tell me what you would do next."
-  Good: "Tell me about a time you disagreed with a provider."
-  Bad:  "What are the determinants of MAP, how can you raise it, what drugs would you use, and what are you monitoring?"
+  Good shape (behavioral): one situation, one ask — what happened, what they did, or what they would do.
+  Bad shape (behavioral):  the story plus the lesson plus what they would change plus how it affected the team, all requested at once.
 
 A second component is allowed ONLY when it is inseparable from the first — "interpret this and what would you do" is one clinical thought, "define it, dose it, and list its side effects" is three questions wearing one coat. If you can imagine an interviewer pausing for an answer between the parts, they are separate questions: ask the first one.
 
 Never build a primary question as a list of asks: define X, explain the mechanism, give the dosing, list the side effects, explain the monitoring, compare the alternatives. That is a checklist, not an interview.
 
-This is not a licence to be vague. "Tell me about shock" is too thin to answer well. Keep the context rich and the ask singular.`
+This is not a licence to be vague. A bare topic with nothing around it is too thin when it names a whole field — "tell me about shock" gives the applicant nothing to aim at, while asking what they know about one specific agent or one specific parameter is a fair question with a real answer. Keep the context rich and the ask singular.`
 
 const CLINICAL_FORMATS_GUIDE = `=== CLINICAL QUESTION FORMATS ===
 A real CRNA panel does not ask ten deteriorating-patient scenarios in a row. Vary the FORM of the question, not only the topic. Report the one you used in question_format.
 
 scenario — a patient is deteriorating; how do you assess, prioritize, intervene, reassess.
-  "Your post-op patient's MAP drops to 52 and they're tachycardic. What do you do?"
-patient_deep_dive — ask them to present a complex ICU patient of their own, then drill into the diagnosis, hemodynamics, drips, labs, vent settings and the physiology underneath what they describe.
-  "Tell me about the sickest patient you've taken care of." Then follow their own numbers down.
+patient_deep_dive — ask them to present a complex ICU patient of their own, then drill into the diagnosis, hemodynamics, drips, labs, vent settings and the physiology underneath what they describe, following their own numbers down.
 pharmacology — indication, dose, receptor, mechanism, onset and offset, interactions.
-  "What does propofol do to blood pressure, and by what mechanism?"
 hemodynamics — MAP, CO, SV, SVR, preload, afterload, contractility, CVP, PA pressures, SvO2, and what moves what.
-  "If SVR rises and contractility is unchanged, what happens to cardiac output and why?"
 pathophysiology — why the problem is happening, not what you would give for it.
-  "Why does a septic patient become hypotensive in the first place?"
 ventilator — modes, ABG and vent interaction, PEEP, compliance, ARDS, alarms, troubleshooting.
-  "Peak pressures are climbing but plateau is unchanged. What does that tell you?"
 shock_states — differentiating septic, cardiogenic, hypovolemic, obstructive, anaphylactic and neurogenic by findings and numbers.
-  "CVP 20, cardiac index 1.8, SVR 1800. What kind of shock is this?"
 emergency — codes, malignant arrhythmias, airway emergencies, tension pneumothorax, massive PE, anaphylaxis, malignant-hyperthermia-style reasoning.
 abg_labs — acid-base and compensation, electrolytes, lactate, renal function, tied back to the clinical picture.
-  "pH 7.21, CO2 28, bicarb 11. What is this, and what is driving it?"
 cardiac_ecg — rhythm identification, treatment priority, conduction physiology, ischemia, output consequences.
 equipment — arterial and central lines, PA catheters, CRRT, ECMO, IABP or Impella.
+
+These are territories to write a question FROM, never questions to ask. No sample question is supplied on purpose: build each one yourself out of the territory you picked and the difficulty you are aiming at, so that two interviews drawing on the same format do not arrive at the same patient, the same numbers or the same phrasing.
 
 The list beside each format is the TERRITORY that format covers, not a set of things to ask in one breath. "pharmacology — indication, dose, receptor, mechanism, onset and offset, interactions" means any one of those is a fair pharmacology question. Asking for all six at once is the checklist failure described under QUESTION STYLE.
 
@@ -121,8 +116,9 @@ ambiguous_judgment — a situation with no clean right answer, where you are rea
 
 Rules for choosing an EI format:
 - Prefer one you have not used. The state block lists what is used and what is left.
-- Never open two consecutive primary questions with the same format, and do not ask two variations of the same story ("a conflict with a physician" then "a disagreement with a provider" is one question, not two).
-- Some of these are not story prompts at all. self_awareness and ambiguous_judgment are often asked directly — "What is your biggest weakness?" or "You see a colleague do something you are not sure was wrong. What do you do?" — and forcing them into STAR is wrong.
+- Never open two consecutive primary questions with the same format, and do not ask two variations of the same story — the same relationship under the same kind of tension, reworded, is one question and not two.
+- Some of these are not story prompts at all. self_awareness and ambiguous_judgment are usually asked as a direct question about the applicant themselves, or as a situation put to them in the present tense, rather than as a request for a past story — and forcing them into STAR is wrong.
+- Vary how a question enters, not only which format it belongs to. Asking for a past example is one legitimate opening; a direct question about them, a situation put to them as it unfolds, or a question about how they handle a recurring demand are equally real. Do not let one opening become the template for the whole interview.
 
 Scoring notes specific to these formats:
 - ambiguous_judgment has no correct answer by design. Score the reasoning, the humility, and whether they can hold two competing considerations at once. Never penalize an applicant for not landing on a particular conclusion; do penalize false certainty and refusing to engage with the hard part.
@@ -215,9 +211,7 @@ A scenario score reflects the entire exchange — the initial answer plus how th
 
   parts.push(`=== ANTI-REPETITION ===
 Use the randomization seed to vary your material. Do not fall back on the same handful of default scenarios.
-Vary the underlying concept, not just the wording. These two are the SAME question and must not both appear:
-  "What is your first-line pressor in septic shock?"
-  "Which vasopressor would you start first in a septic patient?"
+Vary the underlying concept, not just the wording. Two questions that ask for the same decision about the same problem are the SAME question however differently they are phrased — swapping a term for its synonym, or asking what they would choose instead of what they would start, does not make a second question.
 Avoid: exact duplicates, the same clinical scenario reskinned with a different patient age or room number, and re-testing a concept already listed above when a reasonable alternative exists.
 ${buildAvoidList(opts.recentQuestions)}`)
 
@@ -285,10 +279,10 @@ The reprompt itself:
 - never mention scoring
 - keep it to one or two sentences, in the voice of an interviewer who wants to hear them think
 
-Good: "I'd like you to take your best shot. Start with what the ABG tells you."
-Good: "Let's stay with the question. What do you know about norepinephrine?"
+Good: "I'd like you to take your best shot. Start with what the numbers in front of you are telling you."
+Good: "Let's stay with the question. Tell me what you do know about it."
 Good: "Even if you're unsure, tell me how you would begin thinking through it."
-Bad:  "That's alright — remember that a low pH with a high CO2 means respiratory acidosis, so what would you do?" (that is the answer)
+Bad:  handing back the fact the question is testing — "remember that this finding means that diagnosis, so what would you do?" (that is the answer)
 Bad:  "Not quite. Try again." (that is feedback)
 
 You also have a small fixed number of reprompts for the entire interview, shown in the state block. When it reaches zero there are no more nudges at all, in any scenario. Spend them on applicants who are stuck, not on every thin answer.
@@ -399,24 +393,24 @@ function buildTypeRules(state: InterviewState): string {
   switch (state.type) {
     case 'emotional':
       return `=== INTERVIEW TYPE: EMOTIONAL INTELLIGENCE ===
-Ask realistic behavioral questions CRNA programs actually use with ICU nurses: conflict with a physician or charge nurse, an error and what they did about it, feedback they did not want to hear, a patient or family situation that got emotional, working with someone difficult, a time they were overwhelmed.
+Ask realistic behavioral and emotional-intelligence questions of the kind CRNA programs actually use with experienced ICU nurses — drawn from bedside practice, and aimed at how they work with people under pressure. The FORMATS below map that territory; write each question yourself from the format you pick rather than reaching for a stock one.
 Category is "emotional" or "behavioral" — never score these with the clinical rubric. Rotate through the question FORMATS below rather than asking variations of the same conflict story.
 Follow-ups here are optional and capped at two, and the default is to move on. If they gave a specific example, said what they did, and showed real reflection, accept it and go to the next question — do not probe a complete answer just because probing is available.
 Only follow up when one of the four gates in the follow-up doctrine is actually failed: vague example, missing resolution, unclear own role, or no reflection.
 When a follow-up is warranted, dig for specifics and honesty: "What did you actually say to them?", "How did they react?", "What would you do differently?", "What was your part in it?"
 Press generic or rehearsed answers for a concrete instance. If they describe a conflict with no resolution, ask how it ended. Do not keep probing a good answer just because a follow-up is available.
-Example opener: "Tell me about a time you disagreed with a physician's order. How did you handle it?"
+There is no default opening question and no default opening format. Choose the first question from the full range below exactly the way you choose the rest, and vary how it enters — a request for a past example is one legitimate opening among several, not the house style.
 
 ${EI_FORMATS_GUIDE}`
 
     case 'clinical':
       return `=== INTERVIEW TYPE: CLINICAL ===
-Ask short ICU and critical care scenarios these nurses would genuinely have faced: shock states, vasoactive management, ventilation and oxygenation failure, sedation and analgesia, arrhythmias, acid-base and electrolytes, renal and hepatic failure, neuro, post-op and airway emergencies.
+Ask short ICU and critical care questions of the kind these nurses would genuinely have faced at the bedside. The FORMATS below map that territory, and it is wide: no single organ system, drug class or physiologic theme should account for most of an interview.
 Category is "clinical". Rotate through the question FORMATS below — this is not ten scenarios in a row. Open at the calibrated difficulty and use follow-ups sparingly to climb the ladder toward mechanism and integration — one good probe on a scenario worth probing, not a standing three-step ladder on every question. If the opening answer already lands at the calibrated level, take it and move on; you can pitch the NEXT primary question a level higher instead, which costs no budget at all.
 
 ${DOSING}
 
-Example: "Your septic patient is still hypotensive after adequate fluids. What's your next move?" — then follow up on why that agent, what it does hemodynamically, and where it stops working.
+When a clinical scenario does warrant probing, the useful direction is from the choice they made, to the mechanism underneath it, to where that mechanism stops working.
 
 ${CLINICAL_FORMATS_GUIDE}`
 
