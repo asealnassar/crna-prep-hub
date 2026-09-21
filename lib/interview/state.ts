@@ -1,15 +1,25 @@
 import type {
   QuestionFormat,
   DifficultyLevel,
+  FollowUpPolicyVersion,
+  FollowUpPurpose,
   InterviewMode,
   InterviewState,
   InterviewType,
   ModelTurn,
   QuestionCategory,
+  RecordedPurpose,
   ScenarioEvaluation,
   TurnAction,
 } from './types.ts'
-import { ALL_FORMATS, CLINICAL_FORMATS, EMOTIONAL_FORMATS } from './types.ts'
+import {
+  ALL_FORMATS,
+  BEHAVIORAL_PURPOSES,
+  CLINICAL_FORMATS,
+  CLINICAL_PURPOSES,
+  EMOTIONAL_FORMATS,
+  FOLLOW_UP_PURPOSES,
+} from './types.ts'
 
 export const MAX_PRIMARY_QUESTIONS = 10
 /**
@@ -47,8 +57,67 @@ export const MAX_FOLLOW_UPS_EMOTIONAL = 2
  * in doubt rather than probing everything. Tune here.
  */
 export const FOLLOW_UP_BUDGET = 8
+
+// ==========================================================================
+// Policy V2. The legacy constants above still drive every V1 session.
+// ==========================================================================
+
+/**
+ * V2 per-scenario ceilings.
+ *
+ * Production ran the V1 budget to exhaustion, which turned a nominal ten
+ * questions into roughly seventeen. The ceilings come down with it, because a
+ * budget the model always spends is a target rather than a limit.
+ */
+export const V2_MAX_FOLLOW_UPS = 2
+export const V2_MAX_FOLLOW_UPS_EMOTIONAL = 1
+/**
+ * V2 interview-wide budget.
+ *
+ * Worst case is now one opening + ten primary answers + five follow-ups + four
+ * reprompts = 20 model turns, against the 24 the SQL function enforces. That
+ * is MORE headroom than V1's 23, so this change needs no migration and cannot
+ * cut an interview short.
+ */
+export const V2_FOLLOW_UP_BUDGET = 5
+
+/**
+ * How much of the V2 budget has been released by a given point in the
+ * interview: ceil(budget x questionNumber / maxQuestions).
+ *
+ * Over ten questions with a budget of five that unlocks 1,1,2,2,3,3,4,4,5,5 —
+ * question 1 can never take two follow-ups, and the budget cannot be spent
+ * before question 9.
+ *
+ * This exists because front-loading was structural, not a model failure: the
+ * whole budget was available at question 1 and nothing made spending it early
+ * cost anything. A doctrine line asking the model to "pace deliberately" did
+ * not survive contact with production.
+ */
+export function followUpsUnlocked(state: InterviewState): number {
+  const total = state.maxFollowUpBudget
+  const max = Math.max(1, state.maxPrimaryQuestions)
+  const asked = Math.max(0, Math.min(state.primaryQuestionNumber, max))
+  return Math.min(total, Math.ceil((total * asked) / max))
+}
+
+/** Follow-ups already spent in this interview. */
+export function followUpsSpent(state: InterviewState): number {
+  return Math.max(0, state.maxFollowUpBudget - state.followUpBudget)
+}
+
+/**
+ * The two purposes that can earn a scenario a second follow-up.
+ *
+ * Both resolve something the applicant left unclear. A first probe that was
+ * MECHANISM or CHALLENGE has already gone a layer down, and going further is
+ * the laddering this phase exists to stop.
+ */
+const DEEP_DIVE_PURPOSES = new Set(['clarify', 'rationale'])
 /** Cap on remembered concepts so the prompt cannot grow without bound. */
 const MAX_TESTED_CONCEPTS = 60
+/** One entry per follow-up; the V2 budget is 5, so this is pure belt-and-braces. */
+const MAX_FOLLOW_UP_PURPOSES = 20
 
 /** Clinical rubric weights. Must sum to 1. */
 export const CLINICAL_WEIGHTS = {
@@ -85,15 +154,20 @@ export function createInitialState(opts: {
     type: opts.type,
     customTopic: opts.customTopic || '',
     followUpsEnabled: opts.followUpsEnabled,
+    // Every interview started from here on runs the Phase 2 policy. Sessions
+    // already in flight keep V1, because their state has no version field.
+    followUpPolicyVersion: 2,
+    followUpPurposes: [],
+    deepDiveUsed: false,
     primaryQuestionNumber: 0,
     maxPrimaryQuestions: MAX_PRIMARY_QUESTIONS,
     followUpCount: 0,
     repromptCount: 0,
     repromptBudget: MAX_REPROMPTS_PER_INTERVIEW,
     maxRepromptBudget: MAX_REPROMPTS_PER_INTERVIEW,
-    maxFollowUps: MAX_FOLLOW_UPS,
-    followUpBudget: FOLLOW_UP_BUDGET,
-    maxFollowUpBudget: FOLLOW_UP_BUDGET,
+    maxFollowUps: V2_MAX_FOLLOW_UPS,
+    followUpBudget: V2_FOLLOW_UP_BUDGET,
+    maxFollowUpBudget: V2_FOLLOW_UP_BUDGET,
     turnKind: 'opening',
     currentScenario: '',
     currentCategory: null,
@@ -117,8 +191,15 @@ export function createInitialState(opts: {
 export function normalizeState(raw: any, fallback: InterviewState): InterviewState {
   if (!raw || typeof raw !== 'object') return fallback
   const maxPrimary = clampInt(raw.maxPrimaryQuestions, 1, 25, MAX_PRIMARY_QUESTIONS)
-  const maxFollowUps = clampInt(raw.maxFollowUps, 0, 5, MAX_FOLLOW_UPS)
-  const maxBudget = clampInt(raw.maxFollowUpBudget, 0, 60, FOLLOW_UP_BUDGET)
+  // Absence is the whole signal. Every state serialized before Phase 2 lacks
+  // this field, and those interviews must finish under the rules they started
+  // with -- so anything that is not exactly 2 reads as 1, and nothing here
+  // promotes a session the other way.
+  const policyVersion: FollowUpPolicyVersion = raw.followUpPolicyVersion === 2 ? 2 : 1
+  const legacyMaxFollowUps = policyVersion === 2 ? V2_MAX_FOLLOW_UPS : MAX_FOLLOW_UPS
+  const legacyBudget = policyVersion === 2 ? V2_FOLLOW_UP_BUDGET : FOLLOW_UP_BUDGET
+  const maxFollowUps = clampInt(raw.maxFollowUps, 0, 5, legacyMaxFollowUps)
+  const maxBudget = clampInt(raw.maxFollowUpBudget, 0, 60, legacyBudget)
   // Capped at the constant, not at whatever the client claims: the turn ceiling
   // this protects is enforced in SQL and cannot be negotiated from the browser.
   const maxRepromptBudget = clampInt(
@@ -138,6 +219,14 @@ export function normalizeState(raw: any, fallback: InterviewState): InterviewSta
     // when follow-ups were automatic, so it reads as enabled -- resuming one
     // must not silently change how it behaves.
     followUpsEnabled: typeof raw.followUpsEnabled === 'boolean' ? raw.followUpsEnabled : true,
+    followUpPolicyVersion: policyVersion,
+    // V1 never records purposes, so the history stays empty there rather than
+    // accepting whatever a client might send.
+    followUpPurposes:
+      policyVersion === 2 && Array.isArray(raw.followUpPurposes)
+        ? raw.followUpPurposes.filter(isRecordedPurpose).slice(-MAX_FOLLOW_UP_PURPOSES)
+        : [],
+    deepDiveUsed: policyVersion === 2 && raw.deepDiveUsed === true,
     primaryQuestionNumber: clampInt(raw.primaryQuestionNumber, 0, maxPrimary, 0),
     maxPrimaryQuestions: maxPrimary,
     followUpCount: clampInt(raw.followUpCount, 0, maxFollowUps, 0),
@@ -179,10 +268,44 @@ export function normalizeState(raw: any, fallback: InterviewState): InterviewSta
 export function followUpCapFor(state: InterviewState): number {
   // The applicant's setup choice sits above every other cap.
   if (!state.followUpsEnabled) return 0
-  if (state.currentCategory === 'emotional' || state.currentCategory === 'behavioral') {
+  const behavioral = state.currentCategory === 'emotional' || state.currentCategory === 'behavioral'
+  if (state.followUpPolicyVersion === 2) {
+    return behavioral
+      ? Math.min(state.maxFollowUps, V2_MAX_FOLLOW_UPS_EMOTIONAL)
+      : Math.min(state.maxFollowUps, V2_MAX_FOLLOW_UPS)
+  }
+  if (behavioral) {
     return Math.min(state.maxFollowUps, MAX_FOLLOW_UPS_EMOTIONAL)
   }
   return state.maxFollowUps
+}
+
+/** Purposes the response schema will offer for the scenario in play. */
+export function purposesFor(state: InterviewState): FollowUpPurpose[] {
+  return state.currentCategory === 'emotional' || state.currentCategory === 'behavioral'
+    ? BEHAVIORAL_PURPOSES
+    : CLINICAL_PURPOSES
+}
+
+/**
+ * V2 only. Everything structural standing between the interviewer and another
+ * follow-up on the scenario in play, in one place.
+ *
+ * Conditions 3 and 4 of the second-follow-up rule -- that the reply introduced
+ * a new checkable claim and that the claim is worth assessing -- are judgement
+ * and live in the doctrine. Everything a machine can check is checked here.
+ */
+function v2FollowUpAllowed(state: InterviewState): boolean {
+  if (state.followUpCount >= followUpCapFor(state)) return false
+  if (followUpsSpent(state) >= followUpsUnlocked(state)) return false
+
+  // A second follow-up on this scenario: the deep dive.
+  if (state.followUpCount >= 1) {
+    if (state.deepDiveUsed) return false
+    const last = state.followUpPurposes[state.followUpPurposes.length - 1]
+    if (!last || !DEEP_DIVE_PURPOSES.has(last)) return false
+  }
+  return true
 }
 
 /**
@@ -245,11 +368,16 @@ export function allowedActions(state: InterviewState): TurnAction[] {
   // Four gates: not closing out a reprompt, the setup choice (via
   // followUpCapFor, which returns 0 when the applicant declined), this
   // scenario's cap, and the interview budget.
-  if (
-    !answeringAfterReprompt &&
-    state.followUpCount < followUpCapFor(state) &&
-    state.followUpBudget > 0
-  ) {
+  //
+  // V2 adds three more structural gates on top: the unlock schedule, the
+  // single deep dive per interview, and the requirement that a scenario's
+  // first probe was CLARIFY or RATIONALE before a second one is offered.
+  const policyAllows =
+    state.followUpPolicyVersion === 2
+      ? v2FollowUpAllowed(state)
+      : state.followUpCount < followUpCapFor(state)
+
+  if (!answeringAfterReprompt && policyAllows && state.followUpBudget > 0) {
     actions.push('ask_follow_up')
   }
   if (state.primaryQuestionNumber < state.maxPrimaryQuestions) {
@@ -279,6 +407,7 @@ export function applyTurn(state: InterviewState, turn: ModelTurn): InterviewStat
     testedConcepts: [...state.testedConcepts],
     askedPrimaryQuestions: [...state.askedPrimaryQuestions],
     evaluations: [...state.evaluations],
+    followUpPurposes: [...state.followUpPurposes],
   }
 
   const evaluation = normalizeEvaluation(turn.evaluation, state)
@@ -293,6 +422,17 @@ export function applyTurn(state: InterviewState, turn: ModelTurn): InterviewStat
     next.repromptBudget = Math.max(0, state.repromptBudget - 1)
     next.turnKind = 'reprompt'
   } else if (turn.action === 'ask_follow_up') {
+    // A second follow-up on this scenario spends the interview's one deep dive.
+    // Read from the PRE-turn count, before it is incremented below.
+    if (state.followUpPolicyVersion === 2 && state.followUpCount >= 1) {
+      next.deepDiveUsed = true
+    }
+    if (state.followUpPolicyVersion === 2) {
+      // One entry per follow-up, always. A missing or category-invalid purpose
+      // records 'unspecified' rather than nothing, so the deep-dive gate can
+      // never read the previous scenario's purpose by accident.
+      next.followUpPurposes = [...state.followUpPurposes, recordedPurpose(turn.follow_up_purpose, state)]
+    }
     next.followUpCount = Math.min(state.followUpCount + 1, followUpCapFor(state))
     next.followUpBudget = Math.max(0, state.followUpBudget - 1)
     next.turnKind = 'follow_up'
@@ -390,6 +530,26 @@ function normalizeEvaluation(raw: any, state: InterviewState): ScenarioEvaluatio
     elite_answer: str(raw.elite_answer),
     red_flags: strArray(raw.red_flags).filter((f) => f !== 'none') as ScenarioEvaluation['red_flags'],
   }
+}
+
+/**
+ * What to store for a follow-up's declared purpose.
+ *
+ * Anything the model returns that is not a valid purpose for THIS scenario's
+ * category becomes 'unspecified'. That is deliberately not a silent drop: it
+ * keeps one history entry per follow-up, and because 'unspecified' is not a
+ * deep-dive purpose, a malformed value fails closed by blocking a second
+ * follow-up rather than accidentally licensing one.
+ */
+function recordedPurpose(value: any, state: InterviewState): RecordedPurpose {
+  const allowed = purposesFor(state)
+  return typeof value === 'string' && (allowed as string[]).includes(value)
+    ? (value as FollowUpPurpose)
+    : 'unspecified'
+}
+
+function isRecordedPurpose(value: any): value is RecordedPurpose {
+  return value === 'unspecified' || (FOLLOW_UP_PURPOSES as readonly string[]).includes(value)
 }
 
 function clampInt(value: any, min: number, max: number, fallback: number): number {

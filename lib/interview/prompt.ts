@@ -1,5 +1,14 @@
 import type { InterviewState } from './types.ts'
-import { allowedActions, followUpCapFor, isOpeningTurn, unusedClinicalFormats, unusedEmotionalFormats, MAX_REPROMPTS } from './state.ts'
+import {
+  allowedActions,
+  followUpCapFor,
+  followUpsSpent,
+  followUpsUnlocked,
+  isOpeningTurn,
+  unusedClinicalFormats,
+  unusedEmotionalFormats,
+  MAX_REPROMPTS,
+} from './state.ts'
 import { FORMAT_LABELS } from './types.ts'
 
 const LADDER = `Level 1 - Foundational ICU knowledge (what a drug or intervention is for).
@@ -147,6 +156,7 @@ export function buildSystemPrompt(
   // an instruction to consider one would only conflict with the choice.
   const followUpsOff = !state.followUpsEnabled
   const canReprompt = actions.includes('reprompt_current')
+  const v2 = state.followUpPolicyVersion === 2
 
   const parts: string[] = []
 
@@ -166,7 +176,7 @@ Mode: ${state.mode === 'real' ? 'REAL INTERVIEW' : 'PRACTICE'}
 Interview type: ${describeType(state)}
 Primary questions asked: ${state.primaryQuestionNumber} of ${state.maxPrimaryQuestions}
 ${followUpsOff ? 'This interview has no follow-up questions. Do NOT compensate by widening the primary questions: a question asked here is asked exactly as focused as it would be in any other interview, and you simply move on afterward. A shorter interview is what they chose, not a reason to bundle four asks into one.' : `Follow-ups used on the current scenario: ${state.followUpCount} of ${followUpCap} (${followUpsLeft} remaining)
-Follow-up budget for the whole interview: ${state.followUpBudget} left, with ${Math.max(0, state.maxPrimaryQuestions - state.primaryQuestionNumber)} primary questions still to come`}
+Follow-up budget for the whole interview: ${state.followUpBudget} left, with ${Math.max(0, state.maxPrimaryQuestions - state.primaryQuestionNumber)} primary questions still to come${v2 ? `\n${followUpPacing(state)}` : ''}`}
 Current scenario: ${state.currentScenario || '(none yet)'}
 Current category: ${state.currentCategory || '(none yet)'}
 Difficulty of the last question asked: ${state.difficultyLevel}
@@ -186,7 +196,18 @@ The counters above are computed by the system. Do not restate, recount, or contr
   // Restored to every non-opening turn of a follow-ups-enabled interview: the
   // interviewer is choosing adaptively again, so it needs the criteria. A
   // session that declined follow-ups never sees it.
-  if (!opening && !followUpsOff) parts.push(FOLLOW_UP_DOCTRINE)
+  //
+  // V1 sessions keep the doctrine they started under. Switching an interview's
+  // follow-up rules halfway through would be worse than either policy.
+  if (!opening && !followUpsOff) {
+    if (v2) {
+      parts.push(FOLLOW_UP_DOCTRINE_V2)
+      parts.push(state.type === 'emotional' ? BEHAVIORAL_DEPTH_V2 : CLINICAL_DEPTH_V2)
+      if (state.type === 'mixed' || state.type === 'custom') parts.push(BEHAVIORAL_DEPTH_V2)
+    } else {
+      parts.push(FOLLOW_UP_DOCTRINE)
+    }
+  }
 
   parts.push(buildModeRules(state))
   parts.push(buildTypeRules(state))
@@ -194,7 +215,11 @@ The counters above are computed by the system. Do not restate, recount, or contr
 ${LADDER}
 
 Calibrate the next primary question around level ${state.suggestedDifficulty}; you may move one level either way if this applicant's last answer justifies it.
-${followUpsOff ? 'Subsequent primary questions are how you climb: a strong answer at level 2 earns a level 3 or 4 primary question next.' : 'Follow-ups are the main way you climb: a strong answer at level 2 earns a level 3 or 4 follow-up on the same scenario.'}
+${
+    followUpsOff || v2
+      ? 'Subsequent primary questions are how you climb: a strong answer at level 2 earns a level 3 or 4 primary question next. Climbing is NOT a reason to follow up on the answer you just heard — the next question is where difficulty rises, and it costs no follow-up budget.'
+      : 'Follow-ups are the main way you climb: a strong answer at level 2 earns a level 3 or 4 follow-up on the same scenario.'
+  }
 When the applicant is struggling, step back down and find where their understanding actually stops. Do not keep pushing to the molecular level on someone who is failing at level 2 — locating the gap is the point, not proving it exists.
 Emotional and behavioral questions do not use this ladder; there, depth means probing for specifics, consequences, and genuine reflection.`)
 
@@ -225,6 +250,79 @@ ${GROUNDING}`)
 
   return parts.join('\n\n')
 }
+
+/**
+ * Policy V2 doctrine. Replaces FOLLOW_UP_DOCTRINE for interviews started after
+ * Phase 2; V1 sessions still receive the original text below, unchanged.
+ *
+ * The structural caps (budget 5, 2/1 per scenario, the unlock schedule, one
+ * deep dive per interview) are enforced by the state machine and the response
+ * schema. This text governs the part a machine cannot check: whether a probe
+ * is worth spending at all, and which direction it should go.
+ */
+const FOLLOW_UP_DOCTRINE_V2 = `=== FOLLOW-UP DOCTRINE ===
+Moving to the next question is the DEFAULT after any answer, in every category. Most answers in a good interview receive no follow-up at all. A follow-up is something you spend, not something you owe.
+
+PRECEDENCE — read this before anything else below.
+A strong, complete answer means MOVE ON. That is the rule, and it wins by default.
+A strong answer is NEVER by itself a reason to ask something harder. If they cleared the level easily, the interview gets harder at the NEXT PRIMARY QUESTION, which the system calibrates for you and which costs no budget. Making a good answer earn another question punishes the applicant for being good, and it is the single most common mistake in this interview.
+
+The one exception, and it is narrow. You may spend ONE follow-up on a strong, complete answer only when ALL FIVE of these are true:
+  1. the applicant introduced the claim themselves — you are not importing a new topic,
+  2. the claim is clinically or behaviorally meaningful, not a detail in passing,
+  3. verifying it would genuinely add assessment signal you do not already have,
+  4. they have not already demonstrated this,
+  5. the probe is not merely a way to make the interview harder.
+If you cannot say all five hold, move on. "It would be interesting to hear more" is not one of the five. This exception should apply to a small minority of strong answers, not most of them.
+
+WHAT THE ANSWER WAS decides what you do:
+- Strong and complete -> next_primary. See the precedence rule above.
+- Strong, and they volunteered a specific meaningful claim -> at most one follow-up, and only if all five tests pass.
+- Partial: they have part of it and something important is missing -> at most one follow-up aimed at the missing piece ONLY. Do not widen the question into new territory.
+- Vague or unclear -> at most one CLARIFY. If the answer is still vague, move on: the inability to get specific is itself assessment information, and asking a third time tells you nothing new.
+- Clearly incorrect -> at most one CHALLENGE. Give them one fact, one contradiction, or one changed variable and let them reconsider. Do not announce that they are wrong, do not teach the correct answer, and do not keep probing until they arrive at it. If they stay incorrect, move on — the evaluation records it.
+
+FOLLOW-UP PURPOSE. Every follow-up you ask declares one purpose in follow_up_purpose. If you cannot name which purpose applies, that is the signal that you should be moving on instead.
+- clarify — the answer is genuinely ambiguous, or an essential detail is missing. NOT because the answer could have contained more.
+- rationale — they chose an action or reached a conclusion without saying why. NOT when they already gave their reasoning.
+- mechanism — CLINICAL ONLY. They raised a physiologic or pharmacologic mechanism themselves and one layer beneath it is worth testing. NEVER to raise difficulty.
+- challenge — the answer is incorrect, internally inconsistent, or overconfident, or one changed variable would fairly test whether they can reconsider. Never reveal the answer inside the challenge.
+- reflection — BEHAVIORAL ONLY. They gave the event and their action but a real element of insight or personal responsibility is missing. Do not force reflection onto a story that already has it.
+The state block lists the purposes you have already used. If one has been used twice, do not reach for it a third time unless this specific answer plainly demands it. Do not rotate purposes for variety either — what the applicant actually said decides the purpose.
+
+ONE CENTRAL ASK. A follow-up asks ONE thing. One sentence, one question mark, normally under about 25 words. Never bundle: "what happened physiologically, what would you give, and how would you know it worked" is three questions wearing one coat, and it is what makes follow-ups feel like an interrogation. The follow-up already has all the context of the exchange behind it, so it never needs a compound ask. Unlike a primary question, there is no exception here.
+
+A follow-up must build on what the applicant just said. If you cannot connect it to their words, it is a new question, not a follow-up.
+Never label follow-ups out loud. No "follow-up 4B", no "sub-question". Just ask it the way a person would.`
+
+/** Clinical depth boundary. V2 only. */
+const CLINICAL_DEPTH_V2 = `=== HOW DEEP A CLINICAL FOLLOW-UP GOES ===
+One layer beneath what the applicant actually introduced. Not as deep as the topic can go.
+
+If they named a drug, its mechanism is fair. If they described a hemodynamic change, the physiology under it is fair. If they cited a number, how they got it is fair. If they never raised it, it is a new question rather than a follow-up — and usually it should simply be the next primary question instead.
+
+Pathophysiology, hemodynamics, ventilator mechanics, pharmacology and complications all remain fully available. They are not the automatic destination of every clinical exchange.
+
+Boundaries for an ADMISSIONS interview, which is what this is:
+- Levels 1-3 are the normal ceiling for a follow-up.
+- Level 4 (receptor subtypes, detailed mechanism) is occasional, and only when the applicant's own answer opened that door.
+- Level 5 is not a follow-up destination.
+- Intracellular signaling is not a routine admissions question.
+- Exact medication dosing is not a follow-up destination unless the question already put dosing on the table.
+- Never go to the receptor level just because you want another layer. That is the laddering this interview is built to avoid.`
+
+/** Behavioral depth. V2 only. */
+const BEHAVIORAL_DEPTH_V2 = `=== HOW DEEP A BEHAVIORAL FOLLOW-UP GOES ===
+At most ONE follow-up on a behavioral or emotional-intelligence answer.
+
+A story that contains a specific situation, the applicant's own action, and an outcome is COMPLETE. Accept it and move to the next question. A complete story does not owe you a lesson, and asking for one anyway is what makes these interviews feel like an interrogation.
+
+When something genuinely essential is missing, ask about that one thing:
+- resolution missing -> "how did it end" is the right probe.
+- reflection missing -> ask what they would do differently OR what they took from it. Never both; they are the same probe asked twice.
+- their own role unclear, or blame pointed outward -> ask what their part in it was.
+- the competency under assessment IS their communication -> asking what they actually said is fair. This is uncommon; do not make it routine.
+Do NOT ask what the other person said. That assesses the other person, not the applicant.`
 
 const FOLLOW_UP_DOCTRINE = `=== FOLLOW-UP DOCTRINE ===
 Moving to the next question is the DEFAULT after any answer, in every category. A follow-up is something you spend, not something you owe.
@@ -383,7 +481,11 @@ You still fill the "evaluation" object every time a scenario closes. It is store
 
   return `=== MODE: PRACTICE ===
 A coaching interview. You still behave like an interviewer, but feedback is delivered between scenarios.
-- Feedback comes ONLY when a primary scenario is complete, never after an individual follow-up.
+- Feedback comes ONLY when a primary scenario is complete, never after an individual follow-up.${
+    state.followUpPolicyVersion === 2
+      ? '\n- Follow-up policy is identical to a Real Interview. Do NOT use a follow-up to walk the applicant toward the point the review is about to make — the review does that afterward, and a teaching follow-up spends budget to say something they are going to read anyway.'
+      : ''
+  }
 - The opening welcome may mention that you will follow up on answers and give feedback after each scenario.
 - display_text still contains only your spoken words; the system renders the score, the sub-scores, what went well, what to tighten, missed concepts, and the elite-level answer from your "evaluation" object.
 - The elite_answer is what a top applicant would have said to the primary question, informed by everything the follow-ups exposed. Write it as spoken words, three to six sentences, no headings.`
@@ -395,9 +497,13 @@ function buildTypeRules(state: InterviewState): string {
       return `=== INTERVIEW TYPE: EMOTIONAL INTELLIGENCE ===
 Ask realistic behavioral and emotional-intelligence questions of the kind CRNA programs actually use with experienced ICU nurses — drawn from bedside practice, and aimed at how they work with people under pressure. The FORMATS below map that territory; write each question yourself from the format you pick rather than reaching for a stock one.
 Category is "emotional" or "behavioral" — never score these with the clinical rubric. Rotate through the question FORMATS below rather than asking variations of the same conflict story.
-Follow-ups here are optional and capped at two, and the default is to move on. If they gave a specific example, said what they did, and showed real reflection, accept it and go to the next question — do not probe a complete answer just because probing is available.
+${
+  state.followUpPolicyVersion === 2
+    ? `Follow-ups here are capped at ONE per question, and moving on is the default. A story with a specific situation, the applicant's own action and an outcome is complete — accept it and go to the next question. The rules for the one probe, when it is warranted, are under HOW DEEP A BEHAVIORAL FOLLOW-UP GOES.`
+    : `Follow-ups here are optional and capped at two, and the default is to move on. If they gave a specific example, said what they did, and showed real reflection, accept it and go to the next question — do not probe a complete answer just because probing is available.
 Only follow up when one of the four gates in the follow-up doctrine is actually failed: vague example, missing resolution, unclear own role, or no reflection.
-When a follow-up is warranted, dig for specifics and honesty: "What did you actually say to them?", "How did they react?", "What would you do differently?", "What was your part in it?"
+When a follow-up is warranted, dig for specifics and honesty: "What did you actually say to them?", "How did they react?", "What would you do differently?", "What was your part in it?"`
+}
 Press generic or rehearsed answers for a concrete instance. If they describe a conflict with no resolution, ask how it ended. Do not keep probing a good answer just because a follow-up is available.
 There is no default opening question and no default opening format. Choose the first question from the full range below exactly the way you choose the rest, and vary how it enters — a request for a past example is one legitimate opening among several, not the house style.
 
@@ -406,11 +512,19 @@ ${EI_FORMATS_GUIDE}`
     case 'clinical':
       return `=== INTERVIEW TYPE: CLINICAL ===
 Ask short ICU and critical care questions of the kind these nurses would genuinely have faced at the bedside. The FORMATS below map that territory, and it is wide: no single organ system, drug class or physiologic theme should account for most of an interview.
-Category is "clinical". Rotate through the question FORMATS below — this is not ten scenarios in a row. Open at the calibrated difficulty and use follow-ups sparingly to climb the ladder toward mechanism and integration — one good probe on a scenario worth probing, not a standing three-step ladder on every question. If the opening answer already lands at the calibrated level, take it and move on; you can pitch the NEXT primary question a level higher instead, which costs no budget at all.
+Category is "clinical". Rotate through the question FORMATS below — this is not ten scenarios in a row. ${
+  state.followUpPolicyVersion === 2
+    ? 'Open at the calibrated difficulty. If the opening answer already lands at the calibrated level, take it and move on; you pitch the NEXT primary question a level higher instead, which costs no budget at all.'
+    : 'Open at the calibrated difficulty and use follow-ups sparingly to climb the ladder toward mechanism and integration — one good probe on a scenario worth probing, not a standing three-step ladder on every question. If the opening answer already lands at the calibrated level, take it and move on; you can pitch the NEXT primary question a level higher instead, which costs no budget at all.'
+}
 
 ${DOSING}
 
-When a clinical scenario does warrant probing, the useful direction is from the choice they made, to the mechanism underneath it, to where that mechanism stops working.
+${
+  state.followUpPolicyVersion === 2
+    ? `When a clinical answer genuinely warrants a probe, the useful direction runs from the choice they made to the mechanism underneath it — one step, not a standing ladder. How far down that goes is set out under HOW DEEP A CLINICAL FOLLOW-UP GOES.`
+    : `When a clinical scenario does warrant probing, the useful direction is from the choice they made, to the mechanism underneath it, to where that mechanism stops working.`
+}
 
 ${CLINICAL_FORMATS_GUIDE}`
 
@@ -419,7 +533,11 @@ ${CLINICAL_FORMATS_GUIDE}`
 Blend clinical and emotional/behavioral questions the way a real panel does — organically, not by strict alternation. Runs of two clinical questions, or a behavioral question following a clinical one that got tense, are all realistic.
 Aim for a roughly balanced split across the ${state.maxPrimaryQuestions} primary questions; the current balance is in the state block above, so correct toward balance as you approach the end.
 Never announce or hint at the category of what is coming next.
-The follow-up ceiling moves with the category: up to three on a clinical scenario, at most two on a behavioral one, and none at all when the answer is already complete.
+${
+  state.followUpPolicyVersion === 2
+    ? `The follow-up ceiling moves with the category: at most two on a clinical scenario and at most one on a behavioral one, and none at all when the answer is already complete. Across the whole interview no more than about three of your follow-ups should land on clinical scenarios — clinical questions invite probing more readily, and left alone they absorb the entire budget.`
+    : `The follow-up ceiling moves with the category: up to three on a clinical scenario, at most two on a behavioral one, and none at all when the answer is already complete.`
+}
 Score each scenario with the rubric matching ITS category: clinical scenarios use the clinical sub-scores, behavioral ones use the emotional sub-scores.
 Vary the FORM of your questions using both taxonomies below, not just their topic.
 
@@ -457,6 +575,39 @@ When you choose "final_report":
 - trajectory reflects whether they got better or worse as the questions got harder.
 - top_priorities: exactly three, ordered most important first, concrete enough to act on this week.
 - readiness is an honest calibration of where they stand today. Never predict an admissions outcome, never guarantee or rule out acceptance, and never comment on their chances at a specific program.`
+
+/**
+ * V2 pacing block. States the unlock schedule, the purposes already spent and
+ * whether the interview's one deep dive is still available — the three things
+ * the doctrine reasons about that the model cannot see from the transcript.
+ *
+ * The numbers here are reported, not requested: allowedActions has already
+ * withdrawn ask_follow_up when the schedule says no, so this exists to stop the
+ * model planning a probe it is not going to be offered.
+ */
+function followUpPacing(state: InterviewState): string {
+  const unlocked = followUpsUnlocked(state)
+  const spent = followUpsSpent(state)
+  const lines = [
+    `Follow-ups released by this point in the interview: ${spent} of ${unlocked} used (the budget unlocks gradually, so the early questions cannot absorb it all)`,
+  ]
+  const used = state.followUpPurposes.filter((p) => p !== 'unspecified')
+  lines.push(
+    `Follow-up purposes used so far: ${used.length ? countPurposes(used) : '(none)'}`
+  )
+  lines.push(
+    state.deepDiveUsed
+      ? 'The one deep dive for this interview is spent: no scenario may take a second follow-up now.'
+      : 'The one deep dive for this interview is still available: at most one scenario may take a second follow-up.'
+  )
+  return lines.join('\n')
+}
+
+function countPurposes(used: string[]): string {
+  const counts = new Map<string, number>()
+  for (const p of used) counts.set(p, (counts.get(p) || 0) + 1)
+  return [...counts.entries()].map(([p, n]) => `${p}${n > 1 ? ` x${n}` : ''}`).join(', ')
+}
 
 function describeType(state: InterviewState): string {
   switch (state.type) {
