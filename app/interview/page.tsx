@@ -22,6 +22,8 @@ import {
 } from '@/lib/interview/sessionSaver'
 import { InterviewMessage } from '@/components/InterviewFeedback'
 import { FREE_INTERVIEW_ALLOWANCE } from '@/lib/plans'
+import { MAX_PRIMARY_QUESTIONS, QUICK_PRIMARY_QUESTIONS } from '@/lib/interview/state'
+import type { LengthChoice } from '@/lib/interview/authority'
 import {
   ArrowRight,
   Brain,
@@ -42,8 +44,6 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-
-const MAX_PRIMARY_QUESTIONS = 10
 
 export default function Interview() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -71,6 +71,13 @@ export default function Interview() {
    * this is no longer consulted.
    */
   const [followUpsChoice, setFollowUpsChoice] = useState<boolean | null>(null)
+  /**
+   * Quick Mock or Full Mock. Full is preselected: it is the interview every
+   * applicant had before Quick existed. Only the START request reads it --
+   * from then on the server's grant decides the length, and re-sending this
+   * cannot change an interview already under way.
+   */
+  const [interviewLength, setInterviewLength] = useState<LengthChoice>('full')
   const [interviewEnded, setInterviewEnded] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [recentQuestions, setRecentQuestions] = useState<string[]>([])
@@ -133,7 +140,13 @@ export default function Interview() {
   const isUltimate = userTier === 'ultimate'
   const canInterview = isLoggedIn && (isUltimate || interviewCount < FREE_INTERVIEW_ALLOWANCE)
   const freeRemaining = Math.max(0, FREE_INTERVIEW_ALLOWANCE - interviewCount)
-  const maxQuestions = MAX_PRIMARY_QUESTIONS
+  // Once an interview is running, the engine state carries the server's answer;
+  // before that, the length the applicant has picked.
+  const maxQuestions =
+    engineState?.maxPrimaryQuestions ??
+    (interviewLength === 'quick' ? QUICK_PRIMARY_QUESTIONS : MAX_PRIMARY_QUESTIONS)
+  const quickMock = maxQuestions === QUICK_PRIMARY_QUESTIONS
+  // Follow-ups never move this: it counts primary questions only.
   const questionNumber = Math.min(Math.max(engineState?.primaryQuestionNumber || 1, 1), maxQuestions)
   // Suppressed during a feedback checkpoint: the header belongs to the question
   // being reviewed, and that review closed the scenario the follow-up was part
@@ -161,6 +174,15 @@ export default function Interview() {
     { id: 'practice', name: 'Practice Mode', icon: GraduationCap, benefits: ['Feedback after each scenario', 'Detailed scoring breakdown', 'Elite answer comparison'] },
     { id: 'real', name: 'Real Interview', icon: Target, benefits: ['No scores until the end', 'Adaptive follow-up questions', 'Full performance report afterward'] },
   ]
+
+  const interviewLengths: { id: LengthChoice; name: string; questions: number; hint: string }[] = [
+    { id: 'quick', name: 'Quick Mock', questions: QUICK_PRIMARY_QUESTIONS, hint: 'A shorter, focused practice session' },
+    { id: 'full', name: 'Full Mock', questions: MAX_PRIMARY_QUESTIONS, hint: 'The complete mock interview' },
+  ]
+
+  /** Quick exists only from Phase 3 on: every older session was ten questions. */
+  const isQuickSession = (session: any) =>
+    session?.engine_state?.maxPrimaryQuestions === QUICK_PRIMARY_QUESTIONS
 
   const activeType = interviewTypes.find(t => t.id === interviewType)
   const setupStep = !interviewType ? 2 : 3
@@ -364,6 +386,9 @@ export default function Interview() {
       setInterviewType(body.state.type)
       setCustomTopic(body.state.customTopic || '')
       setFollowUpsChoice(body.state.followUpsEnabled)
+      // The server has already applied the grant's length to this state, so a
+      // Quick interview comes back as Quick and a Full one as Full.
+      setInterviewLength(body.state.maxPrimaryQuestions === QUICK_PRIMARY_QUESTIONS ? 'quick' : 'full')
       setMessages(body.messages)
       setEngineState(body.state)
       setPendingNext(body.pendingTurn ?? null)
@@ -756,6 +781,9 @@ export default function Interview() {
         // later turn is governed by the grant row, so re-sending this cannot
         // switch an interview already in progress.
         followUpsEnabled: followUpsChoice,
+        // Same contract: read only when the interview starts, and held to
+        // Quick or Full there. The grant decides every turn after that.
+        interviewLength,
         // Proves this turn belongs to an interview the server authorised.
         grantId: grantIdRef.current,
       }),
@@ -893,6 +921,9 @@ export default function Interview() {
       const data = outcome.data
 
       const turnMessage = toAssistantMessage(data.render, data.message)
+      // The report says which interview it covers. Taken from the state the
+      // server returned, which the grant's length has already been applied to.
+      if (turnMessage.finalReport) turnMessage.interviewLength = data.state.maxPrimaryQuestions
 
       // Practice mode reviews the scenario before the interviewer moves on.
       // The split applies only when this turn actually closed one -- it carries
@@ -924,6 +955,7 @@ export default function Interview() {
               content: turnMessage.content,
               finalReport: turnMessage.finalReport,
               allEvaluations: turnMessage.allEvaluations,
+              interviewLength: turnMessage.interviewLength,
             }
           : { role: 'assistant', content: turnMessage.content }
 
@@ -1173,6 +1205,7 @@ export default function Interview() {
                             : resumable.type.charAt(0).toUpperCase() + resumable.type.slice(1)}
                         {' · '}
                         {resumable.mode === 'real' ? 'Real Interview' : 'Practice'}
+                        {resumable.maxPrimaryQuestions === QUICK_PRIMARY_QUESTIONS ? ' · Quick Mock' : ' · Full Mock'}
                         {' · Question '}
                         {resumable.primaryQuestionNumber} of {resumable.maxPrimaryQuestions}
                         {resumable.atCheckpoint ? ' · feedback ready' : ''}
@@ -1282,6 +1315,35 @@ export default function Interview() {
                           </button>
                         )
                       })}
+                    </div>
+
+                    {/* Length */}
+                    <div className="mt-6">
+                      <span className="mb-2 block text-sm font-semibold text-slate-900">Interview length</span>
+                      <div role="radiogroup" aria-label="Interview length" className="grid grid-cols-2 gap-3">
+                        {interviewLengths.map((opt) => {
+                          const selected = interviewLength === opt.id
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              onClick={() => setInterviewLength(opt.id)}
+                              className={`rounded-xl border px-4 py-3 text-left transition ${
+                                selected
+                                  ? 'border-violet-400 bg-violet-50 ring-2 ring-violet-100'
+                                  : 'border-slate-200 bg-white hover:border-violet-300'
+                              }`}
+                            >
+                              <span className="block text-sm font-semibold text-slate-900">
+                                {opt.name} · {opt.questions} questions
+                              </span>
+                              <span className="block text-xs text-slate-500">{opt.hint}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
 
                     {/* Type */}
@@ -1516,6 +1578,7 @@ export default function Interview() {
                                   >
                                     <td className="px-1 py-3 text-[13px] font-medium text-slate-700">
                                       {session.mode === 'real' ? 'Real Interview' : 'Practice Interview'}
+                                      {isQuickSession(session) ? ' · Quick' : ''}
                                     </td>
                                     <td className="px-1 py-3">
                                       <span className={`inline-block rounded-md px-2 py-0.5 text-[11px] font-semibold ${typeBadgeClass(session.school_type)}`}>
@@ -1667,6 +1730,7 @@ export default function Interview() {
                                 </div>
                                 <p className="mt-1 text-xs text-slate-500">
                                   {new Date(session.created_at).toLocaleDateString()} • {session.question_count} questions
+                                  {isQuickSession(session) && ' • Quick Mock'}
                                   {score !== null && ` • ${Number.isInteger(score) ? score : score.toFixed(1)}/10`}
                                   {session.readiness && ` • ${session.readiness}`}
                                 </p>
@@ -1766,6 +1830,9 @@ export default function Interview() {
                   <span className="text-sm font-semibold text-white sm:text-base">{activeType?.name} Interview</span>
                   <span className="rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium text-white/90">
                     {interviewMode === 'real' ? 'Real Interview' : 'Practice'}
+                  </span>
+                  <span className="rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium text-white/90">
+                    {quickMock ? 'Quick Mock' : 'Full Mock'}
                   </span>
                 </div>
                 <div className="flex items-center gap-3">

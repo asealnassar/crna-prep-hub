@@ -3,6 +3,7 @@ import { buildSystemPrompt } from '@/lib/interview/prompt'
 import { buildTurnSchema } from '@/lib/interview/schema'
 import { composeMessage } from '@/lib/interview/render'
 import {
+  MAX_PRIMARY_QUESTIONS,
   allowedActions,
   applyTurn,
   createInitialState,
@@ -10,6 +11,7 @@ import {
   normalizeState,
 } from '@/lib/interview/state'
 import { ALL_FORMATS, FOLLOW_UP_PURPOSES } from '@/lib/interview/types'
+import { applyLengthAuthority, lengthAuthority, parseRequestedLength } from '@/lib/interview/authority'
 import { buildModelInput } from '@/lib/interview/modelInput'
 import { TurnTimeoutError, turnFailureBody } from '@/lib/interview/turnProtocol'
 import { authenticateRequest } from '@/lib/apiAuth'
@@ -20,9 +22,11 @@ import {
   FREE_INTERVIEW_ALLOWANCE,
 } from '@/lib/interviewUsage'
 import {
+  abandonGrant,
   checkGrant,
   completeGrant,
   createGrant,
+  issueInterview,
   reserveTurn,
 } from '@/lib/interviewSession'
 import type {
@@ -88,6 +92,14 @@ export async function POST(request: Request) {
     const followUpsChoice: unknown = body?.followUpsEnabled
     const followUpsChosen = followUpsChoice === true || followUpsChoice === false
 
+    // Quick or Full. Read ONLY when this request starts an interview, and held
+    // to exactly two values: a start asking for anything else is refused below,
+    // before any model call or charge. Continuations take their length from
+    // the grant instead, whatever this field or the state says.
+    const lengthChoice = parseRequestedLength(body?.interviewLength)
+    // Used only on a start, where the 400 below guarantees lengthChoice.ok.
+    const startLength = lengthChoice.ok ? lengthChoice.length : MAX_PRIMARY_QUESTIONS
+
     const fallbackState = createInitialState({
       mode: body?.mode === 'real' ? 'real' : 'practice',
       type: body?.type || 'mixed',
@@ -96,6 +108,7 @@ export async function POST(request: Request) {
       // fallback entirely. A start with no valid choice is rejected before
       // this value can reach anything.
       followUpsEnabled: followUpsChosen ? (followUpsChoice as boolean) : false,
+      length: startLength,
     })
     state = normalizeState(body?.state, fallbackState)
 
@@ -140,8 +153,20 @@ export async function POST(request: Request) {
         { status: 400 }
       )
     }
+    if (startingInterview && !lengthChoice.ok) {
+      return NextResponse.json(
+        { error: 'Choose Quick Mock or Full Mock before starting the interview.' },
+        { status: 400 }
+      )
+    }
 
     if (startingInterview) {
+      // A new interview is built by the server from the validated choices
+      // alone. Any `state` the browser sent with a start is discarded: it was
+      // the route by which an edited request could open a 1-question or a
+      // 25-question interview, or one carrying its own follow-up budget.
+      state = fallbackState
+
       // A new interview is the only thing the allowance gates.
       if (!auth.isUltimate) {
         const used = await readInterviewCount(admin, auth.userId)
@@ -165,6 +190,15 @@ export async function POST(request: Request) {
       }
       grantId = check.grant?.id ?? null
 
+      // A length no grant can legitimately hold is refused, not guessed at.
+      // Checked before the turn is reserved, so the refusal costs nothing.
+      if (lengthAuthority(check.grant).source === 'invalid') {
+        return NextResponse.json(
+          { error: 'This interview session is no longer valid. Please start a new interview.' },
+          { status: 403 }
+        )
+      }
+
       // THE grant is the authority on follow-ups, not the state the browser
       // echoed back. A client that edits followUpsEnabled -- in either
       // direction -- is overwritten here, before the state reaches
@@ -177,6 +211,12 @@ export async function POST(request: Request) {
       if (typeof check.grant?.follow_ups_enabled === 'boolean') {
         state = { ...state, followUpsEnabled: check.grant.follow_ups_enabled }
       }
+
+      // The same holds for the interview's LENGTH, and the follow-up budget
+      // and ceilings that come with it: a state claiming ten questions on a
+      // Quick grant, or a larger budget, is overwritten here, at the same
+      // point and by the same rule resume applies (lib/interview/authority.ts).
+      state = applyLengthAuthority(state, lengthAuthority(check.grant))
 
       // Reserve the turn before the model is called, so a refusal costs
       // nothing. The database enforces the cap inside the UPDATE, which is
@@ -224,17 +264,43 @@ export async function POST(request: Request) {
 
     // Charged only once the interview has actually begun, matching the previous
     // behaviour — but performed server-side, so the browser cannot skip it.
+    //
+    // issueInterview writes the grant FIRST and charges second, so a usable
+    // grant always means a consumed entitlement: a grant that cannot be written
+    // -- or cannot hold its length -- costs nothing, and a charge that fails
+    // voids the grant it would have paid for. Either way the opening turn is
+    // discarded and the applicant is back at setup; a retry issues a new grant
+    // and pays for it only if its start succeeds.
     if (startingInterview) {
-      if (!auth.isUltimate) {
-        usageCount = await chargeInterview(admin, auth.userId)
+      const issued = await issueInterview({
+        createGrant: () =>
+          createGrant(
+            admin,
+            auth.userId,
+            nextState.mode,
+            nextState.type,
+            nextState.followUpsEnabled,
+            // The server's own validated copy, never a value read back from the
+            // response: from here on the grant is what every turn obeys.
+            startLength
+          ),
+        charge: auth.isUltimate ? undefined : () => chargeInterview(admin, auth.userId),
+        voidGrant: (id) => abandonGrant(admin, id, auth.userId),
+      })
+      if (!issued.ok) {
+        return NextResponse.json(
+          {
+            error:
+              issued.reason === 'charge_failed'
+                ? 'We could not start the interview. Please try again.'
+                : 'We could not start the interview. Nothing was charged — please try again.',
+          },
+          { status: 503 }
+        )
       }
-      grantId = await createGrant(
-        admin,
-        auth.userId,
-        nextState.mode,
-        nextState.type,
-        nextState.followUpsEnabled
-      )
+      // The grant id leaves the server only here, after the charge succeeded.
+      grantId = issued.grantId
+      usageCount = issued.usageCount
     }
 
     // A finished interview cannot be reopened for further model calls.

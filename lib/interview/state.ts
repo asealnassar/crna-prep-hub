@@ -81,6 +81,50 @@ export const V2_MAX_FOLLOW_UPS_EMOTIONAL = 1
  */
 export const V2_FOLLOW_UP_BUDGET = 5
 
+// ==========================================================================
+// Phase 3: interview length. Full is the Phase 2 interview, unchanged. Quick
+// is the same engine at half the length -- not a separate or simpler one.
+// ==========================================================================
+
+/** Quick Mock. Full is MAX_PRIMARY_QUESTIONS. */
+export const QUICK_PRIMARY_QUESTIONS = 5
+
+/**
+ * The only lengths an interview can have. Everything that sets one -- the
+ * start request, the grant, a restored state -- is held to this list, so a
+ * hand-edited request cannot run a 1-question or a 25-question interview.
+ */
+export const INTERVIEW_LENGTHS = [QUICK_PRIMARY_QUESTIONS, MAX_PRIMARY_QUESTIONS] as const
+export type InterviewLength = (typeof INTERVIEW_LENGTHS)[number]
+
+/**
+ * Quick's whole-interview follow-up budget. followUpsUnlocked releases it as
+ * 1, 1, 2, 2, 2 over five questions: the pacing rule Full already uses, at
+ * Quick's scale, rather than a second schedule to keep in step.
+ */
+export const QUICK_FOLLOW_UP_BUDGET = 2
+/**
+ * Quick's per-scenario ceiling, clinical and behavioral alike. A deep dive IS
+ * a second follow-up on one scenario, so a ceiling of one is also what gives
+ * Quick no deep dive -- with no separate rule that could drift away from it.
+ */
+export const QUICK_MAX_FOLLOW_UPS = 1
+
+export function isInterviewLength(value: unknown): value is InterviewLength {
+  return value === QUICK_PRIMARY_QUESTIONS || value === MAX_PRIMARY_QUESTIONS
+}
+
+/** The V2 follow-up policy that belongs to a length. */
+export function v2PolicyFor(length: InterviewLength): { maxFollowUps: number; followUpBudget: number } {
+  return length === QUICK_PRIMARY_QUESTIONS
+    ? { maxFollowUps: QUICK_MAX_FOLLOW_UPS, followUpBudget: QUICK_FOLLOW_UP_BUDGET }
+    : { maxFollowUps: V2_MAX_FOLLOW_UPS, followUpBudget: V2_FOLLOW_UP_BUDGET }
+}
+
+export function isQuick(state: InterviewState): boolean {
+  return state.maxPrimaryQuestions === QUICK_PRIMARY_QUESTIONS
+}
+
 /**
  * How much of the V2 budget has been released by a given point in the
  * interview: ceil(budget x questionNumber / maxQuestions).
@@ -140,6 +184,11 @@ export function createInitialState(opts: {
   type: InterviewType
   customTopic?: string
   /**
+   * Quick or Full. Omitted means Full, the only interview there was before
+   * Phase 3, so every existing caller builds exactly the state it always did.
+   */
+  length?: InterviewLength
+  /**
    * Required. There is deliberately no default: the applicant answers
    * "Include follow-up questions?" at setup, every time, and a caller that
    * cannot say what they chose has no business starting an interview. The
@@ -148,6 +197,8 @@ export function createInitialState(opts: {
    */
   followUpsEnabled: boolean
 }): InterviewState {
+  const length = isInterviewLength(opts.length) ? opts.length : MAX_PRIMARY_QUESTIONS
+  const policy = v2PolicyFor(length)
   return {
     version: 1,
     mode: opts.mode,
@@ -160,14 +211,14 @@ export function createInitialState(opts: {
     followUpPurposes: [],
     deepDiveUsed: false,
     primaryQuestionNumber: 0,
-    maxPrimaryQuestions: MAX_PRIMARY_QUESTIONS,
+    maxPrimaryQuestions: length,
     followUpCount: 0,
     repromptCount: 0,
     repromptBudget: MAX_REPROMPTS_PER_INTERVIEW,
     maxRepromptBudget: MAX_REPROMPTS_PER_INTERVIEW,
-    maxFollowUps: V2_MAX_FOLLOW_UPS,
-    followUpBudget: V2_FOLLOW_UP_BUDGET,
-    maxFollowUpBudget: V2_FOLLOW_UP_BUDGET,
+    maxFollowUps: policy.maxFollowUps,
+    followUpBudget: policy.followUpBudget,
+    maxFollowUpBudget: policy.followUpBudget,
     turnKind: 'opening',
     currentScenario: '',
     currentCategory: null,
@@ -190,16 +241,28 @@ export function createInitialState(opts: {
  */
 export function normalizeState(raw: any, fallback: InterviewState): InterviewState {
   if (!raw || typeof raw !== 'object') return fallback
-  const maxPrimary = clampInt(raw.maxPrimaryQuestions, 1, 25, MAX_PRIMARY_QUESTIONS)
   // Absence is the whole signal. Every state serialized before Phase 2 lacks
   // this field, and those interviews must finish under the rules they started
   // with -- so anything that is not exactly 2 reads as 1, and nothing here
   // promotes a session the other way.
   const policyVersion: FollowUpPolicyVersion = raw.followUpPolicyVersion === 2 ? 2 : 1
+  // Exactly two lengths, and nothing between or beyond them. This used to be
+  // clamped to 1..25, which let an edited request run a one-question or a
+  // twenty-five-question interview. V1 predates Quick, so a V1 state is always
+  // ten questions; any other value -- 1, 25, a string -- reads as Full, the
+  // only length a state written before Phase 3 can legitimately carry. The
+  // grant still decides in the end: see applyGrantAuthority.
+  const maxPrimary: InterviewLength =
+    policyVersion === 2 && raw.maxPrimaryQuestions === QUICK_PRIMARY_QUESTIONS
+      ? QUICK_PRIMARY_QUESTIONS
+      : MAX_PRIMARY_QUESTIONS
+  const quick = maxPrimary === QUICK_PRIMARY_QUESTIONS
   const legacyMaxFollowUps = policyVersion === 2 ? V2_MAX_FOLLOW_UPS : MAX_FOLLOW_UPS
   const legacyBudget = policyVersion === 2 ? V2_FOLLOW_UP_BUDGET : FOLLOW_UP_BUDGET
-  const maxFollowUps = clampInt(raw.maxFollowUps, 0, 5, legacyMaxFollowUps)
-  const maxBudget = clampInt(raw.maxFollowUpBudget, 0, 60, legacyBudget)
+  // Quick has no older states to stay compatible with, so its policy is pinned
+  // rather than clamped. Full is read exactly as Phase 2 read it.
+  const maxFollowUps = quick ? QUICK_MAX_FOLLOW_UPS : clampInt(raw.maxFollowUps, 0, 5, legacyMaxFollowUps)
+  const maxBudget = quick ? QUICK_FOLLOW_UP_BUDGET : clampInt(raw.maxFollowUpBudget, 0, 60, legacyBudget)
   // Capped at the constant, not at whatever the client claims: the turn ceiling
   // this protects is enforced in SQL and cannot be negotiated from the browser.
   const maxRepromptBudget = clampInt(
@@ -257,6 +320,43 @@ export function normalizeState(raw: any, fallback: InterviewState): InterviewSta
     evaluations: Array.isArray(raw.evaluations) ? raw.evaluations.filter(Boolean) : [],
     finalReport: raw.finalReport ?? null,
     complete: raw.complete === true,
+  }
+}
+
+/**
+ * Fixes an interview's length -- and, under policy V2, the follow-up policy
+ * that belongs to it -- over whatever the state claims.
+ *
+ * This is how the grant's length reaches the engine: the counters still travel
+ * with the state, but the ceilings they are measured against do not. `forceV2`
+ * is for grants written by Phase 3 code, which only ever start V2 interviews,
+ * so a state that drops its version field cannot buy the older, larger V1
+ * budget on a grant that never allowed it.
+ *
+ * A V1 interview stays ten questions with its V1 follow-up rules untouched:
+ * V1 predates Quick, and what it was promised is not this function's to change.
+ */
+export function withInterviewLength(
+  state: InterviewState,
+  length: InterviewLength,
+  opts: { forceV2?: boolean } = {}
+): InterviewState {
+  const policyVersion: FollowUpPolicyVersion = opts.forceV2 ? 2 : state.followUpPolicyVersion
+  const maxPrimary: InterviewLength = policyVersion === 2 ? length : MAX_PRIMARY_QUESTIONS
+  const next: InterviewState = {
+    ...state,
+    followUpPolicyVersion: policyVersion,
+    maxPrimaryQuestions: maxPrimary,
+    primaryQuestionNumber: Math.min(state.primaryQuestionNumber, maxPrimary),
+  }
+  if (policyVersion !== 2) return next
+  const policy = v2PolicyFor(maxPrimary)
+  return {
+    ...next,
+    maxFollowUps: policy.maxFollowUps,
+    maxFollowUpBudget: policy.followUpBudget,
+    followUpBudget: Math.min(Math.max(0, state.followUpBudget), policy.followUpBudget),
+    followUpCount: Math.min(state.followUpCount, policy.maxFollowUps),
   }
 }
 

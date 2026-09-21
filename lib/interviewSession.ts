@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { MAX_PRIMARY_QUESTIONS, FOLLOW_UP_BUDGET } from '@/lib/interview/state'
+import type { InterviewLength } from '@/lib/interview/state'
 
 /**
  * Server-owned authorization for an in-progress interview.
@@ -57,6 +58,13 @@ export type InterviewGrant = {
   abandoned_at?: string | null
   /** When the server issued this grant. The authority for resume expiry. */
   created_at?: string
+  /**
+   * The interview's length, 5 (Quick) or 10 (Full), and the ONLY authority on
+   * it. NULL on grants issued before Phase 3 (all ten questions); undefined
+   * only while the column migration has not been applied. See
+   * lib/interview/authority.ts for how each case is read.
+   */
+  max_primary_questions?: number | null
 }
 
 /** Postgres "relation does not exist" — the migration has not been run yet. */
@@ -78,6 +86,20 @@ function isMissingColumn(error: any): boolean {
   if (MISSING_COLUMN.includes(error.code)) return true
   return /follow_ups_enabled|session_id|abandoned_at|pending_turn/.test(error.message || '')
 }
+
+/**
+ * "Column does not exist" for the LENGTH column specifically, identified by
+ * error code and not by message alone.
+ *
+ * Deliberately stricter than isMissingColumn: the length column's CHECK
+ * constraint carries the column's name, so a message match would read a
+ * refused value as a missing column -- and quietly write the grant without
+ * its length, which is the one outcome this column exists to prevent.
+ */
+function isMissingLengthColumn(error: any): boolean {
+  if (!error) return false
+  return (error.code === '42703' || error.code === 'PGRST204') && /max_primary_questions/.test(error.message || '')
+}
 /** Postgres "unique_violation" — the one-session-one-grant index refused a bind. */
 const UNIQUE_VIOLATION = '23505'
 /** Postgres/PostgREST "function does not exist", same cause. */
@@ -87,51 +109,138 @@ export type TurnReservation =
   | { ok: true }
   | { ok: false; status: number; error: string }
 
+/** ok means a grant row exists, belongs to the caller, and still authorizes turns. */
 export type GrantCheck =
-  | { ok: true; grant: InterviewGrant | null }
+  | { ok: true; grant: InterviewGrant }
   | { ok: false; status: number; error: string }
+
+/**
+ * The outcome of writing the grant for a new interview. Anything that is not
+ * ok means the interview must not start: the caller discards the opening turn,
+ * and nothing has been charged.
+ */
+export type GrantCreation =
+  | { ok: true; id: string }
+  | { ok: false; reason: 'schema_unavailable' | 'failed' }
 
 export async function createGrant(
   admin: SupabaseClient,
   userId: string,
   mode: string,
   type: string,
-  followUpsEnabled: boolean
-): Promise<string | null> {
-  const row = {
-    user_id: userId,
-    mode,
-    interview_type: type,
-    // Written once, here, and never updated. Every later turn reads it back
-    // rather than trusting what the browser echoes.
-    follow_ups_enabled: followUpsEnabled,
-  }
-  const insert = (payload: Record<string, unknown>) =>
-    admin.from('interview_grants').insert(payload).select('id').single()
+  followUpsEnabled: boolean,
+  maxPrimaryQuestions: InterviewLength
+): Promise<GrantCreation> {
+  // ONE insert, carrying every column the server owns, or no grant at all.
+  //
+  // There is deliberately no fallback that retries without a column. A grant
+  // without its length reads as Full on the very next turn -- a Quick
+  // interview would quietly become a Full one -- and NULL is reserved for
+  // grants issued before Phase 3, so a Phase 3 start must never write one,
+  // for either length. If the database cannot hold what this interview needs,
+  // the interview does not start. (READING an older grant still falls back:
+  // see checkGrant and findGrantBySession.)
+  const { data, error } = await admin
+    .from('interview_grants')
+    .insert({
+      user_id: userId,
+      mode,
+      interview_type: type,
+      // Written once, here, and never updated. Every later turn reads it back
+      // rather than trusting what the browser echoes.
+      follow_ups_enabled: followUpsEnabled,
+      // Same contract for the length: the server's own validated copy, 5 or
+      // 10, read back on every turn and on resume.
+      max_primary_questions: maxPrimaryQuestions,
+    })
+    .select('id')
+    .single()
 
-  let { data, error } = await insert(row)
-
-  if (error && isMissingColumn(error)) {
-    console.warn('interview_grants.follow_ups_enabled missing — grant not locking the choice')
-    const { follow_ups_enabled, ...legacy } = row
-    ;({ data, error } = await insert(legacy))
+  if (error || typeof data?.id !== 'string') {
+    const unavailable =
+      !!error && (isMissingLengthColumn(error) || isMissingColumn(error) || error.code === MISSING_TABLE)
+    console.error(
+      unavailable
+        ? 'interview_grants cannot hold a Phase 3 grant — no interview can start until 20260921_002_interview_length.sql is applied'
+        : `Interview grant creation failed: ${error?.message ?? 'no id returned'}`
+    )
+    return { ok: false, reason: unavailable ? 'schema_unavailable' : 'failed' }
   }
-
-  if (error) {
-    if (error.code === MISSING_TABLE) {
-      console.warn('interview_grants table missing — continuation checks inactive')
-      return null
-    }
-    console.error('Interview grant creation failed:', error.message)
-    return null
-  }
-  return data?.id ?? null
+  return { ok: true, id: data.id }
 }
 
 /**
- * Validates a continuation. Returns ok:true with a null grant only when the
- * table does not exist yet, so the feature keeps working between the code
- * deploy and the migration; every other failure denies the turn.
+ * The steps a new interview needs before its opening question may be shown,
+ * injected so the route wires the real ones and the tests can fail each one.
+ */
+export type IssueSteps = {
+  /** Writes the grant, length included, or reports why it could not. */
+  createGrant: () => Promise<GrantCreation>
+  /**
+   * Consumes the entitlement: the new usage count, or null when that failed.
+   * Absent for an account that is not metered.
+   */
+  charge?: () => Promise<number | null>
+  /** Makes a grant permanently unusable. */
+  voidGrant: (grantId: string) => Promise<boolean>
+}
+
+export type InterviewIssue =
+  | { ok: true; grantId: string; usageCount: number | null }
+  | { ok: false; reason: 'schema_unavailable' | 'grant_failed' | 'charge_failed' }
+
+/**
+ * Issues a new interview: its grant, then -- for a metered account -- the
+ * entitlement it consumes. The invariant is
+ *
+ *     a usable grant  =>  a successfully consumed entitlement
+ *
+ * and the order is what gives it:
+ *
+ *   grant fails   -> nothing has been charged; the start is refused.
+ *   charge fails  -> the grant, whose id has not left the server, is voided
+ *                    (abandoned_at, which checkGrant and resume refuse); the
+ *                    start is refused. A retry issues a NEW grant and must
+ *                    charge for it -- the voided one is never reused.
+ *   both succeed  -> only now is the grant id handed back, to be returned to
+ *                    the browser.
+ */
+export async function issueInterview(steps: IssueSteps): Promise<InterviewIssue> {
+  const created = await steps.createGrant()
+  if (!created.ok) {
+    return { ok: false, reason: created.reason === 'schema_unavailable' ? 'schema_unavailable' : 'grant_failed' }
+  }
+  if (!steps.charge) return { ok: true, grantId: created.id, usageCount: null }
+
+  let usageCount: number | null = null
+  try {
+    usageCount = await steps.charge()
+  } catch (error) {
+    console.error('Interview charge threw:', (error as any)?.message)
+  }
+  if (typeof usageCount !== 'number') {
+    let voided = false
+    try {
+      voided = await steps.voidGrant(created.id)
+    } catch {
+      voided = false
+    }
+    if (!voided) {
+      // Still unusable: its id was never returned, it is bound to no session,
+      // and nothing looks a grant up any other way.
+      console.error('An uncharged interview grant could not be voided; it remains unreachable')
+    }
+    return { ok: false, reason: 'charge_failed' }
+  }
+  return { ok: true, grantId: created.id, usageCount }
+}
+
+/**
+ * Validates a continuation. ok:true only for a grant row that exists, belongs
+ * to the caller, and still authorizes turns; every other outcome denies the
+ * turn. Missing COLUMNS are tolerated (an older grant still answers what it
+ * can), but a missing grant never is -- not even when the whole table is
+ * absent, which once let continuation checks go inactive.
  */
 export async function checkGrant(
   admin: SupabaseClient,
@@ -149,8 +258,17 @@ export async function checkGrant(
       Promise<{ data: InterviewGrant | null; error: any }>
 
   let { data, error } = await select(
-    'id, user_id, turns_used, completed, follow_ups_enabled, abandoned_at, session_id, created_at'
+    'id, user_id, turns_used, completed, follow_ups_enabled, abandoned_at, session_id, created_at, max_primary_questions'
   )
+
+  if (error && isMissingColumn(error)) {
+    // The length column is not deployed yet. Drop only it first: the grant then
+    // cannot answer on length (see lengthAuthority), but still answers on
+    // everything it already could.
+    ;({ data, error } = await select(
+      'id, user_id, turns_used, completed, follow_ups_enabled, abandoned_at, session_id, created_at'
+    ))
+  }
 
   if (error && isMissingColumn(error)) {
     // Resume's columns are not deployed yet. Fall back in the same stepwise way
@@ -164,8 +282,11 @@ export async function checkGrant(
 
   if (error) {
     if (error.code === MISSING_TABLE) {
-      console.warn('interview_grants table missing — continuation checks inactive')
-      return { ok: true, grant: null }
+      // No table, so no grant: nothing can vouch for this turn. This used to
+      // return ok with no grant, which let a request carrying any made-up id
+      // continue with no reservation and a length nobody had recorded.
+      console.error('interview_grants table missing — continuation refused')
+      return { ok: false, status: 503, error: 'Interview service temporarily unavailable. Please try again.' }
     }
     // A malformed id makes Postgres reject the uuid cast; treat as not found.
     console.error('Interview grant lookup failed:', error.message)
@@ -352,12 +473,25 @@ export async function findGrantBySession(
   sessionId: string,
   userId: string
 ): Promise<InterviewGrant | null> {
-  const { data, error } = await admin
-    .from('interview_grants')
-    .select('id, user_id, turns_used, completed, follow_ups_enabled, session_id, abandoned_at, created_at')
-    .eq('session_id', sessionId)
-    .eq('user_id', userId)
-    .maybeSingle()
+  const lookup = (columns: string) =>
+    admin
+      .from('interview_grants')
+      .select(columns)
+      .eq('session_id', sessionId)
+      .eq('user_id', userId)
+      .maybeSingle()
+
+  let { data, error } = await lookup(
+    'id, user_id, turns_used, completed, follow_ups_enabled, session_id, abandoned_at, created_at, max_primary_questions'
+  )
+  // Without the length column the interview is still resumable -- the grant
+  // simply cannot answer on length. Failing here instead would make every
+  // resume look like "not found" whenever this code runs ahead of its migration.
+  if (error && isMissingColumn(error)) {
+    ;({ data, error } = await lookup(
+      'id, user_id, turns_used, completed, follow_ups_enabled, session_id, abandoned_at, created_at'
+    ))
+  }
 
   if (error) {
     if (error.code === MISSING_TABLE || isMissingColumn(error)) return null
@@ -375,6 +509,10 @@ export async function findGrantBySession(
  * every completion metric. No entitlement is refunded: model calls were already
  * made, and a refund would make "start, read question one, abandon" a way to
  * mint free interviews.
+ *
+ * Also how issueInterview voids a grant whose entitlement failed to charge:
+ * abandoned_at is what checkGrant and resume already refuse, and service_role
+ * deliberately holds no DELETE privilege on interview_grants.
  */
 export async function abandonGrant(
   admin: SupabaseClient,

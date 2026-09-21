@@ -6,6 +6,7 @@ import type {
   RedFlag,
   ScenarioEvaluation,
 } from '@/lib/interview/types'
+import { MAX_PRIMARY_QUESTIONS, QUICK_PRIMARY_QUESTIONS } from '@/lib/interview/state'
 
 /**
  * Fixed status palette. Never themed, never reused for anything decorative.
@@ -294,17 +295,24 @@ function Tile({ label, score, hero }: { label: string; score: number | null; her
 export function FinalReportCard({
   report,
   evaluations,
+  length,
 }: {
   report: FinalReport
   evaluations: ScenarioEvaluation[]
+  /** Primary questions in the interview. Absent on reports saved before Phase 3. */
+  length?: number
 }) {
   const readinessColor = READINESS_COLOR[report.readiness] || STATUS.warning
+  const quick = length === QUICK_PRIMARY_QUESTIONS
+  const lengthLabel = quick ? 'Quick Mock' : length === MAX_PRIMARY_QUESTIONS ? 'Full Mock' : null
 
   return (
     <div className="w-full overflow-hidden rounded-2xl border border-purple-200 bg-white shadow-md">
       <div className="bg-gradient-to-r from-purple-600 to-pink-500 px-4 py-3">
         <h3 className="text-sm font-bold uppercase tracking-wide text-white sm:text-base">Interview Report</h3>
-        <p className="text-xs text-white/80">Across all {evaluations.length || report.top_priorities.length} scenarios</p>
+        <p className="text-xs text-white/80">
+          {lengthLabel && `${lengthLabel} · `}Across all {evaluations.length || report.top_priorities.length} scenarios
+        </p>
       </div>
 
       <div className="space-y-5 px-3 py-4 sm:px-4">
@@ -321,6 +329,14 @@ export function FinalReportCard({
             {TRAJECTORY_LABELS[report.trajectory] || report.trajectory}
           </span>
         </div>
+
+        {/* Scores are the same scale as a Full Mock; only the sample is smaller. */}
+        {quick && (
+          <p className="text-[11px] leading-relaxed text-gray-500 sm:text-xs">
+            Based on a {QUICK_PRIMARY_QUESTIONS}-question Quick Mock — a smaller sample than a Full Mock, so
+            read the readiness level as a snapshot rather than a full assessment.
+          </p>
+        )}
 
         {evaluations.length > 0 && (
           <Section title="Question by question">
@@ -451,7 +467,7 @@ export function InterviewMessage({ message }: { message: ChatMessage }) {
         </div>
       )}
 
-      {report && <FinalReportCard report={report} evaluations={allEvaluations} />}
+      {report && <FinalReportCard report={report} evaluations={allEvaluations} length={message.interviewLength} />}
     </div>
   )
 }

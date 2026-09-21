@@ -2,6 +2,11 @@ import type { ChatMessage, InterviewState } from './types.ts'
 import { normalizeState } from './state.ts'
 import { MAX_TURNS_PER_INTERVIEW } from '@/lib/interviewSession'
 import { isSystemNotice } from './modelInput.ts'
+import { applyGrantAuthority, lengthAuthority } from './authority.ts'
+
+// Shared with the turn route, so a resumed interview and a live one are held to
+// the same precedence. Re-exported for the callers that already import it here.
+export { applyGrantAuthority }
 
 /**
  * Deciding whether an interview may be resumed, and rebuilding it safely.
@@ -61,9 +66,10 @@ export interface GrantRow {
   created_at: string
   follow_ups_enabled?: boolean | null
   /**
-   * Phase 3 will add interview length here. Resume applies any such
-   * server-authoritative field through applyGrantAuthority below, so a new
-   * column becomes a one-line change rather than a redesign.
+   * The interview's length: 5 (Quick) or 10 (Full), written once when the
+   * grant is issued. NULL on grants issued before Phase 3, which were all ten
+   * questions. Applied over the stored state by applyGrantAuthority, so a
+   * refresh cannot turn a Quick interview into a Full one or back.
    */
   max_primary_questions?: number | null
 }
@@ -75,25 +81,6 @@ export interface SessionRow {
   conversation: unknown
   engine_state: unknown
   pending_turn?: unknown
-}
-
-/**
- * Fields the grant owns outright, applied over whatever the browser stored.
- *
- * The route already does this for follow_ups_enabled on every turn; resume has
- * to do the same or a refresh would be a way to launder an edited state back
- * into an interview. Written as a list so Phase 3's length column joins it
- * without touching any of the logic around it.
- */
-export function applyGrantAuthority(state: InterviewState, grant: GrantRow): InterviewState {
-  let next = state
-  if (typeof grant.follow_ups_enabled === 'boolean') {
-    next = { ...next, followUpsEnabled: grant.follow_ups_enabled }
-  }
-  if (typeof grant.max_primary_questions === 'number' && grant.max_primary_questions > 0) {
-    next = { ...next, maxPrimaryQuestions: grant.max_primary_questions }
-  }
-  return next
 }
 
 /** A transcript entry the applicant actually saw, in the shape the page renders. */
@@ -249,6 +236,9 @@ export function evaluateResume(
   // Server-issued timestamp. interview_sessions.created_at is written by the
   // browser, so using it would let a client hold an interview open forever.
   if (isExpired(grant, now)) return { resumable: false, reason: 'expired' }
+  // A length the grant could never legitimately hold is not guessed at. The
+  // CHECK constraint makes this unreachable; the turn route refuses it too.
+  if (lengthAuthority(grant).source === 'invalid') return { resumable: false, reason: 'invalid_state' }
 
   const messages = restoreTranscript(session.conversation)
   if (!messages) return { resumable: false, reason: 'invalid_state' }
