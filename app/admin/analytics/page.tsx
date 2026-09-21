@@ -34,10 +34,16 @@ export default function Analytics() {
 
   const loadData = async () => {
     // Aggregates first: four integers, independent of the row-level data the
-    // activity table below still uses.
+    // activity table below still uses -- plus interviews per user, which only
+    // the server can count (it needs every user's session rows).
+    let interviewsByUser: Record<string, number> = {}
     try {
       const metricsRes = await fetch('/api/admin/analytics')
-      if (metricsRes.ok) setMetrics(await metricsRes.json())
+      if (metricsRes.ok) {
+        const body = await metricsRes.json()
+        setMetrics(body)
+        interviewsByUser = body.interviewsByUser ?? {}
+      }
     } catch (err) {
       console.error('Analytics metrics failed to load')
     }
@@ -62,7 +68,10 @@ export default function Analytics() {
         id: authUser.id,
         email: authUser.email,
         subscription_tier: profile?.subscription_tier || 'free',
-        interview_count: userQuestions.length,
+        // Interviews, not questions: one per session row, however many
+        // questions it asked. This was userQuestions.length -- one row per
+        // primary question -- which counted a 10-question interview as ten.
+        interview_count: interviewsByUser[authUser.id] ?? 0,
         created_at: authUser.created_at,
         totalQuestions: userQuestions.length,
         interviewTypes,
@@ -265,6 +274,7 @@ export default function Analytics() {
                     <tr>
                       <th className="px-6 py-4 text-left text-sm font-semibold">Email</th>
                       <th className="px-6 py-4 text-left text-sm font-semibold">Tier</th>
+                      <th className="px-6 py-4 text-left text-sm font-semibold">Interviews</th>
                       <th className="px-6 py-4 text-left text-sm font-semibold">Questions Asked</th>
                       <th className="px-6 py-4 text-left text-sm font-semibold">Types Used</th>
                       <th className="px-6 py-4 text-left text-sm font-semibold">Last Interview</th>
@@ -284,6 +294,7 @@ export default function Analytics() {
                             {user.subscription_tier?.toUpperCase() || 'FREE'}
                           </span>
                         </td>
+                        <td className="px-6 py-4 text-sm text-gray-800 font-semibold">{user.interview_count}</td>
                         <td className="px-6 py-4 text-sm text-gray-800 font-semibold">{user.totalQuestions}</td>
                         <td className="px-6 py-4 text-sm text-gray-600">
                           {user.interviewTypes.length > 0 ? user.interviewTypes.join(', ') : '-'}
