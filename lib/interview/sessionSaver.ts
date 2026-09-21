@@ -24,6 +24,25 @@ export interface SessionRow {
   engine_state?: InterviewState | null
   overall_score?: number | null
   readiness?: string | null
+  /**
+   * The deferred half of an open Practice checkpoint: the already-generated
+   * next question and the post-turn state, held back until the applicant clicks
+   * Continue.
+   *
+   * Persisted because that turn has ALREADY been spent. Without it, refreshing
+   * while a review is on screen loses a question the interview has paid for,
+   * and the only way to rebuild it is another model call. Null clears a
+   * checkpoint that has been consumed.
+   */
+  pending_turn?: PendingTurnPayload | null
+}
+
+/** Mirrors the page's `pendingNext`, which is what it is rebuilt into. */
+export interface PendingTurnPayload {
+  message: ChatMessage
+  state: InterviewState
+  questionAsked: string
+  isFinal: boolean
 }
 
 export interface SessionWriter {
@@ -48,6 +67,12 @@ export interface SessionMeta {
 export interface SessionSnapshot {
   conversation: ChatMessage[]
   state: InterviewState | null
+  /**
+   * Present only while a Practice checkpoint is open. Explicitly null on every
+   * other save, so consuming a checkpoint clears the stored one rather than
+   * leaving a stale question behind for the next resume to find.
+   */
+  pendingTurn?: PendingTurnPayload | null
 }
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
@@ -69,8 +94,15 @@ export interface SaveResult {
  */
 export interface SchemaSupport {
   extendedColumns: boolean
+  /**
+   * Whether `pending_turn` exists yet. Stepped down on its own, BEFORE
+   * extendedColumns, so a deployment that has the engine-state columns but not
+   * this one keeps saving engine_state. Collapsing straight to the base row
+   * would re-open the very defect Phase 0 closed.
+   */
+  pendingTurnColumn: boolean
 }
-export const schemaSupport: SchemaSupport = { extendedColumns: true }
+export const schemaSupport: SchemaSupport = { extendedColumns: true, pendingTurnColumn: true }
 
 /** Postgres "undefined column" and PostgREST's schema-cache equivalent. */
 const MISSING_COLUMN_CODES = new Set(['42703', 'PGRST204'])
@@ -82,7 +114,12 @@ export function isMissingColumnError(error: WriteError | null | undefined): bool
 }
 
 /** Mirrors the page's previous base and extended payloads field for field. */
-export function buildSessionRow(meta: SessionMeta, snapshot: SessionSnapshot, extended: boolean): SessionRow {
+export function buildSessionRow(
+  meta: SessionMeta,
+  snapshot: SessionSnapshot,
+  extended: boolean,
+  pendingTurnColumn: boolean = true
+): SessionRow {
   const { state } = snapshot
   const base: SessionRow = {
     user_id: meta.userId,
@@ -93,13 +130,18 @@ export function buildSessionRow(meta: SessionMeta, snapshot: SessionSnapshot, ex
     reviewed: false,
   }
   if (!extended) return base
-  return {
+  const row: SessionRow = {
     ...base,
     mode: state?.mode ?? meta.mode,
     engine_state: state,
     overall_score: state?.finalReport?.overall_score ?? null,
     readiness: state?.finalReport?.readiness ?? null,
   }
+  // Always written when the column exists, never merely omitted: a checkpoint
+  // that has been consumed has to be erased, and leaving the column untouched
+  // would resume an applicant into a review they already moved past.
+  if (pendingTurnColumn) row.pending_turn = snapshot.pendingTurn ?? null
+  return row
 }
 
 export interface SessionSaverOptions {
@@ -107,6 +149,15 @@ export interface SessionSaverOptions {
   meta: SessionMeta
   /** When the interview started; bounds the duplicate-row lookup. */
   startedAt: Date
+  /**
+   * The row a RESUMED interview is already stored in.
+   *
+   * Supplying it makes the first write an UPDATE instead of an INSERT, which
+   * is what stops resuming from forking one interview into two rows -- and
+   * skips the duplicate-row reconciliation entirely, because there is nothing
+   * unknown about where this interview lives.
+   */
+  existingRowId?: RowId | null
   /** Waits between attempts on a transient failure. */
   retryDelaysMs?: number[]
   sleep?: (ms: number) => Promise<void>
@@ -148,7 +199,7 @@ export function createSessionSaver(opts: SessionSaverOptions): SessionSaver {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
   const since = new Date(opts.startedAt.getTime() - LOOKUP_WINDOW_MS).toISOString()
 
-  let rowId: RowId | null = null
+  let rowId: RowId | null = opts.existingRowId ?? null
   let insertOutcomeUnknown = false
   let latest: SessionSnapshot | null = null
   let written: SessionSnapshot | null = null
@@ -162,7 +213,8 @@ export function createSessionSaver(opts: SessionSaverOptions): SessionSaver {
 
   async function writeOnce(target: SessionSnapshot): Promise<{ ok: boolean; error?: WriteError }> {
     const extended = schema.extendedColumns
-    const row = buildSessionRow(meta, target, extended)
+    const pendingTurnColumn = schema.pendingTurnColumn
+    const row = buildSessionRow(meta, target, extended, pendingTurnColumn)
 
     if (rowId === null && insertOutcomeUnknown) {
       const first = target.conversation[0]?.content
@@ -177,9 +229,16 @@ export function createSessionSaver(opts: SessionSaverOptions): SessionSaver {
     if (rowId === null) {
       const inserted = await writer.insert(row)
       if (inserted.error) {
-        if (extended && isMissingColumnError(inserted.error)) {
-          schema.extendedColumns = false
-          return writeOnce(target)
+        if (isMissingColumnError(inserted.error)) {
+          // Narrowest step first: drop only pending_turn, keep engine_state.
+          if (pendingTurnColumn) {
+            schema.pendingTurnColumn = false
+            return writeOnce(target)
+          }
+          if (extended) {
+            schema.extendedColumns = false
+            return writeOnce(target)
+          }
         }
         insertOutcomeUnknown = true
         return { ok: false, error: inserted.error }
@@ -194,9 +253,15 @@ export function createSessionSaver(opts: SessionSaverOptions): SessionSaver {
 
     const updated = await writer.update(rowId, row)
     if (updated.error) {
-      if (extended && isMissingColumnError(updated.error)) {
-        schema.extendedColumns = false
-        return writeOnce(target)
+      if (isMissingColumnError(updated.error)) {
+        if (pendingTurnColumn) {
+          schema.pendingTurnColumn = false
+          return writeOnce(target)
+        }
+        if (extended) {
+          schema.extendedColumns = false
+          return writeOnce(target)
+        }
       }
       // Includes NO_ROW: an update that matched nothing did not save anything,
       // and saying so beats a silent success. The row id is kept -- inserting

@@ -539,7 +539,19 @@ test('page: a turn is adopted only after readTurnResponse says it is one', () =>
   const start = PAGE.slice(PAGE.indexOf('const startInterview'), PAGE.indexOf('const sendMessage'))
   const startGuard = start.indexOf('if (!outcome.ok) {')
   assert.ok(startGuard > -1)
-  assert.ok(startGuard < start.indexOf('setMessages(convo)'))
   assert.ok(startGuard < start.indexOf('setInterviewCount('))
-  assert.ok(startGuard < start.indexOf('await saveSession(convo'))
+  // Resume moved adoption one step later still: the opening turn is BUFFERED
+  // here and only rendered by finishStart, once the session is saved and its
+  // authorization bound. The guarantee this test protects is unchanged and
+  // strictly stronger -- a failed turn reaches neither the buffer nor the
+  // screen.
+  assert.ok(startGuard < start.indexOf('pendingStartRef.current = { convo, data }'))
+  assert.doesNotMatch(start, /setMessages\(convo\)/, 'Q1 is not rendered inside startInterview')
+  // Activation now lives behind a hard gate: finishStart confirms the binding,
+  // and activateBufferedStart refuses to render anything unless it did.
+  const finish = PAGE.slice(PAGE.indexOf('const finishStart'), PAGE.indexOf('const exitFailedStart'))
+  assert.ok(finish.indexOf('if (!bound) return') < finish.indexOf('boundRef.current = true'))
+  const activator = PAGE.slice(PAGE.indexOf('const activateBufferedStart'), PAGE.indexOf('const finishStart'))
+  assert.ok(activator.indexOf('if (!boundRef.current) return') < activator.indexOf('setMessages(buffered.convo)'),
+    'and it is rendered only after the binding succeeds')
 })

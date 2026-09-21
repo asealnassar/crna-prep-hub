@@ -42,6 +42,21 @@ export type InterviewGrant = {
    * applied; callers treat that as "fall back to the serialized state".
    */
   follow_ups_enabled?: boolean | null
+  /**
+   * The interview_sessions row this grant authorizes, written once by
+   * bindGrantToSession and never changed. Null on every grant issued before
+   * resume existed, which is precisely what makes those interviews
+   * non-resumable without any special-case code.
+   */
+  session_id?: string | null
+  /**
+   * Set when the applicant deliberately gives an interview up. Distinct from
+   * `completed`, which means the interview ran to its final report — an
+   * abandoned interview must not be counted as a finished mock.
+   */
+  abandoned_at?: string | null
+  /** When the server issued this grant. The authority for resume expiry. */
+  created_at?: string
 }
 
 /** Postgres "relation does not exist" — the migration has not been run yet. */
@@ -61,8 +76,10 @@ const MISSING_COLUMN = ['42703', 'PGRST204', 'PGRST116']
 function isMissingColumn(error: any): boolean {
   if (!error) return false
   if (MISSING_COLUMN.includes(error.code)) return true
-  return /follow_ups_enabled/.test(error.message || '')
+  return /follow_ups_enabled|session_id|abandoned_at|pending_turn/.test(error.message || '')
 }
+/** Postgres "unique_violation" — the one-session-one-grant index refused a bind. */
+const UNIQUE_VIOLATION = '23505'
 /** Postgres/PostgREST "function does not exist", same cause. */
 const MISSING_FUNCTION = ['42883', 'PGRST202']
 
@@ -131,10 +148,18 @@ export async function checkGrant(
     admin.from('interview_grants').select(columns).eq('id', grantId).maybeSingle() as unknown as
       Promise<{ data: InterviewGrant | null; error: any }>
 
-  let { data, error } = await select('id, user_id, turns_used, completed, follow_ups_enabled')
+  let { data, error } = await select(
+    'id, user_id, turns_used, completed, follow_ups_enabled, abandoned_at, session_id, created_at'
+  )
 
   if (error && isMissingColumn(error)) {
-    ;({ data, error } = await select('id, user_id, turns_used, completed'))
+    // Resume's columns are not deployed yet. Fall back in the same stepwise way
+    // follow_ups_enabled already does, so the turn route keeps working through
+    // a deploy in either order.
+    ;({ data, error } = await select('id, user_id, turns_used, completed, follow_ups_enabled'))
+    if (error && isMissingColumn(error)) {
+      ;({ data, error } = await select('id, user_id, turns_used, completed'))
+    }
   }
 
   if (error) {
@@ -154,6 +179,13 @@ export async function checkGrant(
   }
   if (data.completed) {
     return { ok: false, status: 403, error: 'This interview is already complete. Start a new one to keep practicing.' }
+  }
+  // An abandoned interview authorizes nothing further. Checked here rather than
+  // only in the resume path, because otherwise a browser holding the old grant
+  // id in memory could keep taking turns in an interview the applicant has
+  // already given up and replaced.
+  if (data.abandoned_at) {
+    return { ok: false, status: 403, error: 'This interview was ended. Start a new one to keep practicing.' }
   }
   if ((data.turns_used ?? 0) >= MAX_TURNS_PER_INTERVIEW) {
     return { ok: false, status: 403, error: 'This interview has reached its maximum length. Please start a new one.' }
@@ -211,4 +243,157 @@ export async function completeGrant(admin: SupabaseClient, grantId: string): Pro
     .update({ completed: true })
     .eq('id', grantId)
   if (error) console.warn('Interview grant completion failed:', error.message)
+}
+
+// ==========================================================================
+// Resume: binding a grant to its session, and finding it again afterwards.
+// ==========================================================================
+
+export type BindResult =
+  | { ok: true; alreadyBound: boolean }
+  | { ok: false; status: number; error: string }
+
+/**
+ * Binds a grant to the interview_sessions row it authorizes. Once.
+ *
+ * This is the whole basis of resume: afterwards the browser never has to hold
+ * or present a grant id again, because the server can find the grant from a
+ * session the applicant demonstrably owns.
+ *
+ * The write is conditional in SQL rather than read-then-write. Checking
+ * session_id in TypeScript and then updating is a time-of-check/time-of-use
+ * race, and the thing being raced is an authorization pointer -- two requests
+ * could otherwise aim one grant at two different transcripts. `is('session_id',
+ * null)` in the WHERE clause means the second writer matches no row.
+ *
+ * Re-binding the SAME pair is deliberately success, not an error: the browser
+ * retries this call, and a retry that lands after the original succeeded must
+ * not look like a failure.
+ */
+export async function bindGrantToSession(
+  admin: SupabaseClient,
+  grantId: string,
+  sessionId: string,
+  userId: string
+): Promise<BindResult> {
+  const denied = {
+    ok: false as const,
+    status: 403,
+    error: 'This interview session is no longer valid. Please start a new interview.',
+  }
+
+  // Ownership of the SESSION is verified here, with the service role, rather
+  // than trusted from the request: RLS protects the browser's own queries, not
+  // an id it puts in a POST body.
+  const { data: session, error: sessionError } = await admin
+    .from('interview_sessions')
+    .select('id, user_id')
+    .eq('id', sessionId)
+    .maybeSingle()
+  if (sessionError) {
+    console.error('Resume bind: session lookup failed:', sessionError.message)
+    return denied
+  }
+  if (!session || session.user_id !== userId) return denied
+
+  const { data, error } = await admin
+    .from('interview_grants')
+    .update({ session_id: sessionId })
+    .eq('id', grantId)
+    .eq('user_id', userId)
+    .is('session_id', null)
+    .select('id')
+
+  if (error) {
+    if (error.code === MISSING_TABLE || isMissingColumn(error)) {
+      // Migration not applied yet. The interview still runs; it simply is not
+      // resumable, which the caller surfaces rather than hides.
+      console.warn('interview_grants.session_id missing — interviews not resumable yet')
+      return { ok: false, status: 503, error: 'Resume is not available yet.' }
+    }
+    // 23505: the partial unique index refused a SECOND grant for this session.
+    // The database is the arbiter here, not the conditional UPDATE above, which
+    // only narrows the race. The caller is told the same thing as any other
+    // refusal -- naming the conflict would confirm that some other grant holds
+    // this session.
+    if (error.code === UNIQUE_VIOLATION) {
+      console.warn('Resume bind refused: session already bound to another grant')
+      return denied
+    }
+    console.error('Resume bind failed:', error.message)
+    return denied
+  }
+
+  if (data && data.length > 0) return { ok: true, alreadyBound: false }
+
+  // No row matched: either already bound, or not this user's grant. Only the
+  // first is acceptable, and only when it points at THIS session.
+  const { data: existing } = await admin
+    .from('interview_grants')
+    .select('id, user_id, session_id')
+    .eq('id', grantId)
+    .maybeSingle()
+
+  if (existing && existing.user_id === userId && existing.session_id === sessionId) {
+    return { ok: true, alreadyBound: true }
+  }
+  return denied
+}
+
+/**
+ * The grant that authorizes a session, or null.
+ *
+ * Takes the session id the applicant owns and returns the server's own record.
+ * The client never names a grant, so it cannot aim one at a transcript it did
+ * not run.
+ */
+export async function findGrantBySession(
+  admin: SupabaseClient,
+  sessionId: string,
+  userId: string
+): Promise<InterviewGrant | null> {
+  const { data, error } = await admin
+    .from('interview_grants')
+    .select('id, user_id, turns_used, completed, follow_ups_enabled, session_id, abandoned_at, created_at')
+    .eq('session_id', sessionId)
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (error) {
+    if (error.code === MISSING_TABLE || isMissingColumn(error)) return null
+    console.error('Resume grant lookup failed:', error.message)
+    return null
+  }
+  return (data as unknown as InterviewGrant) ?? null
+}
+
+/**
+ * Gives an interview up at the applicant's request.
+ *
+ * Sets abandoned_at, NOT completed. An abandoned interview never ran to a final
+ * report, and recording it as complete would corrupt both the report path and
+ * every completion metric. No entitlement is refunded: model calls were already
+ * made, and a refund would make "start, read question one, abandon" a way to
+ * mint free interviews.
+ */
+export async function abandonGrant(
+  admin: SupabaseClient,
+  grantId: string,
+  userId: string
+): Promise<boolean> {
+  const { data, error } = await admin
+    .from('interview_grants')
+    .update({ abandoned_at: new Date().toISOString() })
+    .eq('id', grantId)
+    .eq('user_id', userId)
+    .is('abandoned_at', null)
+    .select('id')
+
+  if (error) {
+    if (error.code === MISSING_TABLE || isMissingColumn(error)) return false
+    console.error('Abandon failed:', error.message)
+    return false
+  }
+  // Already abandoned is success: the applicant asked for a state that holds.
+  return true
 }

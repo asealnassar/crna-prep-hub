@@ -5,11 +5,18 @@ import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
-import type { ChatMessage, InterviewMode, InterviewState, TurnRender } from '@/lib/interview/types'
+import type {
+  ChatMessage,
+  InterviewMode,
+  InterviewState,
+  InterviewTurnResponse,
+  TurnRender,
+} from '@/lib/interview/types'
 import { readTurnResponse, type TurnOutcome } from '@/lib/interview/turnProtocol'
 import {
   createSessionSaver,
   supabaseSessionWriter,
+  type PendingTurnPayload,
   type SaveStatus,
   type SessionSaver,
 } from '@/lib/interview/sessionSaver'
@@ -209,6 +216,7 @@ export default function Interview() {
           setUserTier(profileResult.data.subscription_tier || 'free')
           setInterviewCount(profileResult.data.interview_count || 0)
         }
+        await checkResumable(user.id)
       }
       setPageLoading(false)
     }
@@ -234,12 +242,237 @@ export default function Interview() {
    * a save that did not land. The row it writes has exactly the columns this
    * function always wrote.
    */
-  const saveSession = async (convo: ChatMessage[], state: InterviewState | null) => {
+  const saveSession = async (
+    convo: ChatMessage[],
+    state: InterviewState | null,
+    pendingTurn: PendingTurnPayload | null = null
+  ) => {
     const saver = saverRef.current
     if (!saver || convo.length === 0) return null
-    const result = await saver.save({ conversation: convo, state })
+    const result = await saver.save({ conversation: convo, state, pendingTurn })
     if (result.ok && userId) await loadInterviewHistory(userId)
     return result
+  }
+
+  /**
+   * Links this interview to its session row, server-side. Retried because the
+   * request is idempotent by construction: re-binding the same pair succeeds,
+   * and binding a different one is refused by the database, not by this call.
+   */
+  const bindSession = async (rowId: string, grantId: string | null): Promise<boolean> => {
+    if (!grantId) return false
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch('/api/interview/bind', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ grantId, sessionId: rowId }),
+        })
+        if (res.ok) {
+          setBindFailed(false)
+          return true
+        }
+        // A refusal is final: retrying a 403 cannot turn it into a yes.
+        if (res.status !== 500 && res.status !== 503) break
+      } catch {
+        // Network failure — worth another attempt.
+      }
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 400 * attempt))
+    }
+    setBindFailed(true)
+    return false
+  }
+
+  /**
+   * Asks the server whether the applicant's newest session can be continued.
+   *
+   * Only the newest is considered: an applicant with an interview in progress
+   * has exactly one, and offering a list of half-finished mocks would be a
+   * worse product than offering the obvious one. Every rule is applied on the
+   * server -- this call cannot make something resumable that is not.
+   */
+  const checkResumable = async (uid: string) => {
+    const { data } = await supabase
+      .from('interview_sessions')
+      .select('id')
+      .eq('user_id', uid)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const newest = data?.[0]?.id
+    if (!newest) return
+    try {
+      const res = await fetch(`/api/interview/resume?sessionId=${encodeURIComponent(newest)}`)
+      if (!res.ok) return
+      const body = await res.json()
+      if (body?.resumable && body.summary) {
+        setResumable({ sessionId: newest, ...body.summary })
+      }
+    } catch {
+      // A resume card that fails to appear costs nothing; the applicant can
+      // still start a new interview. Never block the page on this.
+    }
+  }
+
+  /**
+   * Rebuilds an interview from what was persisted. No model call: the question
+   * on screen is the one already generated and already paid for.
+   */
+  const resumeInterview = async () => {
+    if (!resumable || resuming) return
+    setResuming(true)
+    setTurnError('')
+    try {
+      const res = await fetch('/api/interview/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: resumable.sessionId }),
+      })
+      const body = await res.json()
+      if (!res.ok || !body?.resumable) {
+        setResumable(null)
+        setTurnError(body?.message || 'This interview could not be resumed.')
+        return
+      }
+
+      // The saver adopts the existing row, so continuing writes back to the
+      // same interview rather than starting a second one.
+      const saver = userId
+        ? createSessionSaver({
+            writer: supabaseSessionWriter(supabase, userId),
+            meta: {
+              userId,
+              interviewType: body.state.type,
+              customTopic: body.state.customTopic || '',
+              mode: body.state.mode,
+            },
+            startedAt: new Date(),
+            existingRowId: resumable.sessionId,
+            onStatus: (status) => {
+              if (saverRef.current === saver) setSaveStatus(status)
+            },
+          })
+        : null
+      saverRef.current = saver
+      setSaveStatus('idle')
+
+      grantIdRef.current = body.grantId ?? null
+      sessionRowIdRef.current = resumable.sessionId
+      // A resumed interview is bound by definition: the server only returns one
+      // whose grant it resolved THROUGH the binding.
+      boundRef.current = true
+      setInterviewMode(body.state.mode)
+      setInterviewType(body.state.type)
+      setCustomTopic(body.state.customTopic || '')
+      setFollowUpsChoice(body.state.followUpsEnabled)
+      setMessages(body.messages)
+      setEngineState(body.state)
+      setPendingNext(body.pendingTurn ?? null)
+      // Deliberately empty: the previous answer is already in the transcript,
+      // and pre-filling it invites sending the same answer twice.
+      setInput('')
+      setInterviewEnded(false)
+      setResumable(null)
+      setStarted(true)
+    } catch {
+      setTurnError('Could not resume this interview. Please try again.')
+    } finally {
+      setResuming(false)
+    }
+  }
+
+  /**
+   * "Discard and start new". Marks the interview abandoned server-side, which
+   * is explicitly not the same as completing it, and refunds nothing -- the
+   * model calls behind it have already been made.
+   */
+  const discardResumable = async () => {
+    if (!resumable) return
+    const sessionId = resumable.sessionId
+    setResumable(null)
+    try {
+      await fetch(`/api/interview/resume?sessionId=${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+      if (userId) await loadInterviewHistory(userId)
+    } catch {
+      // The card is already gone; a failed abandon only leaves a grant the
+      // applicant will not use, bounded by the same 24-hour window.
+    }
+  }
+
+  /**
+   * The ONE place a buffered opening turn becomes an interactive interview.
+   *
+   * THE INVARIANT: an interactive interview is a bound interview. This function
+   * refuses to activate anything unless boundRef says the server has confirmed
+   * the grant/session link, and it is the only caller of setMessages for a
+   * start -- so there is no second door to walk through. An unbound interview
+   * cannot survive a refresh, and letting someone answer a question that a
+   * refresh would destroy is the whole defect this feature exists to close.
+   */
+  const activateBufferedStart = () => {
+    const buffered = pendingStartRef.current
+    if (!buffered) return
+    // Deliberately not an assertion or a warning: there is no fallback path.
+    // If the binding is not confirmed, the interview does not start.
+    if (!boundRef.current) return
+    pendingStartRef.current = null
+    setMessages(buffered.convo)
+    setEngineState(buffered.data.state)
+    setInitializing(false)
+  }
+
+  /**
+   * Completes a start that has already had its model call: persist, bind, then
+   * activate. Safe to call again -- the saver already owns the row id, so a
+   * retry updates the same row, and re-binding the same pair succeeds.
+   *
+   * Reuses the buffered question, the same grant and the same session row on
+   * every attempt: no second model call, no second grant, no second charge.
+   */
+  const finishStart = async () => {
+    const buffered = pendingStartRef.current
+    if (!buffered) return
+    setTurnError('')
+    setBindFailed(false)
+
+    const saved = await saveSession(buffered.convo, buffered.data.state)
+    if (!saved?.ok || !saved.rowId) {
+      // Still initializing: the question stays buffered and retryable.
+      setBindFailed(true)
+      return
+    }
+    sessionRowIdRef.current = String(saved.rowId)
+
+    const bound = await bindSession(String(saved.rowId), grantIdRef.current)
+    if (!bound) return
+
+    boundRef.current = true
+    activateBufferedStart()
+  }
+
+  /**
+   * Leaves a start that could not be bound, without activating it.
+   *
+   * The entitlement stays spent, because the model call behind it was really
+   * made; this phase deliberately implements no refund. What it does not do is
+   * hand back a question in an interview that cannot be continued or resumed.
+   */
+  const exitFailedStart = () => {
+    pendingStartRef.current = null
+    boundRef.current = false
+    sessionRowIdRef.current = null
+    grantIdRef.current = null
+    saverRef.current = null
+    setInitializing(false)
+    setBindFailed(false)
+    setStarted(false)
+    setSaveStatus('idle')
+    // Accurate about cost: the model call behind this attempt really happened,
+    // so it may already have counted. Claiming otherwise would be a lie the
+    // applicant discovers at their next interview.
+    setTurnError(
+      'We could not finish setting up that interview. It may already count toward your interview usage, and starting a new one below follows the usual limits.'
+    )
+    if (userId) void checkResumable(userId)
   }
 
   /** The applicant's "Retry now" when a save has failed. */
@@ -432,6 +665,54 @@ export default function Interview() {
    * update would flush, and the next turn must already carry it.
    */
   const grantIdRef = useRef<string | null>(null)
+  /** The interview_sessions row this interview is writing to, for binding. */
+  const sessionRowIdRef = useRef<string | null>(null)
+  /**
+   * True when the grant/session link could not be written. The interview still
+   * runs -- it has already been charged -- but it is not safely resumable, and
+   * saying so beats letting a refresh quietly destroy it.
+   */
+  const [bindFailed, setBindFailed] = useState(false)
+  /**
+   * True between the opening model call and a confirmed binding.
+   *
+   * Question 1 already exists at this point -- it is buffered in
+   * pendingStartRef -- but it is not shown, because an interview that is not
+   * yet linked to its authorization cannot survive a refresh, and letting the
+   * applicant answer a question that a refresh would destroy is the gap this
+   * closes.
+   */
+  const [initializing, setInitializing] = useState(false)
+  /**
+   * The opening turn, held while the session is saved and bound.
+   *
+   * Retrying initialization replays only the save and the bind from this
+   * buffer: no second model call, no second grant, no second charge.
+   */
+  const pendingStartRef = useRef<{ convo: ChatMessage[]; data: InterviewTurnResponse } | null>(null)
+  /**
+   * Whether the server has confirmed this interview's grant/session binding.
+   *
+   * The single gate on activateBufferedStart. A ref rather than state because
+   * the check has to be exact at call time, not at the next render.
+   */
+  const boundRef = useRef(false)
+  /**
+   * A resumable interview the server has confirmed, or null. Populated by an
+   * eligibility check on load; the applicant still has to ask for it, because
+   * auto-entering would trap anyone who refreshed to escape a stuck interview
+   * and would have two tabs silently fighting over one transcript.
+   */
+  const [resumable, setResumable] = useState<{
+    sessionId: string
+    mode: InterviewMode
+    type: string
+    customTopic: string
+    primaryQuestionNumber: number
+    maxPrimaryQuestions: number
+    atCheckpoint: boolean
+  } | null>(null)
+  const [resuming, setResuming] = useState(false)
   /**
    * One submit action, at most one turn.
    *
@@ -507,6 +788,10 @@ export default function Interview() {
     setEngineState(null)
     // A new interview never inherits a checkpoint from the previous one.
     setPendingNext(null)
+    setInitializing(false)
+    setBindFailed(false)
+    pendingStartRef.current = null
+    boundRef.current = false
     continueInFlight.current = false
     setInterviewEnded(false)
     setSessionId(Date.now().toString(36) + Math.random().toString(36).substring(2))
@@ -544,8 +829,10 @@ export default function Interview() {
       const data = outcome.data
 
       const convo = [toAssistantMessage(data.render, data.message)]
-      setMessages(convo)
-      setEngineState(data.state)
+      // Question 1 is held HERE, not rendered, until the interview has been
+      // persisted and its authorization bound. Rendering it first would let an
+      // applicant answer a question that a refresh could still destroy.
+      pendingStartRef.current = { convo, data }
       // The server charges the interview and returns the authoritative count;
       // the browser no longer writes interview_count itself. The UI gate below
       // is presentation only — /api/interview enforces the real limit.
@@ -555,7 +842,8 @@ export default function Interview() {
         setInterviewCount(interviewCount + 1)
       }
       if (data.turnKind === 'primary') await saveQuestion(data.questionAsked, interviewType)
-      await saveSession(convo, data.state)
+      setInitializing(true)
+      await finishStart()
     } catch (error) {
       saverRef.current = null
       setStarted(false)
@@ -640,17 +928,22 @@ export default function Interview() {
           : { role: 'assistant', content: turnMessage.content }
 
         const shown = [...newMessages, review]
-        setMessages(shown)
-        setPendingNext({
+        const checkpoint = {
           message: deferred,
           state: data.state,
           questionAsked: data.questionAsked,
           isFinal: data.complete === true,
-        })
+        }
+        setMessages(shown)
+        setPendingNext(checkpoint)
         // Saved as the applicant sees it: the review, and the state the review
         // belongs to. The checkpoint action commits the rest -- including, on
         // the final turn, `complete`.
-        await saveSession(shown, engineState)
+        //
+        // The deferred half goes with it. That turn has already been spent, so
+        // losing it to a refresh would cost the applicant a question they paid
+        // for and could only be rebuilt with another model call.
+        await saveSession(shown, engineState, checkpoint)
         return
       }
 
@@ -705,7 +998,9 @@ export default function Interview() {
         // primary. The final turn asks nothing, so it logs nothing.
         await saveQuestion(next.questionAsked, interviewType)
       }
-      await saveSession(revealed, next.state)
+      // null clears the stored checkpoint: it has been consumed, and a stale
+      // one would resume the applicant into a review they already moved past.
+      await saveSession(revealed, next.state, null)
     } finally {
       continueInFlight.current = false
     }
@@ -824,8 +1119,84 @@ export default function Interview() {
             </div>
           </header>
 
-          {!started ? (
+          {started && initializing ? (
+            // The opening question exists and is buffered, but the interview is
+            // not linked to its authorization yet. Showing Q1 here would invite
+            // an answer that a refresh could still destroy.
+            <div className="rounded-2xl border border-slate-200/80 bg-white p-8 text-center shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+              {bindFailed ? (
+                <>
+                  <p className="text-sm font-bold text-slate-900">We couldn&apos;t finish setting up</p>
+                  <p className="mx-auto mt-2 max-w-md text-sm text-slate-600">
+                    Your first question is ready, but we couldn&apos;t confirm this interview, so it
+                    can&apos;t be started or resumed yet. This attempt may already count toward your
+                    interview usage.
+                  </p>
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      onClick={finishStart}
+                      className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700"
+                    >
+                      Try again
+                    </button>
+                    <button
+                      onClick={exitFailedStart}
+                      className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Back to setup
+                    </button>
+                  </div>
+                  <p className="mx-auto mt-3 max-w-md text-xs text-slate-500">
+                    Trying again reuses this same interview and won&apos;t use another. Starting a new
+                    one from setup follows the usual limits.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-bold text-slate-900">Setting up your interview…</p>
+                  <p className="mt-2 text-sm text-slate-600">Saving your session so you can resume it later.</p>
+                </>
+              )}
+            </div>
+          ) : !started ? (
             <>
+              {resumable && (
+                <div className="mb-6 rounded-2xl border border-violet-200 bg-violet-50/70 p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-bold text-violet-900">Interview in progress</p>
+                      <p className="mt-1 text-sm text-violet-800">
+                        {resumable.customTopic
+                          ? resumable.customTopic
+                          : resumable.type === 'emotional'
+                            ? 'Emotional Intelligence'
+                            : resumable.type.charAt(0).toUpperCase() + resumable.type.slice(1)}
+                        {' · '}
+                        {resumable.mode === 'real' ? 'Real Interview' : 'Practice'}
+                        {' · Question '}
+                        {resumable.primaryQuestionNumber} of {resumable.maxPrimaryQuestions}
+                        {resumable.atCheckpoint ? ' · feedback ready' : ''}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        onClick={resumeInterview}
+                        disabled={resuming}
+                        className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
+                      >
+                        {resuming ? 'Resuming…' : 'Resume'}
+                      </button>
+                      <button
+                        onClick={discardResumable}
+                        disabled={resuming}
+                        className="rounded-xl border border-violet-300 bg-white px-4 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-50 disabled:opacity-60"
+                      >
+                        Discard and start new
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
                 {/* Setup */}
                 <section className="lg:col-span-8">
@@ -1428,6 +1799,26 @@ export default function Interview() {
               </div>
 
               <div className="border-t border-slate-100 p-3 sm:p-4">
+                {bindFailed && (
+                  // The interview runs -- it has already been charged -- but it
+                  // is not safely resumable, and saying so beats letting a
+                  // refresh quietly destroy it.
+                  <div
+                    role="status"
+                    className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:text-sm"
+                  >
+                    <span>This interview may not be recoverable if you refresh. Keep this tab open.</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (sessionRowIdRef.current) bindSession(sessionRowIdRef.current, grantIdRef.current)
+                      }}
+                      className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
                 {saveStatus === 'error' && (
                   // A save that did not land is said out loud. The saver keeps the
                   // newest progress and retries it on the next turn; this is the

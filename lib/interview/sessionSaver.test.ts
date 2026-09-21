@@ -410,7 +410,14 @@ test('the saved row has exactly the columns the page always wrote', () => {
     engine_state: snap.state,
     overall_score: null,
     readiness: null,
+    // Resume added this. Always present when the column exists, and explicitly
+    // null when no checkpoint is open, so consuming one erases the stored copy.
+    pending_turn: null,
   })
+  // Stepping down past pending_turn must not take engine_state with it.
+  const withoutColumn = buildSessionRow(meta, snap, true, false)
+  assert.equal('pending_turn' in withoutColumn, false)
+  assert.deepEqual(withoutColumn.engine_state, snap.state)
 })
 
 test('the Supabase writer maps responses and scopes the lookup to the user', async () => {
@@ -445,8 +452,8 @@ test('page: the permanent downgrade flag is gone and every save goes through the
   assert.doesNotMatch(PAGE, /extendedColumnsAvailable/)
   assert.doesNotMatch(PAGE, /currentSessionId/, 'no row id read from React state')
   assert.match(PAGE, /createSessionSaver\(\{\s*writer: supabaseSessionWriter\(supabase, userId\)/)
-  assert.match(PAGE, /const saveSession = async \(convo: ChatMessage\[\], state: InterviewState \| null\) => \{/)
-  assert.match(PAGE, /await saver\.save\(\{ conversation: convo, state \}\)/)
+  assert.match(PAGE, /const saveSession = async \(\s*convo: ChatMessage\[\],\s*state: InterviewState \| null,\s*pendingTurn: PendingTurnPayload \| null = null,?\s*\) => \{/)
+  assert.match(PAGE, /await saver\.save\(\{ conversation: convo, state, pendingTurn \}\)/)
   assert.doesNotMatch(PAGE, /from\('interview_sessions'\)\s*\.insert\(/, 'no direct inserts left in the page')
   // The one remaining direct write is the history "Reviewed" toggle, which is
   // not interview progress.
