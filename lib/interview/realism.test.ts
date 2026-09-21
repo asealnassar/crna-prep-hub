@@ -11,6 +11,7 @@ import {
   MAX_REPROMPTS,
   MAX_REPROMPTS_PER_INTERVIEW,
   FOLLOW_UP_BUDGET,
+  V2_FOLLOW_UP_BUDGET,
 } from './state.ts'
 import { buildSystemPrompt } from './prompt.ts'
 import { buildTurnSchema } from './schema.ts'
@@ -53,6 +54,7 @@ const turn = (action: TurnAction, over: Partial<ModelTurn> = {}): ModelTurn => (
   question_format: 'scenario',
   concepts_tested: [],
   difficulty_level: 3,
+  follow_up_purpose: null,
   evaluation: null,
   final_report: null,
   internal_note: '',
@@ -543,7 +545,9 @@ test('reprompts never touch the follow-up budget, however many are spent', () =>
   }
   assert.equal(s.repromptBudget, 0)
   assert.equal(s.followUpBudget, startFollowUp, 'follow-up budget untouched')
-  assert.equal(s.maxFollowUpBudget, FOLLOW_UP_BUDGET)
+  // The budget a new interview starts with is policy-dependent; what this test
+  // is about is that reprompts never move it.
+  assert.equal(s.maxFollowUpBudget, V2_FOLLOW_UP_BUDGET)
 })
 
 test('followUpsEnabled=false still permits nudges until the budget runs out', () => {

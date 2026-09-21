@@ -7,6 +7,8 @@ import {
   createInitialState,
   followUpCapFor,
   normalizeState,
+  FOLLOW_UP_BUDGET,
+  MAX_FOLLOW_UPS,
   MAX_PRIMARY_QUESTIONS,
 } from './state.ts'
 import type { InterviewState, ModelTurn, TurnAction } from './types.ts'
@@ -40,10 +42,38 @@ const prompt = strip(PROMPT)
 const newSession = (followUpsEnabled: boolean) =>
   createInitialState({ mode: 'practice', type: 'mixed', followUpsEnabled })
 
+/**
+ * A V1 (pre-Phase-2) session. These tests were written against the legacy
+ * follow-up policy, and that policy still governs every interview that was
+ * already in flight -- so they keep testing it, explicitly, rather than
+ * drifting onto V2 by accident.
+ */
+const legacySession = (followUpsEnabled: boolean): InterviewState => ({
+  ...newSession(followUpsEnabled),
+  followUpPolicyVersion: 1,
+  maxFollowUps: MAX_FOLLOW_UPS,
+  followUpBudget: FOLLOW_UP_BUDGET,
+  maxFollowUpBudget: FOLLOW_UP_BUDGET,
+  followUpPurposes: [],
+  deepDiveUsed: false,
+})
+
 /** A state sitting on primary question `n`, awaiting the applicant's answer. */
 function atQuestion(n: number, followUpsEnabled: boolean, over: Partial<InterviewState> = {}): InterviewState {
   return {
     ...newSession(followUpsEnabled),
+    primaryQuestionNumber: n,
+    currentCategory: 'clinical',
+    currentScenario: `scenario ${n}`,
+    turnKind: 'primary',
+    ...over,
+  }
+}
+
+/** The same, under the legacy V1 policy. */
+function atQuestionV1(n: number, followUpsEnabled: boolean, over: Partial<InterviewState> = {}): InterviewState {
+  return {
+    ...legacySession(followUpsEnabled),
     primaryQuestionNumber: n,
     currentCategory: 'clinical',
     currentScenario: `scenario ${n}`,
@@ -61,6 +91,7 @@ const turn = (action: TurnAction, over: Partial<ModelTurn> = {}): ModelTurn => (
   question_format: 'scenario',
   concepts_tested: [],
   difficulty_level: 2,
+  follow_up_purpose: null,
   evaluation: null,
   final_report: null,
   internal_note: '',
@@ -220,12 +251,13 @@ test('both actions are offered on a Yes turn, so the choice is genuinely the int
 })
 
 test('the existing per-scenario cap and interview budget still bound Yes', () => {
-  assert.ok(!allowedActions(atQuestion(2, true, { followUpBudget: 0 })).includes('ask_follow_up'))
-  const emotional = atQuestion(2, true, { currentCategory: 'emotional' })
-  assert.equal(followUpCapFor(emotional), 2, 'behavioral scenarios still cap lower')
-  const spent = atQuestion(2, true, { currentCategory: 'emotional', followUpCount: 2 })
+  // V1 policy, which still governs every interview that predates Phase 2.
+  assert.ok(!allowedActions(atQuestionV1(2, true, { followUpBudget: 0 })).includes('ask_follow_up'))
+  const emotional = atQuestionV1(2, true, { currentCategory: 'emotional' })
+  assert.equal(followUpCapFor(emotional), 2, 'behavioral scenarios still cap lower under V1')
+  const spent = atQuestionV1(2, true, { currentCategory: 'emotional', followUpCount: 2 })
   assert.ok(!allowedActions(spent).includes('ask_follow_up'))
-  assert.ok(runInterview(true).followUps <= 8, 'never exceeds the interview-wide budget')
+  assert.ok(runInterview(true).followUps <= FOLLOW_UP_BUDGET, 'never exceeds the interview-wide budget')
 })
 
 // -------------------------------- 9-11. primary count and numbering
@@ -261,7 +293,7 @@ test('numbering is identical whichever answer was given at setup', () => {
 // --------------------------------------- 12-14. the session owns the value
 
 test('a restored Yes session stays Yes', () => {
-  const live = applyTurn(atQuestion(3, true), turn('ask_follow_up'))
+  const live = applyTurn(atQuestionV1(3, true), turn('ask_follow_up'))
   const restored = normalizeState(JSON.parse(JSON.stringify(live)), newSession(false))
   assert.equal(restored.followUpsEnabled, true, 'not re-defaulted from the fallback')
   assert.ok(allowedActions(restored).includes('ask_follow_up') || restored.followUpCount >= followUpCapFor(restored))
@@ -377,14 +409,18 @@ test('a malformed followUpsEnabled falls back to the legacy reading', () => {
 // ------------------------------------------------- prompt / doctrine
 
 test('the doctrine returns on Yes turns and is absent on No turns', () => {
-  assert.match(prompt, /if \(!opening && !followUpsOff\) parts\.push\(FOLLOW_UP_DOCTRINE\)/)
+  // Still gated on the same two conditions; which doctrine it pushes now
+  // depends on the session's follow-up policy version.
+  assert.match(prompt, /if \(!opening && !followUpsOff\) \{/)
+  assert.match(prompt, /parts\.push\(FOLLOW_UP_DOCTRINE_V2\)/)
+  assert.match(prompt, /parts\.push\(FOLLOW_UP_DOCTRINE\)/, 'V1 sessions keep the legacy doctrine')
 })
 
 test('a No interview is never asked to reason about follow-ups', () => {
   assert.match(prompt, /const followUpsOff = !state\.followUpsEnabled/)
   assert.match(prompt, /if \(!ctx\.followUpsOff\) \{/, 'the ask_follow_up menu entry is conditional')
   assert.match(PROMPT, /This interview has no follow-up questions\./)
-  assert.match(prompt, /followUpsOff \? 'Subsequent primary questions are how you climb/,
+  assert.match(prompt, /followUpsOff \|\| v2\s*\n?\s*\? 'Subsequent primary questions are how you climb/,
     'the difficulty ladder stops citing follow-ups when there are none')
 })
 

@@ -9,7 +9,7 @@ import {
   isOpeningTurn,
   normalizeState,
 } from '@/lib/interview/state'
-import { ALL_FORMATS } from '@/lib/interview/types'
+import { ALL_FORMATS, FOLLOW_UP_PURPOSES } from '@/lib/interview/types'
 import { buildModelInput } from '@/lib/interview/modelInput'
 import { TurnTimeoutError, turnFailureBody } from '@/lib/interview/turnProtocol'
 import { authenticateRequest } from '@/lib/apiAuth'
@@ -25,7 +25,14 @@ import {
   createGrant,
   reserveTurn,
 } from '@/lib/interviewSession'
-import type { InterviewState, ModelTurn, QuestionFormat, TurnAction, TurnRender } from '@/lib/interview/types'
+import type {
+  FollowUpPurpose,
+  InterviewState,
+  ModelTurn,
+  QuestionFormat,
+  TurnAction,
+  TurnRender,
+} from '@/lib/interview/types'
 
 export const maxDuration = 60
 
@@ -397,6 +404,10 @@ function coerceTurn(parsed: any, state: InterviewState): ModelTurn {
       ? parsed.category
       : state.currentCategory || 'clinical',
     question_format: coerceFormat(parsed?.question_format),
+    // Meaningful only on a follow-up. applyTurn is what validates it against
+    // the scenario's category and records 'unspecified' when it does not fit,
+    // so a wrong value here can never reach the state as a real purpose.
+    follow_up_purpose: action === 'ask_follow_up' ? coercePurpose(parsed?.follow_up_purpose) : null,
     concepts_tested: Array.isArray(parsed?.concepts_tested) ? parsed.concepts_tested : [],
     difficulty_level: parsed?.difficulty_level ?? state.suggestedDifficulty,
     // An evaluation only counts on a turn that actually closes a scenario. A
@@ -421,6 +432,9 @@ function degradedTurn(raw: string, state: InterviewState): ModelTurn {
     question_format: 'none',
     concepts_tested: [],
     difficulty_level: state.suggestedDifficulty,
+    // A degraded turn is plain text with no declared purpose; applyTurn records
+    // 'unspecified' if it happens to land on a follow-up action.
+    follow_up_purpose: null,
     evaluation: null,
     final_report: null,
     internal_note: 'degraded plain-text turn',
@@ -429,6 +443,10 @@ function degradedTurn(raw: string, state: InterviewState): ModelTurn {
 
 function coerceFormat(value: any): QuestionFormat {
   return ALL_FORMATS.includes(value) ? value : 'none'
+}
+
+function coercePurpose(value: any): FollowUpPurpose | null {
+  return (FOLLOW_UP_PURPOSES as readonly string[]).includes(value) ? (value as FollowUpPurpose) : null
 }
 
 function defaultAction(permitted: TurnAction[]): TurnAction {

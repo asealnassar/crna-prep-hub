@@ -1,6 +1,6 @@
 import type { InterviewState, TurnAction } from './types.ts'
 import { ALL_FORMATS } from './types.ts'
-import { allowedActions, isOpeningTurn } from './state.ts'
+import { allowedActions, isOpeningTurn, purposesFor } from './state.ts'
 
 const scoreField = { type: 'number', description: '0 to 10' }
 
@@ -183,6 +183,19 @@ export function buildTurnSchema(state: InterviewState) {
       ? { anyOf: [finalReportObject, { type: 'null' }] }
       : { type: 'null' }
 
+  // Policy V2 makes the follow-up's PURPOSE part of the contract. The enum is
+  // narrowed to the purposes valid for this scenario's category, so a clinical
+  // scenario structurally cannot come back with REFLECTION and a behavioral one
+  // cannot come back with MECHANISM -- the same technique that enforces the
+  // action caps. When a follow-up is not on the table the field types as null,
+  // which keeps it meaningless everywhere except where it means something.
+  //
+  // V1 sessions never see the field at all: their schema is untouched.
+  const v2 = state.followUpPolicyVersion === 2
+  const purposeSchema = actions.includes('ask_follow_up')
+    ? { anyOf: [{ type: 'string', enum: purposesFor(state) }, { type: 'null' }] }
+    : { type: 'null' }
+
   return {
     name: 'crna_interview_turn',
     strict: true,
@@ -198,6 +211,7 @@ export function buildTurnSchema(state: InterviewState) {
         'question_format',
         'concepts_tested',
         'difficulty_level',
+        ...(v2 ? ['follow_up_purpose'] : []),
         'evaluation',
         'final_report',
         'internal_note',
@@ -232,6 +246,15 @@ export function buildTurnSchema(state: InterviewState) {
           description: 'Underlying concepts this turn probes, used to prevent repeats later.',
         },
         difficulty_level: { type: 'integer', enum: [1, 2, 3, 4, 5] },
+        ...(v2
+          ? {
+              follow_up_purpose: {
+                ...purposeSchema,
+                description:
+                  'Why this follow-up is being asked. Required when action is ask_follow_up; null on every other action.',
+              },
+            }
+          : {}),
         evaluation: evaluationSchema,
         final_report: finalReportSchema,
         internal_note: {

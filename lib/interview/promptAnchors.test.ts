@@ -364,8 +364,11 @@ test('Mixed sequencing and balance language is untouched by Phase 1', () => {
 // 5. Phase 1 touched anchors only — follow-ups, length and counters stand
 // ==========================================================================
 
-test('follow-up doctrine is unchanged', () => {
-  const p = promptFor(state({ primaryQuestionNumber: 3, turnKind: 'primary' }))
+test('follow-up doctrine is unchanged for a legacy V1 session', () => {
+  // Phase 2 introduced a second doctrine. V1 interviews -- everything already
+  // in flight when it shipped -- must still receive the original text, so this
+  // test now pins it against an explicitly V1 state.
+  const p = promptFor(state({ primaryQuestionNumber: 3, turnKind: 'primary', followUpPolicyVersion: 1 }))
   assert.match(p, /Moving to the next question is the DEFAULT after any answer, in every category/)
   assert.match(p, /A follow-up is something you spend, not something you owe/)
   assert.match(p, /Clinical and technical scenarios allow up to three/)
@@ -377,8 +380,8 @@ test('follow-up doctrine is unchanged', () => {
   assert.match(p, /"What would you expect that to do to preload\?"/)
 })
 
-test('the EI follow-up gates and probes are unchanged', () => {
-  const p = promptFor(state({ type: 'emotional' }))
+test('the EI follow-up gates and probes are unchanged for a legacy V1 session', () => {
+  const p = promptFor(state({ type: 'emotional', followUpPolicyVersion: 1 }))
   assert.match(p, /Follow-ups here are optional and capped at two, and the default is to move on/)
   assert.match(p, /Only follow up when one of the four gates in the follow-up doctrine is actually failed/)
   assert.match(

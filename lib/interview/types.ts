@@ -121,6 +121,51 @@ export const FORMAT_LABELS: Record<QuestionFormat, string> = {
  */
 export type TurnAction = 'ask_follow_up' | 'next_primary' | 'final_report' | 'reprompt_current'
 
+/**
+ * Which follow-up policy an interview runs under. Fixed for the life of a
+ * session: a state that predates the field reads as 1, and nothing promotes an
+ * interview from 1 to 2 mid-flight.
+ *
+ * 1 — legacy: budget 8, caps 3/2, no unlock schedule, no declared purpose.
+ * 2 — Phase 2: budget 5, caps 2/1, progressive unlock, one deep dive, and a
+ *     purpose declared on every follow-up.
+ */
+export type FollowUpPolicyVersion = 1 | 2
+
+/**
+ * Why a follow-up is being asked. Declared by the model and recorded by the
+ * server, so follow-up DIRECTION is auditable rather than inferred from text.
+ *
+ * MECHANISM is clinical-only and REFLECTION is behavioral-only; the response
+ * schema narrows the enum by the scenario's category so the wrong one cannot
+ * be returned in the first place.
+ */
+export const FOLLOW_UP_PURPOSES = [
+  'clarify',
+  'rationale',
+  'mechanism',
+  'challenge',
+  'reflection',
+] as const
+
+export type FollowUpPurpose = (typeof FOLLOW_UP_PURPOSES)[number]
+
+/** Purposes valid for a clinical or custom-technical scenario. */
+export const CLINICAL_PURPOSES: FollowUpPurpose[] = ['clarify', 'rationale', 'mechanism', 'challenge']
+/** Purposes valid for an emotional or behavioral scenario. */
+export const BEHAVIORAL_PURPOSES: FollowUpPurpose[] = ['clarify', 'rationale', 'challenge', 'reflection']
+
+/**
+ * What actually gets stored in the history.
+ *
+ * A follow-up whose declared purpose was missing or invalid still records an
+ * entry, as 'unspecified'. Recording nothing would silently shift the history
+ * and let the second-follow-up gate read the PREVIOUS scenario's purpose; an
+ * explicit placeholder fails closed instead, because 'unspecified' is not one
+ * of the two purposes that earn a deep dive.
+ */
+export type RecordedPurpose = FollowUpPurpose | 'unspecified'
+
 
 export type TurnKind = 'opening' | 'primary' | 'follow_up' | 'final_report' | 'reprompt'
 
@@ -218,6 +263,22 @@ export interface InterviewState {
    * normalizeState for how they are read back.
    */
   followUpsEnabled: boolean
+  /**
+   * Which follow-up policy this interview runs under. Missing on every state
+   * written before Phase 2, which is exactly why absence means 1.
+   */
+  followUpPolicyVersion: FollowUpPolicyVersion
+  /**
+   * Purpose of each follow-up asked so far, oldest first, one entry per
+   * follow-up. V2 only. Feeds the repetition guidance in the prompt, and its
+   * last entry is what the second-follow-up gate reads.
+   */
+  followUpPurposes: RecordedPurpose[]
+  /**
+   * True once some scenario in this interview has taken a second follow-up.
+   * V2 allows exactly one deep dive per interview.
+   */
+  deepDiveUsed: boolean
   /** 0 before the first question has been asked, then 1..maxPrimaryQuestions. */
   primaryQuestionNumber: number
   maxPrimaryQuestions: number
@@ -274,6 +335,12 @@ export interface ModelTurn {
   question_format: QuestionFormat
   concepts_tested: string[]
   difficulty_level: DifficultyLevel
+  /**
+   * Meaningful only when action is 'ask_follow_up', and only under policy V2.
+   * Null on every other turn — the schema types it as null outright when a
+   * follow-up is not on the table this turn.
+   */
+  follow_up_purpose: FollowUpPurpose | null
   evaluation: ScenarioEvaluation | null
   final_report: FinalReport | null
   internal_note: string
