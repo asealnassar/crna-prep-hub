@@ -579,9 +579,13 @@ test('what is persisted matches what the applicant has seen', () => {
   // question that was never shown.
   // (The row id is no longer passed in: the interview's saver owns it.)
   const send = page.slice(page.indexOf('const sendMessage = async'), page.indexOf('const advanceFromCheckpoint'))
-  assert.match(send, /await saveSession\(shown, engineState\)/)
+  // The third argument is the deferred half, persisted so a refresh at this
+  // checkpoint does not lose a question the interview has already paid for.
+  assert.match(send, /await saveSession\(shown, engineState, checkpoint\)/)
   const cont = page.slice(page.indexOf('const advanceFromCheckpoint'), page.indexOf('const resetInterview'))
-  assert.match(cont, /await saveSession\(revealed, next\.state\)/)
+  // null clears the stored checkpoint: it has been consumed, so a later resume
+  // must not drop the applicant back into a review they already moved past.
+  assert.match(cont, /await saveSession\(revealed, next\.state, null\)/)
 })
 
 test('completed historical interviews still render', () => {
