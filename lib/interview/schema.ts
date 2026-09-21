@@ -217,7 +217,7 @@ export function buildTurnSchema(state: InterviewState) {
         scenario_label: {
           type: 'string',
           description:
-            'Short internal label for the scenario your question belongs to, e.g. "septic shock pressor choice". On next_primary this labels the NEW scenario you are opening.',
+            'Short internal label for the scenario your question belongs to — a few words naming the problem, not the question itself. On next_primary this labels the NEW scenario you are opening.',
         },
         category: { type: 'string', enum: ['clinical', 'emotional', 'behavioral', 'custom'] },
         question_format: {
