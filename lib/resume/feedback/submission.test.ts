@@ -24,7 +24,9 @@ const source = (path: string) =>
 const button = () => source('../../../app/resume-studio/components/feedback/FeedbackButton.tsx')
 const dashboard = () => source('../../../app/resume-studio/components/dashboard/DashboardClient.tsx')
 const studio = () => source('../../../app/resume-studio/components/studio/StudioClient.tsx')
-const analytics = () => source('../../../app/admin/analytics/page.tsx')
+// The feedback queue moved out of the analytics page and into its own panel
+// when the dashboard was rebuilt. Same table, same filter, same helpers.
+const analytics = () => source('../../../app/admin/analytics/components/Queues.tsx')
 const v1Page = () => source('../../../app/feedback/page.tsx')
 
 const dialog = (open = true) =>

@@ -14,6 +14,7 @@ import { countInterviewsByUser } from './interviewCounts.ts'
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8')
 const PAGE = read('../../app/admin/analytics/page.tsx')
 const API = read('../../app/api/admin/analytics/route.ts')
+const MEMBERS = read('../analytics/server/userActivity.ts')
 
 /** What one finished interview leaves behind in the two tables. */
 function interview(userId: string, primaryQuestions: number) {
@@ -50,12 +51,19 @@ test('users are counted separately, and a row without a user counts for no one',
   assert.deepEqual(countInterviewsByUser([]), {})
 })
 
-test('the admin page reads interviews from the server count, never from question rows', () => {
+test('the member list counts authorised interviews, never question rows', () => {
+  // The rebuilt dashboard moved this out of the page: the browser no longer
+  // joins accounts to question rows at all. The count is made on the server in
+  // lib/analytics/server/userActivity.ts, from interview_grants, and the page
+  // renders what it is given. The invariant is unchanged, so the guard follows
+  // it rather than disappearing with the old markup.
   assert.doesNotMatch(PAGE, /interview_count:\s*userQuestions\.length/)
-  assert.match(PAGE, /interview_count: interviewsByUser\[authUser\.id\] \?\? 0/)
-  assert.match(PAGE, /<th className="px-6 py-4 text-left text-sm font-semibold">Interviews<\/th>/)
-  // The question count is still shown, under its own, accurate name.
-  assert.match(PAGE, />Questions Asked<\/th>/)
+  assert.doesNotMatch(PAGE, /from\('user_asked_questions'\)/, 'the page reads no question rows')
+
+  assert.match(MEMBERS, /rows<GrantRow>\('interview_grants'/, 'interviews come from grants')
+  assert.match(MEMBERS, /interviewsStarted/)
+  assert.match(MEMBERS, /if \(state === 'voided'\) continue/, 'a voided grant was never an interview')
+  assert.doesNotMatch(MEMBERS, /user_asked_questions/, 'and never from question rows')
 })
 
 test('the API counts one interview per session row, ordered, after the admin check', () => {
