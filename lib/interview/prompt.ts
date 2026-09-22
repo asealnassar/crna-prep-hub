@@ -5,6 +5,7 @@ import {
   followUpsSpent,
   followUpsUnlocked,
   isOpeningTurn,
+  isQuick,
   unusedClinicalFormats,
   unusedEmotionalFormats,
   MAX_REPROMPTS,
@@ -246,7 +247,9 @@ ${QUESTION_STYLE}`)
   parts.push(`=== GROUNDING ===
 ${GROUNDING}`)
 
-  if (actions.includes('final_report')) parts.push(FINAL_REPORT_RULES)
+  if (actions.includes('final_report')) {
+    parts.push(isQuick(state) ? `${FINAL_REPORT_RULES}\n${QUICK_REPORT_RULE}` : FINAL_REPORT_RULES)
+  }
 
   return parts.join('\n\n')
 }
@@ -535,7 +538,9 @@ Aim for a roughly balanced split across the ${state.maxPrimaryQuestions} primary
 Never announce or hint at the category of what is coming next.
 ${
   state.followUpPolicyVersion === 2
-    ? `The follow-up ceiling moves with the category: at most two on a clinical scenario and at most one on a behavioral one, and none at all when the answer is already complete. Across the whole interview no more than about three of your follow-ups should land on clinical scenarios — clinical questions invite probing more readily, and left alone they absorb the entire budget.`
+    ? isQuick(state)
+      ? `In this Quick Mock the follow-up ceiling is one per scenario, clinical or behavioral alike, and none at all when the answer is already complete.`
+      : `The follow-up ceiling moves with the category: at most two on a clinical scenario and at most one on a behavioral one, and none at all when the answer is already complete. Across the whole interview no more than about three of your follow-ups should land on clinical scenarios — clinical questions invite probing more readily, and left alone they absorb the entire budget.`
     : `The follow-up ceiling moves with the category: up to three on a clinical scenario, at most two on a behavioral one, and none at all when the answer is already complete.`
 }
 Score each scenario with the rubric matching ITS category: clinical scenarios use the clinical sub-scores, behavioral ones use the emotional sub-scores.
@@ -577,6 +582,12 @@ When you choose "final_report":
 - readiness is an honest calibration of where they stand today. Never predict an admissions outcome, never guarantee or rule out acceptance, and never comment on their chances at a specific program.`
 
 /**
+ * Quick Mock only. The scoring rules are the same ones Full uses; this only
+ * keeps a five-question report from speaking for areas it never tested.
+ */
+const QUICK_REPORT_RULE = `- This was a Quick Mock: five primary questions. Score every scenario and every report field exactly as you would in a full interview — a shorter interview is not a reason to score higher or lower. In the summary, say plainly that the assessment rests on five questions, and do not generalise to areas the interview did not reach.`
+
+/**
  * V2 pacing block. States the unlock schedule, the purposes already spent and
  * whether the interview's one deep dive is still available — the three things
  * the doctrine reasons about that the model cannot see from the transcript.
@@ -596,9 +607,11 @@ function followUpPacing(state: InterviewState): string {
     `Follow-up purposes used so far: ${used.length ? countPurposes(used) : '(none)'}`
   )
   lines.push(
-    state.deepDiveUsed
-      ? 'The one deep dive for this interview is spent: no scenario may take a second follow-up now.'
-      : 'The one deep dive for this interview is still available: at most one scenario may take a second follow-up.'
+    isQuick(state)
+      ? 'This is a Quick Mock: there is no deep dive, and every scenario — a patient deep dive included — takes at most one follow-up.'
+      : state.deepDiveUsed
+        ? 'The one deep dive for this interview is spent: no scenario may take a second follow-up now.'
+        : 'The one deep dive for this interview is still available: at most one scenario may take a second follow-up.'
   )
   return lines.join('\n')
 }

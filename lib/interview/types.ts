@@ -371,6 +371,12 @@ export interface ChatMessage {
   withheldReviews?: ScenarioEvaluation[]
   finalReport?: FinalReport | null
   allEvaluations?: ScenarioEvaluation[]
+  /**
+   * On the message that carries the final report: how many primary questions
+   * the interview had, 5 (Quick) or 10 (Full). Absent on reports saved before
+   * Phase 3, which were all Full.
+   */
+  interviewLength?: number
 }
 
 /** Response shape returned by POST /api/interview. */

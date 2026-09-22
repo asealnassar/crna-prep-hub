@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { authenticateRequest, isAdminEmail } from '@/lib/apiAuth'
+import { countInterviewsByUser } from '@/lib/admin/interviewCounts'
 
 /**
  * Aggregate counts for the admin analytics dashboard.
@@ -10,8 +11,9 @@ import { authenticateRequest, isAdminEmail } from '@/lib/apiAuth'
  * displayed exactly 1000 against a true 3,842, and "Used Interview" counted
  * only the 69 distinct users inside that truncated page rather than 250.
  *
- * Everything is counted here instead. Nothing but four integers is returned —
- * no user rows, no profiles, no question rows, no emails.
+ * Everything is counted here instead. Four integers are returned, plus one
+ * interview count per user id -- no profiles, no question rows, no session
+ * content, no emails.
  */
 
 /** Rows per page for the one metric that cannot be answered by a head count. */
@@ -84,13 +86,34 @@ export async function GET() {
       if (rows.length < PAGE) break
     }
 
+    // ---- Interviews per user. One interview_sessions row is one interview,
+    //      however many questions it asked (lib/admin/interviewCounts.ts). The
+    //      table used to count question rows as interviews. Counted here, with
+    //      the service role, because a browser can only read its own sessions;
+    //      ordered, so paging cannot skip or repeat a row between pages.
+    const sessionRows: { user_id: string | null }[] = []
+    let sessionPages = 0
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await admin
+        .from('interview_sessions')
+        .select('user_id')
+        .order('id')
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(`interview sessions page failed: ${error.message}`)
+      const rows = data ?? []
+      sessionPages++
+      sessionRows.push(...rows)
+      if (rows.length < PAGE) break
+    }
+
     return NextResponse.json({
       totalUsers,
       usedInterview: seen.size,
       ultimateMembers,
       questionsAsked,
+      interviewsByUser: countInterviewsByUser(sessionRows),
       // Diagnostic only, so a future truncation is visible rather than silent.
-      meta: { distinctUserPages: pages, pageSize: PAGE },
+      meta: { distinctUserPages: pages, sessionPages, pageSize: PAGE },
     })
   } catch (error) {
     console.error('Analytics error:', error)

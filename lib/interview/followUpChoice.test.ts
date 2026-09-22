@@ -508,8 +508,10 @@ test('the client sends the choice unchanged, including null', () => {
 
 test('createGrant writes the chosen value onto the grant row', () => {
   assert.match(session, /follow_ups_enabled: followUpsEnabled/)
-  assert.match(session, /followUpsEnabled: boolean\n\): Promise<string \| null>/, 'required, not optional')
-  assert.match(route, /createGrant\(\s*admin,\s*auth\.userId,\s*nextState\.mode,\s*nextState\.type,\s*nextState\.followUpsEnabled\s*\)/)
+  // Phase 3 adds the interview length as the last argument; the follow-up
+  // choice before it is still required, never optional or defaulted.
+  assert.match(session, /followUpsEnabled: boolean,\n\s*maxPrimaryQuestions: InterviewLength\n\): Promise<GrantCreation>/, 'required, not optional')
+  assert.match(route, /createGrant\(\s*admin,\s*auth\.userId,\s*nextState\.mode,\s*nextState\.type,\s*nextState\.followUpsEnabled,/)
 })
 
 test('checkGrant reads the column back on every continuation', () => {
@@ -623,9 +625,11 @@ test('a completed historical session still renders and stays closed', () => {
 test('the grant layer works before and after the migration', () => {
   assert.match(session, /const MISSING_COLUMN = \['42703', 'PGRST204', 'PGRST116'\]/)
   assert.match(session, /if \(error && isMissingColumn\(error\)\) \{/)
-  // INSERT retries without the column...
-  assert.match(session, /const \{ follow_ups_enabled, \.\.\.legacy \} = row/)
-  // ...and so does SELECT.
+  // Phase 3: INSERT no longer retries without a column. A new grant is written
+  // with every column the server owns -- this choice and the interview length
+  // -- or the interview does not start (lib/interview/interviewLength.test.ts).
+  assert.doesNotMatch(session, /\.\.\.legacy \} = row/)
+  // SELECT still falls back, so grants written before a migration stay readable.
   assert.match(session, /select\('id, user_id, turns_used, completed'\)/)
 })
 
