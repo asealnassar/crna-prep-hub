@@ -33,6 +33,12 @@ import { Card, EmptyState, SectionTitle, Skeleton } from './components/primitive
 const ADMIN_EMAIL = 'asealnassar@gmail.com'
 
 const GROUP_TITLES: Record<string, { title: string; detail?: string }> = {
+  headline: { title: 'Revenue', detail: 'From Stripe payments, not membership counts. One-time purchases, so there is no recurring revenue.' },
+  todate: { title: 'Today, this week, this month' },
+  lifetime: { title: 'All time' },
+  conversion: { title: 'Free to paid' },
+  discounts: { title: 'Discounts and refunds' },
+  membership: { title: 'Membership access' },
   interviews: { title: 'Mock interviews', detail: 'One interview is one authorised mock, whatever its length.' },
   gpa: { title: 'GPA Analyzer' },
   resume: { title: 'Resume Builder' },
@@ -42,7 +48,10 @@ const GROUP_TITLES: Record<string, { title: string; detail?: string }> = {
   health: { title: 'Operational health' },
 }
 
-const GROUP_ORDER = ['interviews', 'gpa', 'resume', 'statement', 'schools', 'queues', 'health']
+const GROUP_ORDER = [
+  'headline', 'todate', 'lifetime', 'conversion', 'discounts', 'membership',
+  'interviews', 'gpa', 'resume', 'statement', 'schools', 'queues', 'health',
+]
 
 export default function AnalyticsPage() {
   const router = useRouter()
@@ -115,6 +124,8 @@ export default function AnalyticsPage() {
         params.set('from', range.from)
         params.set('to', range.to)
       }
+      // Revenue caches Stripe for a few minutes; Refresh means go and look again.
+      if (force) params.set('refresh', '1')
 
       try {
         const response = await fetch(`/api/admin/analytics/${tab}?${params.toString()}`)

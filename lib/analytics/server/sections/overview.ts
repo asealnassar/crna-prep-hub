@@ -1,6 +1,8 @@
 import { bucketKeys, bucketLabel, bucketOf, dayKey, within, type ResolvedRange } from '../../range'
 import { countByBucket, cumulative, distinctByBucket, distinctSet, percent } from '../../aggregate'
 import { notTracked, type Breakdown, type Funnel, type Metric, type SectionPayload, type Series } from '../../types'
+import { buildRevenueReport } from '../../../billing/revenue'
+import { fetchStripeSnapshot, stripeConfigured } from '../../../billing/stripeSource'
 import { loadActivity } from '../activity'
 import { TIER_LABELS, loadProfiles } from '../profiles'
 import type { AuthUserRow, Reader } from '../reader'
@@ -10,9 +12,13 @@ import type { AuthUserRow, Reader } from '../reader'
  *
  * Registrations and membership are real and complete — they come from
  * auth.users and user_profiles, which have existed for the life of the site.
- * Activity is a lower bound, and money is not here at all: no purchase is
- * recorded in this database, so revenue and paid conversion are marked as
- * needing the Stripe integration rather than estimated from tiers.
+ * Activity is a lower bound: nothing records a page view, so a member who
+ * reads without writing a row is invisible.
+ *
+ * Money comes from Stripe and only from Stripe. Membership tiers are access,
+ * and access is also granted by hand, so counting tiers as sales would invent
+ * revenue nobody paid. When Stripe cannot be reached the money figures say so
+ * rather than falling back to a tier count.
  */
 export async function buildOverview(reader: Reader, range: ResolvedRange): Promise<SectionPayload> {
   const started = Date.now()
@@ -22,10 +28,11 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
   // One activity read covers this window and the one it is compared against.
   const unionFrom = range.comparison?.from ?? range.from
 
-  const [users, profiles, activity] = await Promise.all([
+  const [users, profiles, activity, snapshot] = await Promise.all([
     reader.authUsers(),
     loadProfiles(reader),
     loadActivity(reader, { from: unionFrom, to: range.to }),
+    stripeConfigured() ? fetchStripeSnapshot() : Promise.resolve(null),
   ])
 
   if (!users.ok) failed.push({ source: 'auth.users', reason: users.detail })
@@ -43,6 +50,20 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
   const registered = accounts.filter((user) => inWindow(user.created_at)).length
   const registeredBefore = range.comparison ? accounts.filter((user) => inComparison(user.created_at)).length : null
   const confirmed = accounts.filter((user) => inWindow(user.created_at) && user.email_confirmed_at).length
+
+  // Money comes from Stripe, never from membership tiers.
+  const revenue = snapshot
+    ? buildRevenueReport(
+        snapshot,
+        { from: range.from, to: range.to, bucket: range.bucket, timezone: range.timezone, comparison: range.comparison },
+        accounts.map((user) => ({ email: user.email, createdAt: user.created_at }))
+      )
+    : null
+  if (snapshot) {
+    for (const warning of snapshot.warnings) failed.push({ source: 'Stripe', reason: warning })
+  } else if (stripeConfigured()) {
+    failed.push({ source: 'Stripe', reason: 'Stripe could not be reached, so revenue is unavailable rather than zero.' })
+  }
 
   const eventsInWindow = activity.events.filter((event) => within(event.at, range.from, range.to))
   const eventsInComparison = range.comparison
@@ -143,18 +164,40 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
       note: 'Paid tiers as a share of all profiles. Free upgrades are included, so this is not the purchase conversion rate.',
       source: { label: 'user_profiles.subscription_tier' },
     },
-    notTracked(
-      'revenue',
-      'Revenue',
-      'No purchase is recorded in this database — the Stripe webhook only sets a tier. Needs the Stripe integration.',
-      'currency'
-    ),
-    notTracked(
-      'paid_conversion',
-      'Free to paid conversion',
-      'Requires payments from Stripe matched to accounts. Tier counts cannot stand in: they include comped upgrades.',
-      'percent'
-    ),
+    revenue
+      ? {
+          id: 'revenue',
+          label: 'Net revenue',
+          value: revenue.net / 100,
+          previous: revenue.previous ? revenue.previous.net / 100 : null,
+          unit: 'currency' as const,
+          status: 'ok' as const,
+          note: `Payments in this window less refunds issued in it, from Stripe. ${revenue.currency.toUpperCase()}, ${revenue.mode} mode.`,
+          source: { label: 'Stripe charges' },
+          spark: revenue.series.gross.map((cents) => cents / 100),
+        }
+      : notTracked(
+          'revenue',
+          'Net revenue',
+          'Stripe is not configured in this environment, so no payment can be read.',
+          'currency'
+        ),
+    revenue
+      ? {
+          id: 'paid_conversion',
+          label: 'Free to paid conversion',
+          value: revenue.conversion.rate,
+          unit: 'percent' as const,
+          status: revenue.conversion.unmatchedPayers > 0 ? ('partial' as const) : ('ok' as const),
+          note: `${revenue.conversion.payingAccounts} of ${revenue.conversion.accounts} accounts have ever paid, matched to Stripe by email.`,
+          source: { label: 'Stripe charges + auth.users' },
+        }
+      : notTracked(
+          'paid_conversion',
+          'Free to paid conversion',
+          'Needs payments from Stripe matched to accounts.',
+          'percent'
+        ),
   ]
 
   const series: Series[] = [
@@ -242,11 +285,21 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
         {
           id: 'checkout',
           label: 'Started checkout',
-          value: null,
-          status: 'not_tracked',
-          note: 'Checkout sessions live in Stripe and are not mirrored here yet.',
+          value: snapshot
+            ? snapshot.checkouts.filter((checkout) => within(checkout.createdAt, range.from, range.to)).length
+            : null,
+          status: snapshot ? 'ok' : 'not_tracked',
+          note: snapshot
+            ? 'Stripe checkout sessions created in this window.'
+            : 'Stripe is not configured in this environment.',
         },
-        { id: 'paid', label: 'Paid', value: null, status: 'not_tracked', note: 'Needs the Stripe integration.' },
+        {
+          id: 'paid',
+          label: 'Paid',
+          value: revenue ? revenue.orders : null,
+          status: revenue ? 'ok' : 'not_tracked',
+          note: revenue ? 'Successful payments in this window, from Stripe.' : 'Needs Stripe.',
+        },
       ],
     },
   ]

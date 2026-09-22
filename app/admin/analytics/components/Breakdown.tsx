@@ -1,6 +1,6 @@
 'use client'
 
-import { formatNumber, formatPercent } from '@/lib/analytics/format'
+import { formatNumber, formatPercent, formatValue } from '@/lib/analytics/format'
 import type { Breakdown as BreakdownData, Funnel } from '@/lib/analytics/types'
 import { CHART_COLORS, Card, EmptyState, PanelHeading, SourceNote } from './primitives'
 
@@ -27,7 +27,7 @@ export function BreakdownPanel({ breakdown }: { breakdown: BreakdownData }) {
                     {row.label}
                   </span>
                   <span className="shrink-0 text-sm font-medium text-slate-900">
-                    {formatNumber(row.value)}
+                    {formatValue(row.value, breakdown.unit)}
                     {total > 0 && (
                       <span className="ml-1.5 text-xs font-normal text-slate-400">
                         {formatPercent((value / total) * 100, 0)}

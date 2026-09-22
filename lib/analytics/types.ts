@@ -85,6 +85,8 @@ export type Breakdown = {
   readonly id: string
   readonly label: string
   readonly group?: string
+  /** How each row's value is formatted. Counts unless stated otherwise. */
+  readonly unit?: MetricUnit
   readonly rows: readonly BreakdownRow[]
   readonly status: MetricStatus
   readonly note?: string
