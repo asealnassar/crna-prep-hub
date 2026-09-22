@@ -1,461 +1,328 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase-browser'
 import Sidebar from '@/components/Sidebar'
-import { feedbackSourceLabel, feedbackSourceOf, feedbackTypeOf } from '@/lib/resume/feedback/submission'
+import { REPORTING_TIMEZONE } from '@/lib/analytics/range'
+import type { Metric, SectionPayload } from '@/lib/analytics/types'
+import { BreakdownPanel, FunnelPanel } from './components/Breakdown'
+import { Controls, TABS, type RangeState, type TabId } from './components/Controls'
+import { DiagnosticsPanel } from './components/Diagnostics'
+import { KpiCard } from './components/KpiCard'
+import { MemberTable } from './components/MemberTable'
+import { Queues } from './components/Queues'
+import { TimeSeriesChart } from './components/TimeSeriesChart'
+import { Card, EmptyState, SectionTitle, Skeleton } from './components/primitives'
 
-export default function Analytics() {
-  const [users, setUsers] = useState<any[]>([])
-  // The four top cards come from the server as aggregates. They are no longer
-  // derived from browser-side arrays, which PostgREST was truncating at 1000
-  // rows -- that is why Questions Asked read exactly 1000 against a real 3,842.
-  const [metrics, setMetrics] = useState<{
-    totalUsers: number
-    usedInterview: number
-    ultimateMembers: number
-    questionsAsked: number
-  } | null>(null)
-  const [feedback, setFeedback] = useState<any[]>([])
-  const [featureRequests, setFeatureRequests] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [userEmail, setUserEmail] = useState('')
-  const [isAdmin, setIsAdmin] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [activeTab, setActiveTab] = useState<'users' | 'feedback' | 'features' | 'unlocks'>('users')
-  const [unlockRequests, setUnlockRequests] = useState<any[]>([])
-  // Feedback arrives from the interview, from Resume Builder V1 and now from
-  // V2, all in one table. The filter reads the tag each one already carries.
-  const [feedbackSource, setFeedbackSource] = useState<'all' | 'v1' | 'v2'>('all')
+/**
+ * The analytics dashboard.
+ *
+ * Every figure is aggregated on the server and arrives as a value with a
+ * status: real, partial, not tracked yet, or unavailable. The page draws what
+ * it is given and never fills a gap with a zero — the section that replaced
+ * this one showed 0 interviews for every member whenever one call failed, and
+ * a question total that was really the first 1000 rows of a much larger table.
+ *
+ * The admin check here is the same one this page has always used. Page-level
+ * protection is presentation: every endpoint behind it authenticates and
+ * authorises on its own.
+ */
+
+const ADMIN_EMAIL = 'asealnassar@gmail.com'
+
+const GROUP_TITLES: Record<string, { title: string; detail?: string }> = {
+  headline: { title: 'Revenue', detail: 'From Stripe payments, not membership counts. One-time purchases, so there is no recurring revenue.' },
+  todate: { title: 'Today, this week, this month' },
+  lifetime: { title: 'All time' },
+  conversion: { title: 'Free to paid' },
+  discounts: { title: 'Discounts and refunds' },
+  membership: { title: 'Membership access' },
+  interviews: { title: 'Mock interviews', detail: 'One interview is one authorised mock, whatever its length.' },
+  gpa: { title: 'GPA Analyzer' },
+  resume: { title: 'Resume Builder' },
+  statement: { title: 'Personal Statement Analyzer' },
+  schools: { title: 'School directory and school-specific prep' },
+  queues: { title: 'Queues' },
+  health: { title: 'Operational health' },
+}
+
+const GROUP_ORDER = [
+  'headline', 'todate', 'lifetime', 'conversion', 'discounts', 'membership',
+  'interviews', 'gpa', 'resume', 'statement', 'schools', 'queues', 'health',
+]
+
+export default function AnalyticsPage() {
   const router = useRouter()
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
 
-  const loadData = async () => {
-    // Aggregates first: four integers, independent of the row-level data the
-    // activity table below still uses -- plus interviews per user, which only
-    // the server can count (it needs every user's session rows).
-    let interviewsByUser: Record<string, number> = {}
-    try {
-      const metricsRes = await fetch('/api/admin/analytics')
-      if (metricsRes.ok) {
-        const body = await metricsRes.json()
-        setMetrics(body)
-        interviewsByUser = body.interviewsByUser ?? {}
-      }
-    } catch (err) {
-      console.error('Analytics metrics failed to load')
-    }
+  const [ready, setReady] = useState(false)
+  const [userEmail, setUserEmail] = useState('')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
-    const response = await fetch('/api/admin/users')
-    const authUsers = await response.json()
+  const [tab, setTab] = useState<TabId>('overview')
+  const [range, setRange] = useState<RangeState>({ preset: '30d', from: '', to: '' })
+  const [payloads, setPayloads] = useState<Record<string, SectionPayload>>({})
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-    const { data: profiles } = await supabase.from('user_profiles').select('*')
-
-    const { data: questions } = await supabase
-      .from('user_asked_questions')
-      .select('*')
-      .order('asked_at', { ascending: false })
-
-    const combinedUsers = authUsers?.map((authUser: any) => {
-      const profile = profiles?.find(p => p.id === authUser.id)
-      const userQuestions = questions?.filter(q => q.user_id === authUser.id) || []
-      const interviewTypes = [...new Set(userQuestions.map(q => q.interview_type))]
-      const lastInterview = userQuestions.length > 0 ? userQuestions[0]?.asked_at : null
-
-      return {
-        id: authUser.id,
-        email: authUser.email,
-        subscription_tier: profile?.subscription_tier || 'free',
-        // Interviews, not questions: one per session row, however many
-        // questions it asked. This was userQuestions.length -- one row per
-        // primary question -- which counted a 10-question interview as ten.
-        interview_count: interviewsByUser[authUser.id] ?? 0,
-        created_at: authUser.created_at,
-        totalQuestions: userQuestions.length,
-        interviewTypes,
-        lastInterview
-      }
-    }).sort((a: any, b: any) => b.totalQuestions - a.totalQuestions) || []
-
-    setUsers(combinedUsers)
-
-    const { data: feedbackData } = await supabase
-      .from('interview_feedback')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    setFeedback(feedbackData || [])
-
-    const { data: featuresData } = await supabase
-      .from('feature_requests')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    setFeatureRequests(featuresData || [])
-
-    const { data: unlocksData } = await supabase
-      .from('school_unlock_requests')
-      .select('*')
-      .order('requested_at', { ascending: false })
-
-    setUnlockRequests(unlocksData || [])
-  }
-
-  const deleteFeatureRequest = async (id: string) => {
-    if (!confirm('Delete this feature request?')) return
-    await supabase.from('feature_requests').delete().eq('id', id)
-    setFeatureRequests(prev => prev.filter(item => item.id !== id))
-  }
-
-  const approveUnlockRequest = async (id: string) => {
-    await supabase
-      .from('school_unlock_requests')
-      .update({ status: 'approved', approved_at: new Date().toISOString() })
-      .eq('id', id)
-    setUnlockRequests(prev => prev.map(r => r.id === id ? { ...r, status: 'approved', approved_at: new Date().toISOString() } : r))
-
-    const req = unlockRequests.find(r => r.id === id)
-    if (req) {
-      fetch('/api/school-unlock/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipientEmail: req.user_email, schoolName: req.school_name })
-      }).catch(err => console.error('Unlock email failed:', err))
-    }
-  }
-
-  const deleteUnlockRequest = async (id: string) => {
-    if (!confirm('Delete this unlock request?')) return
-    await supabase.from('school_unlock_requests').delete().eq('id', id)
-    setUnlockRequests(prev => prev.filter(item => item.id !== id))
-  }
-
+  // --- the gate this page has always had ------------------------------------
   useEffect(() => {
-    const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      
-      if (!user || user.email !== 'asealnassar@gmail.com') {
+    const check = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      if (!user || user.email !== ADMIN_EMAIL) {
         router.push('/dashboard')
         return
       }
-
       setUserEmail(user.email)
-      setIsAdmin(true)
-
-      await loadData()
-      setLoading(false)
+      setReady(true)
     }
-
-    init()
+    check()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** The feedback list, narrowed to one product when asked. */
-  const visibleFeedback = feedbackSource === 'all'
-    ? feedback
-    : feedback.filter(item => feedbackSourceOf(item.message) === feedbackSource)
+  // --- the window and the tab live in the URL -------------------------------
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const urlTab = params.get('tab')
+    if (urlTab && TABS.some((item) => item.id === urlTab)) setTab(urlTab as TabId)
+    const preset = params.get('range')
+    if (preset) {
+      setRange({ preset, from: params.get('from') ?? '', to: params.get('to') ?? '' })
+    }
+  }, [])
 
-  const deleteFeedback = async (id: string) => {
-    if (!confirm('Delete this feedback?')) return
-    await supabase.from('interview_feedback').delete().eq('id', id)
-    setFeedback(feedback.filter(f => f.id !== id))
-  }
+  useEffect(() => {
+    if (!ready) return
+    const params = new URLSearchParams()
+    params.set('tab', tab)
+    params.set('range', range.preset)
+    if (range.preset === 'custom' && range.from && range.to) {
+      params.set('from', range.from)
+      params.set('to', range.to)
+    }
+    window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+  }, [ready, tab, range])
 
-  if (loading) {
+  const cacheKey = `${tab}:${range.preset}:${range.from}:${range.to}`
+
+  const load = useCallback(
+    async (force = false) => {
+      if (!ready) return
+      if (!force && payloads[cacheKey]) return
+      if (range.preset === 'custom' && (!range.from || !range.to)) return
+
+      setLoading(true)
+      setError(null)
+
+      const params = new URLSearchParams({ range: range.preset })
+      if (range.preset === 'custom') {
+        params.set('from', range.from)
+        params.set('to', range.to)
+      }
+      // Revenue caches Stripe for a few minutes; Refresh means go and look again.
+      if (force) params.set('refresh', '1')
+
+      try {
+        const response = await fetch(`/api/admin/analytics/${tab}?${params.toString()}`)
+        if (!response.ok) {
+          throw new Error(
+            response.status === 403
+              ? 'This account is not an administrator.'
+              : `That section could not be loaded (${response.status}).`
+          )
+        }
+        const payload = (await response.json()) as SectionPayload
+        setPayloads((current) => ({ ...current, [cacheKey]: payload }))
+      } catch (problem: any) {
+        setError(problem?.message ?? 'That section could not be loaded.')
+      } finally {
+        setLoading(false)
+      }
+    },
+    [ready, tab, range, cacheKey, payloads]
+  )
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const payload = payloads[cacheKey]
+
+  if (!ready) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 flex items-center justify-center">
-        <div className="text-white text-xl">Loading...</div>
+      <div className="flex min-h-screen items-center justify-center bg-[#F7F8FC]">
+        <p className="text-sm text-slate-500">Checking access…</p>
       </div>
     )
   }
 
-  const premiumUsers = users.filter(u => u.subscription_tier === 'premium')
-  const totalQuestions = users.reduce((sum, u) => sum + u.totalQuestions, 0)
+  return (
+    <div className="min-h-screen bg-[#F7F8FC]">
+      <Sidebar isLoggedIn userEmail={userEmail} isAdmin onCollapsedChange={setSidebarCollapsed} />
+
+      <div
+        className={`transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}
+      >
+        <Controls
+          tab={tab}
+          onTab={setTab}
+          range={range}
+          onRange={setRange}
+          generatedAt={payload?.generatedAt ?? null}
+          comparisonLabel={payload?.range.comparison?.label ?? null}
+          timezone={payload?.range.timezone ?? REPORTING_TIMEZONE}
+          loading={loading}
+          onRefresh={() => load(true)}
+        />
+
+        <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+          {error && (
+            <Card className="mb-4 border-red-200 bg-red-50">
+              <p className="text-sm text-red-800">{error}</p>
+              <button
+                type="button"
+                onClick={() => load(true)}
+                className="mt-2 rounded-lg border border-red-300 px-3 py-1 text-xs font-medium text-red-700 transition hover:bg-red-100"
+              >
+                Try again
+              </button>
+            </Card>
+          )}
+
+          {!payload && loading && <LoadingSection />}
+
+          {!payload && !loading && !error && range.preset === 'custom' && (
+            <EmptyState title="Choose both dates to load this window." />
+          )}
+
+          {payload && (
+            <>
+              <SectionBody payload={payload} timezone={payload.range.timezone} tab={tab} />
+              <div className="mt-6">
+                <DiagnosticsPanel payload={payload} />
+              </div>
+            </>
+          )}
+
+          <p className="mt-8 text-center text-[11px] text-slate-400">
+            <Link href="/admin/schools" className="hover:text-slate-600">
+              Back to admin
+            </Link>
+          </p>
+        </main>
+      </div>
+    </div>
+  )
+}
+
+function SectionBody({ payload, timezone, tab }: { payload: SectionPayload; timezone: string; tab: TabId }) {
+  const groups = useMemo(() => {
+    const map = new Map<string, Metric[]>()
+    for (const metric of payload.metrics) {
+      const key = metric.group ?? 'default'
+      map.set(key, [...(map.get(key) ?? []), metric])
+    }
+    // A group can be made of charts or breakdowns alone — the Revenue tab's
+    // membership panel has no cards of its own — so the list of groups is the
+    // union of all three, not just the ones that happen to have metrics.
+    for (const item of [...payload.series, ...payload.breakdowns]) {
+      const key = item.group ?? 'default'
+      if (!map.has(key)) map.set(key, [])
+    }
+    return [...map.entries()].sort(
+      (a, b) => GROUP_ORDER.indexOf(a[0]) - GROUP_ORDER.indexOf(b[0])
+    )
+  }, [payload])
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
-      <Sidebar 
-        isLoggedIn={true} 
-        userEmail={userEmail} 
-        isAdmin={isAdmin}
-        onCollapsedChange={setSidebarCollapsed}
-      />
-      
-      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
-        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-6 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-white">📊 Analytics Dashboard</h1>
-          <Link href="/admin/schools" className="text-white/80 hover:text-white text-sm">
-            ← Back to Admin
-          </Link>
-        </div>
+    <div className="space-y-6">
+      {groups.map(([group, metrics]) => {
+        const heading = GROUP_TITLES[group]
+        const groupSeries = payload.series.filter((item) => (item.group ?? 'default') === group)
+        const groupBreakdowns = payload.breakdowns.filter((item) => (item.group ?? 'default') === group)
 
-        <div className="max-w-7xl mx-auto px-8 py-12">
-          
-          <div className="grid md:grid-cols-4 gap-6 mb-8">
-            <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-6">
-              <div className="text-3xl mb-2">👥</div>
-              <h3 className="text-3xl font-bold text-white">{metrics?.totalUsers ?? '—'}</h3>
-              <p className="text-indigo-200">Total Users</p>
+        return (
+          <section key={group}>
+            {heading && <SectionTitle title={heading.title} detail={heading.detail} />}
+
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {metrics.map((metric) => (
+                <KpiCard key={metric.id} metric={metric} />
+              ))}
             </div>
 
-            <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-6">
-              <div className="text-3xl mb-2">🎤</div>
-              <h3 className="text-3xl font-bold text-white">{metrics?.usedInterview ?? '—'}</h3>
-              <p className="text-indigo-200">Used Interview</p>
-            </div>
-
-            <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-6">
-              <div className="text-3xl mb-2">⭐</div>
-              <h3 className="text-3xl font-bold text-white">{metrics?.ultimateMembers ?? '—'}</h3>
-              <p className="text-indigo-200">Ultimate Members</p>
-            </div>
-
-            <div className="bg-white/10 backdrop-blur border border-white/20 rounded-2xl p-6">
-              <div className="text-3xl mb-2">💬</div>
-              <h3 className="text-3xl font-bold text-white">{metrics?.questionsAsked ?? '—'}</h3>
-              <p className="text-indigo-200">Questions Asked</p>
-            </div>
-          </div>
-
-          <div className="flex gap-4 mb-8">
-            <button
-              onClick={() => setActiveTab('users')}
-              className={`px-6 py-3 rounded-xl font-semibold transition ${
-                activeTab === 'users'
-                  ? 'bg-white text-purple-600'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              User Activity ({users.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('feedback')}
-              className={`px-6 py-3 rounded-xl font-semibold transition ${
-                activeTab === 'feedback'
-                  ? 'bg-white text-purple-600'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              Feedback ({feedback.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('features')}
-              className={`px-6 py-3 rounded-xl font-semibold transition ${
-                activeTab === 'features'
-                  ? 'bg-white text-purple-600'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              Feature Requests ({featureRequests.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('unlocks')}
-              className={`px-6 py-3 rounded-xl font-semibold transition relative ${
-                activeTab === 'unlocks'
-                  ? 'bg-white text-purple-600'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              School Requests ({unlockRequests.filter(r => r.status !== 'approved').length} pending)
-              {unlockRequests.filter(r => r.status !== 'approved').length > 0 && activeTab !== 'unlocks' && (
-                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">
-                  {unlockRequests.filter(r => r.status !== 'approved').length}
-                </span>
-              )}
-            </button>
-          </div>
-
-          {activeTab === 'users' && (
-            <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gradient-to-r from-purple-600 to-pink-500 text-white">
-                    <tr>
-                      <th className="px-6 py-4 text-left text-sm font-semibold">Email</th>
-                      <th className="px-6 py-4 text-left text-sm font-semibold">Tier</th>
-                      <th className="px-6 py-4 text-left text-sm font-semibold">Interviews</th>
-                      <th className="px-6 py-4 text-left text-sm font-semibold">Questions Asked</th>
-                      <th className="px-6 py-4 text-left text-sm font-semibold">Types Used</th>
-                      <th className="px-6 py-4 text-left text-sm font-semibold">Last Interview</th>
-                      <th className="px-6 py-4 text-left text-sm font-semibold">Signed Up</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {users.map((user, index) => (
-                      <tr key={user.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-6 py-4 text-sm text-gray-800">{user.email}</td>
-                        <td className="px-6 py-4">
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                            user.subscription_tier === 'ultimate' ? 'bg-purple-100 text-purple-700' :
-                            user.subscription_tier === 'premium' ? 'bg-blue-100 text-blue-700' :
-                            'bg-gray-100 text-gray-700'
-                          }`}>
-                            {user.subscription_tier?.toUpperCase() || 'FREE'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-800 font-semibold">{user.interview_count}</td>
-                        <td className="px-6 py-4 text-sm text-gray-800 font-semibold">{user.totalQuestions}</td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
-                          {user.interviewTypes.length > 0 ? user.interviewTypes.join(', ') : '-'}
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
-                          {user.lastInterview ? new Date(user.lastInterview).toLocaleDateString() : '-'}
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
-                          {new Date(user.created_at).toLocaleDateString()}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'feedback' && (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                {([['all', 'All'], ['v2', 'Resume Builder V2'], ['v1', 'Resume Builder V1']] as const).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => setFeedbackSource(key)}
-                    className={`px-3 py-1 rounded-full text-xs font-semibold transition ${
-                      feedbackSource === key ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    {label} ({key === 'all' ? feedback.length : feedback.filter(f => feedbackSourceOf(f.message) === key).length})
-                  </button>
+            {groupSeries.length > 0 && (
+              <div className={`mt-4 grid gap-4 ${groupSeries.length > 1 ? 'xl:grid-cols-2' : ''}`}>
+                {groupSeries.map((series) => (
+                  <TimeSeriesChart key={series.id} series={series} />
                 ))}
               </div>
-              {visibleFeedback.length === 0 ? (
-                <div className="bg-white rounded-2xl p-12 text-center">
-                  <p className="text-gray-500">No feedback yet</p>
-                </div>
-              ) : (
-                visibleFeedback.map((item) => {
-                  const source = feedbackSourceOf(item.message)
-                  const type = feedbackTypeOf(item.message)
-                  return (
-                    <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg relative">
-                      <button
-                        onClick={() => deleteFeedback(item.id)}
-                        className="absolute top-4 right-4 px-3 py-1 bg-red-100 text-red-600 rounded-lg text-sm font-semibold hover:bg-red-200 transition"
-                      >
-                        Delete
-                      </button>
-                      <div className="flex justify-between items-start mb-4 pr-20">
-                        <div>
-                          <p className="font-semibold text-gray-800">{item.user_email}</p>
-                          <p className="text-sm text-gray-500">{new Date(item.created_at).toLocaleString()}</p>
-                        </div>
-                      </div>
-                      {source && (
-                        <div className="flex flex-wrap gap-2 mb-3">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                            source === 'v2' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
-                          }`}>
-                            {feedbackSourceLabel(source)}
-                          </span>
-                          {type && (
-                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
-                              {type}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <p className="text-gray-700 whitespace-pre-wrap">{item.message}</p>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          )}
+            )}
 
-          {activeTab === 'features' && (
-            <div className="space-y-4">
-              {featureRequests.length === 0 ? (
-                <div className="bg-white rounded-2xl p-12 text-center">
-                  <p className="text-gray-500">No feature requests yet</p>
-                </div>
-              ) : (
-                featureRequests.map((item) => (
-                  <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <p className="font-semibold text-gray-800">{item.user_email}</p>
-                        <p className="text-sm text-gray-500">{new Date(item.created_at).toLocaleString()}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          item.status === 'approved' ? 'bg-green-100 text-green-700' :
-                          item.status === 'reviewing' ? 'bg-yellow-100 text-yellow-700' :
-                          'bg-gray-100 text-gray-700'
-                        }`}>
-                          {item.status?.toUpperCase() || 'PENDING'}
-                        </span>
-                        <button
-                          onClick={() => deleteFeatureRequest(item.id)}
-                          className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-200 transition"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                    <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 p-4 rounded-lg">{item.idea}</p>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
+            {groupBreakdowns.length > 0 && (
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                {groupBreakdowns.map((breakdown) => (
+                  <BreakdownPanel key={breakdown.id} breakdown={breakdown} />
+                ))}
+              </div>
+            )}
+          </section>
+        )
+      })}
 
-          {activeTab === 'unlocks' && (
-            <div className="space-y-4">
-              {unlockRequests.length === 0 ? (
-                <div className="bg-white rounded-2xl p-12 text-center">
-                  <p className="text-gray-500">No school unlock requests yet</p>
-                </div>
-              ) : (
-                unlockRequests.map((item) => (
-                  <div key={item.id} className="bg-white rounded-2xl p-6 shadow-lg">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-bold text-gray-800">{item.school_name}</p>
-                          {item.status === 'approved' ? (
-                            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">✅ APPROVED</span>
-                          ) : (
-                            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700">⏳ PENDING</span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-500 mt-1">{item.user_email}</p>
-                        <p className="text-xs text-gray-400 mt-0.5">Requested {new Date(item.requested_at).toLocaleString()}</p>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {item.status !== 'approved' && (
-                          <button
-                            onClick={() => approveUnlockRequest(item.id)}
-                            className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700 transition"
-                          >
-                            ✅ Approve
-                          </button>
-                        )}
-                        <button
-                          onClick={() => deleteUnlockRequest(item.id)}
-                          className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-200 transition"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
+      {/* Funnels belong to the section, not to one group: tying them to the
+          'default' group hid the checkout funnel on every tab whose metrics
+          are all grouped. */}
+      {payload.funnels.length > 0 && (
+        <section>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {payload.funnels.map((funnel) => (
+              <FunnelPanel key={funnel.id} funnel={funnel} />
+            ))}
+          </div>
+        </section>
+      )}
 
-        </div>
+      {tab === 'operations' && (
+        <>
+          <section>
+            <SectionTitle
+              title="Member activity"
+              detail="Searchable, sorted and paged on the server."
+            />
+            <MemberTable timezone={timezone} />
+          </section>
+          <section>
+            <SectionTitle title="Queues" detail="Feedback, feature requests and school unlock requests." />
+            <Queues timezone={timezone} />
+          </section>
+        </>
+      )}
+    </div>
+  )
+}
+
+function LoadingSection() {
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 6 }).map((_, index) => (
+          <Card key={index}>
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="mt-3 h-7 w-20" />
+            <Skeleton className="mt-3 h-6 w-full" />
+          </Card>
+        ))}
       </div>
+      <Card>
+        <Skeleton className="h-3 w-40" />
+        <Skeleton className="mt-4 h-[180px] w-full" />
+      </Card>
     </div>
   )
 }
