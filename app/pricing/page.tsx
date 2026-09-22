@@ -271,11 +271,9 @@ export default function Pricing() {
             <PricingCard
               variant="premium"
               name="Premium"
-              originalPrice="$14.99"
-              price="$5.00"
+              price="$14.99"
               badges={[
                 { label: 'POPULAR', className: 'bg-blue-500 text-white' },
-                { label: 'LIMITED TIME', className: 'bg-red-500 text-white' },
               ]}
               subtitle="Application essentials"
               features={[
