@@ -97,9 +97,13 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     // Never the error object: a Puppeteer failure can carry the page's content,
-    // and this page is somebody's resume.
+    // and this page is somebody's resume. The message alone is safe to log --
+    // launch/render failures are infra text (paths, flags, protocol errors),
+    // not resume content -- and is needed to tell a Chromium launch failure
+    // apart from a rendering bug from the logs alone.
     const unavailable = error instanceof ChromiumUnavailableError
-    console.error('resume-v2 pdf export failed:', unavailable ? error.message : (error as Error)?.name)
+    const err = error as Error
+    console.error('resume-v2 pdf export failed:', unavailable ? err.message : `${err?.name}: ${err?.message}`)
     return NextResponse.json(
       { error: unavailable ? 'export-unavailable' : 'export-failed' },
       { status: unavailable ? 503 : 500 }
