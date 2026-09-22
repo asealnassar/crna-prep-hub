@@ -11,10 +11,6 @@ export default function Pricing() {
   const [loading, setLoading] = useState('')
   const [user, setUser] = useState<any>(null)
   const [userTier, setUserTier] = useState('free')
-  const [promoCode, setPromoCode] = useState('')
-  const [promoValid, setPromoValid] = useState<boolean | null>(null)
-  const [promoData, setPromoData] = useState<any>(null)
-  const [checkingPromo, setCheckingPromo] = useState(false)
   const { sidebarCollapsed } = useSidebarCollapsed()
   
   // Banner states
@@ -102,26 +98,6 @@ export default function Pricing() {
     setShowBannerEditor(false)
   }
 
-  const checkPromoCode = async () => {
-    if (!promoCode.trim()) return
-    setCheckingPromo(true)
-    const { data, error } = await supabase
-      .from('promo_codes')
-      .select('*')
-      .eq('code', promoCode.toUpperCase().trim())
-      .eq('is_active', true)
-      .single()
-
-    if (data && !error) {
-      setPromoValid(true)
-      setPromoData(data)
-    } else {
-      setPromoValid(false)
-      setPromoData(null)
-    }
-    setCheckingPromo(false)
-  }
-
   const handleCheckout = async (plan: string) => {
     if (!user) {
       alert('Please log in first to upgrade!')
@@ -130,20 +106,11 @@ export default function Pricing() {
 
     setLoading(plan)
 
-    const priceId = plan === 'premium'
-      ? process.env.NEXT_PUBLIC_PREMIUM_PRICE_ID
-      : process.env.NEXT_PUBLIC_ULTIMATE_PRICE_ID
-
     try {
       const response = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          priceId,
-          userEmail: user.email,
-          promoCode: promoValid ? promoCode.toUpperCase().trim() : null,
-          plan
-        }),
+        body: JSON.stringify({ plan }),
       })
 
       const data = await response.json()
@@ -157,10 +124,6 @@ export default function Pricing() {
 
     setLoading('')
   }
-
-const discountAmount = promoData?.discount_amount ? promoData.discount_amount / 100 : 0
-const premiumPrice = promoValid ? (14.99 - discountAmount).toFixed(2) : '14.99'
-const ultimatePrice = promoValid ? (39.99 - discountAmount).toFixed(2) : '39.99'
 
   const renderBannerText = (text: string, code: string) => {
     return text.split('{CODE}').map((part, idx, arr) => (
@@ -247,34 +210,6 @@ const ultimatePrice = promoValid ? (39.99 - discountAmount).toFixed(2) : '39.99'
             <p className="text-base sm:text-lg lg:text-xl text-indigo-200">One-time payment. Lifetime access. No subscriptions.</p>
           </div>
 
-          <div className="max-w-md mx-auto mb-6 sm:mb-8">
-            <div className="bg-white/10 backdrop-blur-md rounded-xl p-4">
-              <label className="block text-white text-sm font-medium mb-2">Have a promo code?</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={promoCode}
-                  onChange={(e) => { setPromoCode(e.target.value); setPromoValid(null); setPromoData(null); }}
-                  placeholder="Enter code"
-                  className="flex-1 px-3 sm:px-4 py-2 rounded-lg bg-white/20 text-white placeholder-white/50 border border-white/30 focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm sm:text-base"
-                />
-                <button
-                  onClick={checkPromoCode}
-                  disabled={checkingPromo || !promoCode.trim()}
-                  className="px-3 sm:px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold hover:bg-purple-600 disabled:opacity-50 transition text-sm sm:text-base"
-                >
-                  {checkingPromo ? '...' : 'Apply'}
-                </button>
-              </div>
-              {promoValid === true && (
-                <p className="text-green-400 text-sm mt-2">✓ Code applied! ${discountAmount} off your purchase</p>
-              )}
-              {promoValid === false && (
-                <p className="text-red-400 text-sm mt-2">✗ Invalid or expired code</p>
-              )}
-            </div>
-          </div>
-
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
 
 {/* FREE PLAN */}
@@ -321,17 +256,8 @@ const ultimatePrice = promoValid ? (39.99 - discountAmount).toFixed(2) : '39.99'
               </div>
               <h2 className="text-xl sm:text-2xl font-bold mb-2 text-gray-800">Premium</h2>
               <div className="mb-3 sm:mb-4">
-                {promoValid ? (
-                  <>
-                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'14.99'}</span>
-                    <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">${premiumPrice}</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-xl sm:text-2xl text-gray-400 line-through">$14.99</span>
-                    <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">$5.00</span>
-                  </>
-                )}
+                <span className="text-xl sm:text-2xl text-gray-400 line-through">$14.99</span>
+                <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">$5.00</span>
               </div>
               <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Find Schools with a few clicks!</p>
 
@@ -368,14 +294,7 @@ const ultimatePrice = promoValid ? (39.99 - discountAmount).toFixed(2) : '39.99'
               </div>
               <h2 className="text-xl sm:text-2xl font-bold mb-2 text-gray-800">Ultimate</h2>
               <div className="mb-3 sm:mb-4">
-                {promoValid ? (
-                  <>
-                    <span className="text-xl sm:text-2xl text-gray-400 line-through">${'39.99'}</span>
-                    <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">${ultimatePrice}</span>
-                  </>
-                ) : (
-                  <span className="text-3xl sm:text-4xl font-bold text-gray-800">$39.99</span>
-                )}
+                <span className="text-3xl sm:text-4xl font-bold text-gray-800">$39.99</span>
               </div>
               <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Unlimited Access on Everything </p>
 
@@ -407,6 +326,9 @@ const ultimatePrice = promoValid ? (39.99 - discountAmount).toFixed(2) : '39.99'
                 <button onClick={() => handleCheckout('ultimate')} disabled={loading === 'ultimate'} className="w-full py-2 sm:py-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold hover:opacity-90 transition disabled:opacity-50 text-sm sm:text-base">
                   {loading === 'ultimate' ? 'Loading...' : 'Upgrade to Ultimate'}
                 </button>
+              )}
+              {!(user && userTier === 'ultimate') && (
+                <p className="text-xs text-gray-500 text-center mt-2">Have a promo code? You'll be able to enter it at checkout.</p>
               )}
             </div>
           </div>

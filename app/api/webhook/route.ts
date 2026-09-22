@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import Stripe from 'stripe'
 import { createClient } from '@supabase/supabase-js'
+import { isPurchasablePlan } from '@/lib/checkout'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2023-10-16',
@@ -31,9 +32,12 @@ export async function POST(request: Request) {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session
     const userEmail = session.customer_email
-    const plan = session.metadata?.plan || 'premium'
+    const plan = session.metadata?.plan
 
-    if (userEmail) {
+    // Fails closed: metadata is written by our own /api/checkout, but a
+    // subscription tier is only ever set here from a known-good value —
+    // never a default, and never whatever a session happens to carry.
+    if (userEmail && isPurchasablePlan(plan)) {
       const { error } = await supabase
         .from('user_profiles')
         .update({ subscription_tier: plan })
@@ -44,6 +48,8 @@ export async function POST(request: Request) {
       } else {
         console.log(`Updated ${userEmail} to ${plan}`)
       }
+    } else if (userEmail) {
+      console.error(`Refusing to set subscription_tier from unexpected plan metadata: ${plan}`)
     }
   }
 
