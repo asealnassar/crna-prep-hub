@@ -5,20 +5,55 @@ import { FREE_INTERVIEW_ALLOWANCE } from '@/lib/plans'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
-import Sidebar from '@/components/Sidebar'
+import {
+  Lock,
+  Receipt,
+  Infinity as InfinityIcon,
+  Mic,
+  BarChart3,
+  FileText,
+  GraduationCap,
+} from 'lucide-react'
+import PricingCard from './components/PricingCard'
+import ComparisonTable from './components/ComparisonTable'
+import FaqAccordion from './components/FaqAccordion'
+import PromoBannerEditor from './components/PromoBannerEditor'
+
+const VALUE_PROPS = [
+  {
+    icon: Mic,
+    title: 'AI Mock Interviews',
+    description: 'Practice with realistic, AI-powered interviews and get instant feedback.',
+  },
+  {
+    icon: BarChart3,
+    title: 'GPA Intelligence',
+    description: 'Calculate, analyze, and understand your GPA before you apply.',
+  },
+  {
+    icon: FileText,
+    title: 'Resume + Personal Statement',
+    description: 'Build stronger application materials with AI-powered tools.',
+  },
+  {
+    icon: GraduationCap,
+    title: '130+ CRNA Programs',
+    description: 'Explore programs, compare requirements, and find your best fit.',
+  },
+]
 
 export default function Pricing() {
   const [loading, setLoading] = useState('')
   const [user, setUser] = useState<any>(null)
   const [userTier, setUserTier] = useState('free')
   const { sidebarCollapsed } = useSidebarCollapsed()
-  
+
   // Banner states
   const [banner, setBanner] = useState<any>(null)
   const [showBannerEditor, setShowBannerEditor] = useState(false)
   const [editingBanner, setEditingBanner] = useState<any>(null)
   const [savingBanner, setSavingBanner] = useState(false)
-  
+
   const supabase = createClient()
   const isAdmin = user?.email === 'asealnassar@gmail.com'
 
@@ -45,7 +80,7 @@ export default function Pricing() {
       .order('created_at', { ascending: false })
       .limit(1)
       .single()
-    
+
     if (data) setBanner(data)
   }
 
@@ -138,17 +173,18 @@ export default function Pricing() {
     ))
   }
 
-  return (
-    <div className="flex min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800">
+  const isLoggedInPaidTier = !!user && (userTier === 'premium' || userTier === 'ultimate')
 
-      <div className={`flex-1 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
-        
-        {/* Promo Banner */}
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className={`transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'} pt-16 lg:pt-0`}>
+
+        {/* Site-wide promo banner (admin-managed marketing banner, unrelated to plan pricing) */}
         {banner && banner.is_active && (
           <div className={`bg-gradient-to-r ${banner.background_color} py-3 sm:py-4 overflow-hidden relative`}>
             <div className="absolute inset-0 bg-[length:200%_100%] bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer"></div>
             <div className="relative">
-              <div className="flex items-center justify-center gap-2 sm:gap-3 px-4 animate-pulse">
+              <div className="flex items-center justify-center gap-2 sm:gap-3 px-4 animate-pulse motion-reduce:animate-none">
                 <span className="text-2xl sm:text-3xl">🎉</span>
                 <div className="text-center">
                   <p className="text-white font-black text-sm sm:text-base md:text-lg">
@@ -163,20 +199,13 @@ export default function Pricing() {
                 <span className="text-2xl sm:text-3xl">🎉</span>
               </div>
             </div>
-            
-            {/* Admin Controls Overlay */}
+
             {isAdmin && (
               <div className="absolute top-2 right-2 flex gap-2">
-                <button
-                  onClick={toggleBannerActive}
-                  className="px-2 py-1 bg-white/90 text-xs font-semibold rounded shadow hover:bg-white"
-                >
+                <button onClick={toggleBannerActive} className="px-2 py-1 bg-white/90 text-xs font-semibold rounded shadow hover:bg-white">
                   Hide
                 </button>
-                <button
-                  onClick={openBannerEditor}
-                  className="px-2 py-1 bg-blue-500 text-white text-xs font-semibold rounded shadow hover:bg-blue-600"
-                >
+                <button onClick={openBannerEditor} className="px-2 py-1 bg-blue-500 text-white text-xs font-semibold rounded shadow hover:bg-blue-600">
                   Edit
                 </button>
               </div>
@@ -184,7 +213,6 @@ export default function Pricing() {
           </div>
         )}
 
-        {/* Admin: No Banner / Inactive Banner */}
         {isAdmin && (!banner || !banner.is_active) && (
           <div className="bg-yellow-500 py-3 px-4 text-center">
             <button
@@ -196,230 +224,195 @@ export default function Pricing() {
           </div>
         )}
 
-        <div className="bg-white/10 backdrop-blur-md border-b border-white/10 px-4 sm:px-6 py-4 flex justify-end">
+        {/* ================= HERO ================= */}
+        <section className="relative bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 pt-10 sm:pt-14 pb-32 sm:pb-40 px-4 sm:px-6 lg:px-8 overflow-hidden">
           {!user && (
-            <Link href="/login" className="px-4 py-2 bg-white text-purple-600 font-semibold rounded-lg hover:bg-gray-100 transition text-sm">
-              Login
-            </Link>
+            <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
+              <Link href="/login" className="px-4 py-2 bg-white text-purple-700 font-semibold rounded-lg hover:bg-gray-100 transition text-sm shadow-sm">
+                Login
+              </Link>
+            </div>
           )}
-        </div>
 
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
-          <div className="text-center mb-6 sm:mb-8">
-            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-3 sm:mb-4">Choose Your Plan</h1>
-            <p className="text-base sm:text-lg lg:text-xl text-indigo-200">One-time payment. Lifetime access. No subscriptions.</p>
+          <div className="max-w-3xl mx-auto text-center">
+            <span className="inline-block text-xs sm:text-sm font-semibold tracking-[0.2em] text-purple-200 mb-4">
+              PRICING
+            </span>
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-white mb-4 leading-tight">
+              Choose the plan that gets you interview-ready
+            </h1>
+            <p className="text-base sm:text-lg text-indigo-200">
+              One-time payment. Lifetime access. No subscriptions.
+            </p>
+          </div>
+        </section>
+
+        {/* Pricing cards overlap the hero's bottom edge */}
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 -mt-24 sm:-mt-28">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8 items-stretch">
+            <PricingCard
+              variant="free"
+              name="Free"
+              price="$0"
+              subtitle="Explore the platform"
+              features={[
+                '130+ CRNA school directory',
+                'Basic GPA calculator',
+                'Personal statement analyzer',
+                'Resume Builder (1 resume)',
+                `${FREE_INTERVIEW_ALLOWANCE} mock interviews`,
+              ]}
+              ctaLabel="Get Started Free"
+              ctaHref={!user ? '/signup' : undefined}
+              isCurrentPlan={!!user && userTier === 'free'}
+              isLocked={isLoggedInPaidTier}
+            />
+
+            <PricingCard
+              variant="premium"
+              name="Premium"
+              originalPrice="$14.99"
+              price="$5.00"
+              badges={[
+                { label: 'POPULAR', className: 'bg-blue-500 text-white' },
+                { label: 'LIMITED TIME', className: 'bg-red-500 text-white' },
+              ]}
+              subtitle="Application essentials"
+              features={[
+                'Everything in Free',
+                'Advanced school filters',
+                'State, GRE, and prerequisite filters',
+                'Deadline & application method filters',
+                'Direct school website links',
+              ]}
+              ctaLabel="Unlock Premium"
+              onCtaClick={() => handleCheckout('premium')}
+              loading={loading === 'premium'}
+              isCurrentPlan={!!user && userTier === 'premium'}
+            />
+
+            <PricingCard
+              variant="ultimate"
+              name="Ultimate"
+              price="$39.99"
+              badges={[{ label: 'BEST VALUE', className: 'bg-gradient-to-r from-purple-600 to-pink-500 text-white' }]}
+              subtitle="Complete CRNA prep"
+              features={[
+                'Everything in Premium',
+                'Unlimited AI mock interviews',
+                'School-specific interview prep',
+                'Advanced GPA analytics',
+                'AI personal statement rewrites',
+                'Sentence-level essay feedback & improvements',
+                'Unlimited resumes',
+                'Finalize professional resumes',
+                'PDF & DOCX resume export',
+                'Priority support',
+              ]}
+              ctaLabel="Get Ultimate — Lifetime Access"
+              onCtaClick={() => handleCheckout('ultimate')}
+              loading={loading === 'ultimate'}
+              isCurrentPlan={!!user && userTier === 'ultimate'}
+              footnote={!(user && userTier === 'ultimate') ? "Have a promo code? You'll be able to enter it at checkout." : undefined}
+            />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+          {/* Trust strip */}
+          <div className="mt-10 sm:mt-14 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-sm text-gray-500">
+            <span className="inline-flex items-center gap-2">
+              <Lock className="h-4 w-4 text-gray-400" aria-hidden="true" />
+              Secure checkout
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <Receipt className="h-4 w-4 text-gray-400" aria-hidden="true" />
+              One-time payment
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <InfinityIcon className="h-4 w-4 text-gray-400" aria-hidden="true" />
+              Lifetime access
+            </span>
+          </div>
+        </section>
 
-{/* FREE PLAN */}
-            <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 border-2 border-gray-200">
-              <h2 className="text-xl sm:text-2xl font-bold mb-2 text-gray-800">Free</h2>
-              <p className="text-3xl sm:text-4xl font-bold mb-3 sm:mb-4 text-gray-800">$0</p>
-              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Get Started With The Basics</p>
-                  
-              <ul className="space-y-2 sm:space-y-3 mb-6 sm:mb-8 text-sm sm:text-base">
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Browse 130+ CRNA programs</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic filters (GPA, tuition, program type, format, application opening)</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Save favorite schools</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic GPA calculator</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Basic personal statement analyzer</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume Builder (1 resume)</strong></span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>{FREE_INTERVIEW_ALLOWANCE} free mock interviews</strong></span></li>              
-                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Advanced filters (state, deadline, GRE, prerequisites)</span></li>
-                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Unlimited mock interviews</span></li>
-                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Premium GPA analytics</span></li>
-                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>AI essay rewrites</span></li>
-                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>School-specific interview prep</span></li>
-              </ul>
-              
-              {user && userTier === 'free' ? (
-                <button className="w-full py-2 sm:py-3 rounded-xl border-2 border-gray-300 text-gray-600 font-semibold cursor-default text-sm sm:text-base">
-                  Current Plan
-                </button>
-              ) : (
-                <button disabled className="w-full py-2 sm:py-3 rounded-xl border-2 border-gray-300 text-gray-400 font-semibold opacity-50 cursor-not-allowed text-sm sm:text-base">
-                  —
-                </button>
-              )}
+        {/* ================= VALUE PROPOSITION ================= */}
+        <section className="mt-20 sm:mt-28 bg-gray-50 py-16 sm:py-20 px-4 sm:px-6 lg:px-8">
+          <div className="max-w-6xl mx-auto">
+            <div className="text-center max-w-2xl mx-auto mb-12 sm:mb-16">
+              <span className="inline-block text-xs sm:text-sm font-semibold tracking-[0.2em] text-purple-600 mb-3">
+                MORE THAN A TOOLKIT
+              </span>
+              <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 mb-4">
+                Everything you need to get into CRNA school
+              </h2>
+              <p className="text-base sm:text-lg text-gray-500">
+                Powerful tools, real insights, and everything in one place.
+              </p>
             </div>
 
-{/* PREMIUM PLAN */}
-            <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 border-2 border-blue-500 relative">
-              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 flex gap-2">
-                <span className="bg-blue-500 text-white px-3 sm:px-4 py-1 rounded-full text-xs sm:text-sm font-semibold whitespace-nowrap">
-                  POPULAR
-                </span>
-                <span className="bg-red-500 text-white px-3 sm:px-4 py-1 rounded-full text-xs sm:text-sm font-semibold whitespace-nowrap">
-                  LIMITED TIME
-                </span>
-              </div>
-              <h2 className="text-xl sm:text-2xl font-bold mb-2 text-gray-800">Premium</h2>
-              <div className="mb-3 sm:mb-4">
-                <span className="text-xl sm:text-2xl text-gray-400 line-through">$14.99</span>
-                <span className="text-3xl sm:text-4xl font-bold text-gray-800 ml-2">$5.00</span>
-              </div>
-              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Find Schools with a few clicks!</p>
-
-              <ul className="space-y-2 sm:space-y-3 mb-6 sm:mb-8 text-sm sm:text-base">
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Everything in Free</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Advanced school filters</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Filter by state, GRE, prerequisites</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Filter by application deadlines</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Application method filters</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Direct school website links</span></li>
-               
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume Builder (1 resume)</strong></span></li>
-
- <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>Advanced GPA analytics</span></li>
-                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>AI personal statement rewrites</span></li>
-                <li className="flex items-start gap-2 text-gray-400"><span>✗</span><span>School-specific interview styles</span></li>
-              </ul>
-
-              {user && userTier === 'premium' ? (
-                <button className="w-full py-2 sm:py-3 rounded-xl bg-blue-600 text-white font-semibold cursor-default text-sm sm:text-base">
-                  Current Plan
-                </button>
-              ) : (
-                <button onClick={() => handleCheckout('premium')} disabled={loading === 'premium'} className="w-full py-2 sm:py-3 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold hover:opacity-90 transition disabled:opacity-50 text-sm sm:text-base">
-                  {loading === 'premium' ? 'Loading...' : 'Upgrade to Premium'}
-                </button>
-              )}
-            </div>
-          
-{/* ULTIMATE PLAN */}
-            <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 border-2 border-purple-500 relative">
-              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-gradient-to-r from-purple-600 to-pink-500 text-white px-3 sm:px-4 py-1 rounded-full text-xs sm:text-sm font-semibold">
-                BEST VALUE
-              </div>
-              <h2 className="text-xl sm:text-2xl font-bold mb-2 text-gray-800">Ultimate</h2>
-              <div className="mb-3 sm:mb-4">
-                <span className="text-3xl sm:text-4xl font-bold text-gray-800">$39.99</span>
-              </div>
-              <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">Unlimited Access on Everything </p>
-
-              <ul className="space-y-2 sm:space-y-3 mb-6 sm:mb-8 text-sm sm:text-base">
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Everything in Premium</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Advanced GPA calculator with trends</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Semester-by-semester GPA analysis</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Advanced personal statement analyzer</span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>AI-powered essay rewrites</strong></span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Sentence-level feedback & improvements</span></li>
-               
-
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume Builder (unlimited resumes)</strong></span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>5 professional resume templates</strong></span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>AI-powered resume bullet points</strong></span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Resume scoring algorithm</strong></span></li>
-
-
- <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>School-specific interview styles</strong></span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span><strong>Unlimited mock interviews</strong></span></li>
-                <li className="flex items-start gap-2"><span className="text-green-500">✓</span><span>Priority support</span></li>
-              </ul>
-
-              {user && userTier === 'ultimate' ? (
-                <button className="w-full py-2 sm:py-3 rounded-xl bg-purple-600 text-white font-semibold cursor-default text-sm sm:text-base">
-                  ⭐ Current Plan
-                </button>
-              ) : (
-                <button onClick={() => handleCheckout('ultimate')} disabled={loading === 'ultimate'} className="w-full py-2 sm:py-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-500 text-white font-semibold hover:opacity-90 transition disabled:opacity-50 text-sm sm:text-base">
-                  {loading === 'ultimate' ? 'Loading...' : 'Upgrade to Ultimate'}
-                </button>
-              )}
-              {!(user && userTier === 'ultimate') && (
-                <p className="text-xs text-gray-500 text-center mt-2">Have a promo code? You'll be able to enter it at checkout.</p>
-              )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              {VALUE_PROPS.map((item) => (
+                <div
+                  key={item.title}
+                  className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm transition-shadow hover:shadow-md"
+                >
+                  <div className="h-11 w-11 rounded-xl bg-purple-50 flex items-center justify-center mb-4">
+                    <item.icon className="h-5 w-5 text-purple-600" aria-hidden="true" />
+                  </div>
+                  <h3 className="font-semibold text-gray-900 mb-1.5">{item.title}</h3>
+                  <p className="text-sm text-gray-500 leading-relaxed">{item.description}</p>
+                </div>
+              ))}
             </div>
           </div>
+        </section>
 
-          <div className="text-center mt-8 sm:mt-12 text-indigo-200 text-sm sm:text-base">
-            <p>🔒 Secure payment powered by Stripe</p>
-            <p className="mt-2">Questions? Contact support@crnaprephub.com</p>
+        {/* ================= PLAN COMPARISON ================= */}
+        <section className="bg-white py-16 sm:py-20 px-4 sm:px-6 lg:px-8">
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center max-w-2xl mx-auto mb-10 sm:mb-14">
+              <span className="inline-block text-xs sm:text-sm font-semibold tracking-[0.2em] text-purple-600 mb-3">
+                PLAN COMPARISON
+              </span>
+              <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900">
+                Compare plans side by side
+              </h2>
+            </div>
+
+            <ComparisonTable />
           </div>
-        </div>
+        </section>
+
+        {/* ================= FAQ ================= */}
+        <section className="bg-gray-50 py-16 sm:py-20 px-4 sm:px-6 lg:px-8">
+          <div className="max-w-3xl mx-auto">
+            <div className="text-center mb-10 sm:mb-14">
+              <span className="inline-block text-xs sm:text-sm font-semibold tracking-[0.2em] text-purple-600 mb-3">
+                FREQUENTLY ASKED QUESTIONS
+              </span>
+              <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900">
+                Common questions
+              </h2>
+            </div>
+
+            <FaqAccordion />
+
+            <p className="text-center text-sm text-gray-400 mt-10">
+              Questions? Contact support@crnaprephub.com
+            </p>
+          </div>
+        </section>
       </div>
 
-      {/* Banner Editor Modal */}
-      {showBannerEditor && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold mb-4">Edit Promo Banner</h2>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Banner Text (use {'{CODE}'} for promo code)</label>
-                <input
-                  type="text"
-                  value={editingBanner?.banner_text || ''}
-                  onChange={(e) => setEditingBanner({...editingBanner, banner_text: e.target.value})}
-                  className="w-full px-3 py-2 border rounded-lg"
-                  placeholder="LIMITED TIME: Use code {CODE} for $15 OFF!"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Promo Code</label>
-                <input
-                  type="text"
-                  value={editingBanner?.promo_code || ''}
-                  onChange={(e) => setEditingBanner({...editingBanner, promo_code: e.target.value})}
-                  className="w-full px-3 py-2 border rounded-lg"
-                  placeholder="MARCH15"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Expiry Date</label>
-                <input
-                  type="date"
-                  value={editingBanner?.expiry_date || ''}
-                  onChange={(e) => setEditingBanner({...editingBanner, expiry_date: e.target.value})}
-                  className="w-full px-3 py-2 border rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Background Color (Tailwind classes)</label>
-                <select
-                  value={editingBanner?.background_color || ''}
-                  onChange={(e) => setEditingBanner({...editingBanner, background_color: e.target.value})}
-                  className="w-full px-3 py-2 border rounded-lg"
-                >
-                  <option value="from-red-600 via-orange-500 to-red-600">Red to Orange</option>
-                  <option value="from-blue-600 via-purple-500 to-blue-600">Blue to Purple</option>
-                  <option value="from-green-600 via-teal-500 to-green-600">Green to Teal</option>
-                  <option value="from-purple-600 via-pink-500 to-purple-600">Purple to Pink</option>
-                  <option value="from-yellow-500 via-orange-500 to-yellow-500">Yellow to Orange</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={saveBanner}
-                disabled={savingBanner}
-                className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50"
-              >
-                {savingBanner ? 'Saving...' : 'Save Banner'}
-              </button>
-              {banner && (
-                <button
-                  onClick={deleteBanner}
-                  className="px-4 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700"
-                >
-                  Delete
-                </button>
-              )}
-              <button
-                onClick={() => setShowBannerEditor(false)}
-                className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg font-semibold hover:bg-gray-300"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+      {showBannerEditor && editingBanner && (
+        <PromoBannerEditor
+          editingBanner={editingBanner}
+          setEditingBanner={setEditingBanner}
+          onSave={saveBanner}
+          onDelete={deleteBanner}
+          onClose={() => setShowBannerEditor(false)}
+          saving={savingBanner}
+          hasExistingBanner={!!banner}
+        />
       )}
 
       <style jsx global>{`
@@ -429,6 +422,11 @@ export default function Pricing() {
         }
         .animate-shimmer {
           animation: shimmer 3s linear infinite;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .animate-shimmer {
+            animation: none;
+          }
         }
       `}</style>
     </div>
