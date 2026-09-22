@@ -18,7 +18,6 @@ import {
   Home,
   Mail,
   Megaphone,
-  MessagesSquare,
   Newspaper,
   Mic,
   School,
@@ -286,17 +285,6 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
 
             {isLoggedIn && (
               <>
-              {/* Forum */}
-              <Link
-                href="/forum"
-                title={isCollapsed ? 'Community Forum' : undefined}
-                className={linkClass(pathname === '/forum')}
-              >
-                <ActiveEdge active={pathname === '/forum'} />
-                <MessagesSquare className={`h-[18px] w-[18px] shrink-0 ${pathname === '/forum' ? 'text-violet-300' : ''}`} />
-                {!isCollapsed && <span className="truncate">Community Forum</span>}
-              </Link>
-
               {/* Messages button with unread count */}
               <button
                 onClick={() => {

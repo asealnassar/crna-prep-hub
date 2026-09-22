@@ -40,7 +40,6 @@ export default function Home() {
               <Link href="/schools" className="text-white/80 hover:text-white transition">Schools</Link>
               <Link href="/interview" className="text-white/80 hover:text-white transition">Interview</Link>
               <Link href="/interview-prep" className="text-white/80 hover:text-white transition hidden sm:inline">School Interview</Link>
-              <Link href="/forum" className="text-white/80 hover:text-white transition hidden sm:inline">Forum</Link>
               <Link href="/pricing" className="text-white/80 hover:text-white transition">Pricing</Link>
               <Link href="/login" className="bg-white text-indigo-900 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg font-semibold hover:bg-indigo-100 transition text-sm">Login</Link>
             </div>
@@ -138,11 +137,6 @@ export default function Home() {
             <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">📄</div>
             <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">Resume Builder</h3>
             <p className="text-sm sm:text-base text-indigo-200">Create a polished, ATS-friendly resume built for nurse anesthesia applications in minutes.</p>
-          </div>
-          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 sm:p-8 border border-white/10 hover:bg-white/15 transition">
-            <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">🗣️</div>
-            <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3">Community Forum</h3>
-            <p className="text-sm sm:text-base text-indigo-200">Connect with 600+ future CRNAs. Ask questions, share experiences, and get support from people on the same journey.</p>
           </div>
         </div>
       </div>
