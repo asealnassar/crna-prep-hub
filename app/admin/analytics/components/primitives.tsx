@@ -30,7 +30,10 @@ export function Card({
 }) {
   return (
     <div
-      className={`rounded-xl border border-slate-200 bg-white shadow-sm ${padded ? 'p-4 sm:p-5' : ''} ${className}`}
+      // min-w-0: a grid item defaults to min-width:auto, which refuses to
+      // shrink below its content and pushed the Product tab 4px past the
+      // right edge of a 375px phone. Harmless outside a grid.
+      className={`min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm ${padded ? 'p-4 sm:p-5' : ''} ${className}`}
     >
       {children}
     </div>

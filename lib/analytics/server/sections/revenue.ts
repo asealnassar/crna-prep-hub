@@ -43,6 +43,10 @@ export async function buildRevenue(reader: Reader, range: ResolvedRange, force =
     ? users.rows.map((user) => ({ email: user.email, createdAt: user.created_at }))
     : []
 
+  const accountsWithoutProfile = users.ok
+    ? users.rows.filter((user) => !profiles.tierById.has(user.id)).length
+    : 0
+
   const tierBreakdown: Breakdown = {
     id: 'tier_mix',
     label: 'Membership access held today',
@@ -50,14 +54,26 @@ export async function buildRevenue(reader: Reader, range: ResolvedRange, force =
     status: profiles.available ? 'ok' : 'error',
     note: 'What members can use right now. Includes access granted by hand, so it is deliberately not a sales figure.',
     source: { label: 'user_profiles' },
-    rows: [...profiles.counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([tier, count]) => ({
-        key: tier,
-        label: TIER_LABELS[tier] ?? tier,
-        value: count,
-        note: tier === 'security-test' ? 'Internal test cohort.' : undefined,
-      })),
+    rows: [
+      ...[...profiles.counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([tier, count]) => ({
+          key: tier,
+          label: TIER_LABELS[tier] ?? tier,
+          value: count,
+          note: tier === 'security-test' ? 'Internal test cohort.' : undefined,
+        })),
+      // So this panel adds up to the member count instead of quietly
+      // falling short of it.
+      ...(accountsWithoutProfile > 0
+        ? [{
+            key: 'no_profile',
+            label: 'No membership record',
+            value: accountsWithoutProfile,
+            note: 'Signed-up accounts with no row in user_profiles.',
+          }]
+        : []),
+    ],
   }
 
   // Stripe unavailable: say so plainly rather than showing zeroes.
@@ -124,13 +140,13 @@ export async function buildRevenue(reader: Reader, range: ResolvedRange, force =
     },
     {
       id: 'net_revenue',
-      label: 'Net revenue',
+      label: 'Net revenue (after refunds)',
       group: 'headline',
       value: money(report.net),
       previous: money(report.previous?.net),
       unit: 'currency',
       status: 'ok',
-      note: 'Gross minus the refunds issued in the same window.',
+      note: 'Gross minus refunds issued in this window. Stripe fees are NOT deducted here.',
       source: stripeSource,
     },
     {
@@ -147,12 +163,12 @@ export async function buildRevenue(reader: Reader, range: ResolvedRange, force =
     },
     {
       id: 'after_fees',
-      label: 'Net after fees',
+      label: 'Net after refunds and fees',
       group: 'headline',
       value: money(report.net - report.fees),
       unit: 'currency',
       status: report.feesComplete ? 'ok' : 'partial',
-      note: 'Net revenue less processing fees. What actually reaches the bank, before tax.',
+      note: 'Net revenue minus Stripe processing fees. This is what reaches the bank, before tax.',
       source: stripeSource,
     },
     {
@@ -236,7 +252,7 @@ export async function buildRevenue(reader: Reader, range: ResolvedRange, force =
       value: money(report.allTime.net),
       unit: 'currency',
       status: 'ok',
-      note: 'All payments less all refunds, ever.',
+      note: 'All payments less all refunds, ever. Before Stripe fees.',
       source: stripeSource,
     },
     {
@@ -299,16 +315,24 @@ export async function buildRevenue(reader: Reader, range: ResolvedRange, force =
       note: `${report.conversion.cohortPaid} of ${report.conversion.cohortAccounts} accounts created in this window have paid so far. Recent signups have had less time to buy.`,
       source: { label: 'Stripe charges + auth.users' },
     },
-    {
-      id: 'days_to_purchase',
-      label: 'Median days from signup to purchase',
-      group: 'conversion',
-      value: report.conversion.medianDaysToPurchase,
-      unit: 'score',
-      status: 'ok',
-      note: 'Across every matched account that has ever paid.',
-      source: { label: 'Stripe charges + auth.users' },
-    },
+    // Under a day, "0.0 days" hides the answer instead of giving it: most
+    // buyers here sign up and pay in the same sitting, which is worth seeing.
+    (() => {
+      const days = report.conversion.medianDaysToPurchase
+      const useHours = days !== null && days < 1
+      return {
+        id: 'days_to_purchase',
+        label: useHours ? 'Median hours from signup to purchase' : 'Median days from signup to purchase',
+        group: 'conversion',
+        value: days === null ? null : useHours ? days * 24 : days,
+        unit: 'score' as const,
+        status: 'ok' as const,
+        note: useHours
+          ? 'Most buyers sign up and pay in the same session. Across every matched account that has ever paid.'
+          : 'Across every matched account that has ever paid.',
+        source: { label: 'Stripe charges + auth.users' },
+      }
+    })(),
 
     // --- discounts -----------------------------------------------------------
     {
@@ -438,6 +462,9 @@ export async function buildRevenue(reader: Reader, range: ResolvedRange, force =
   }
 
   // --- checkout funnel, from sessions ---------------------------------------
+  // Matched session by session: the denominator is the sessions created in
+  // this window and the numerator is the subset of THOSE that completed.
+  // Comparing sessions here against charges would mix two populations.
   const sessionsInWindow = snapshot.checkouts.filter((checkout) => within(checkout.createdAt, range.from, range.to))
   const completedSessions = sessionsInWindow.filter(
     (checkout) => checkout.status === 'complete' && checkout.paymentStatus !== 'unpaid'

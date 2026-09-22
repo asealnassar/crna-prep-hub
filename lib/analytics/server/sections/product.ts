@@ -11,7 +11,6 @@ import {
   type GrantRow,
 } from '../../interviews'
 import {
-  needsMigration,
   notTracked,
   type Breakdown,
   type Metric,
@@ -428,13 +427,14 @@ export async function buildProduct(reader: Reader, range: ResolvedRange): Promis
           note: 'Analyses that exist right now. Deleted ones leave no trace, so this is not a count of analyses created.',
           source: { label: 'gpa_drafts' },
         }
-      : needsMigration(
-          'gpa_analyses',
-          'GPA analyses held',
-          noteFromFailure('gpa_drafts', gpaDrafts.reason, gpaDrafts.detail),
-          'count',
-          'gpa'
-        ),
+      : {
+          id: 'gpa_analyses',
+          label: 'GPA analyses held',
+          group: 'gpa',
+          value: null,
+          status: statusFromFailure(gpaDrafts.reason),
+          note: noteFromFailure('gpa_drafts', gpaDrafts.reason, gpaDrafts.detail),
+        },
     transcripts.ok
       ? {
           id: 'transcript_imports',
@@ -445,13 +445,14 @@ export async function buildProduct(reader: Reader, range: ResolvedRange): Promis
           note: 'Successful imports only: a failed analysis releases its record. Recorded since 5 September 2026.',
           source: { label: 'gpa_transcript_sources' },
         }
-      : needsMigration(
-          'transcript_imports',
-          'Transcript imports',
-          noteFromFailure('gpa_transcript_sources', transcripts.reason, transcripts.detail),
-          'count',
-          'gpa'
-        )
+      : {
+          id: 'transcript_imports',
+          label: 'Transcript imports',
+          group: 'gpa',
+          value: null,
+          status: statusFromFailure(transcripts.reason),
+          note: noteFromFailure('gpa_transcript_sources', transcripts.reason, transcripts.detail),
+        }
   )
   if (!gpaDrafts.ok) diagnostics.note('gpa_drafts', gpaDrafts.reason, gpaDrafts.detail)
   if (!transcripts.ok) diagnostics.note('gpa_transcript_sources', transcripts.reason, transcripts.detail)

@@ -101,6 +101,25 @@ test('a revoked table is denied, which is what tells the page a migration is nee
   assert.equal(classifyError({ code: '42501', message: 'permission denied for table gpa_drafts' }).reason, 'denied')
 })
 
+test('a 403 with an empty body is a denial, which is what the live database actually returns', () => {
+  // gpa_drafts answers 403 Forbidden with no code and no message at all. Read
+  // from the error alone that looks like an unknown failure, and the page said
+  // "Reading gpa_drafts failed:" with nothing after the colon.
+  const classified = classifyError({ message: '' }, 403)
+
+  assert.equal(classified.reason, 'denied')
+  assert.equal(classified.detail, 'HTTP 403')
+})
+
+test('the status wins over an empty error body, and 404 means missing', () => {
+  assert.equal(classifyError(null, 401).reason, 'denied')
+  assert.equal(classifyError({ message: '' }, 404).reason, 'missing')
+})
+
+test('a success status with an error still classifies from the code', () => {
+  assert.equal(classifyError({ code: '42P01', message: 'relation does not exist' }, 200).reason, 'missing')
+})
+
 test('an absent table or column is missing, not a crash', () => {
   assert.equal(classifyError({ code: '42P01', message: 'relation does not exist' }).reason, 'missing')
   assert.equal(classifyError({ code: '42703', message: 'column does not exist' }).reason, 'missing')
@@ -112,4 +131,8 @@ test('anything else is a plain failure and keeps its message for the log', () =>
   assert.equal(classified.reason, 'failed')
   assert.equal(classified.detail, 'connection failure')
   assert.equal(classifyError(null).reason, 'failed')
+})
+
+test('a failure with no message says so rather than trailing off', () => {
+  assert.equal(classifyError({ message: '' }).detail, 'no error message was returned')
 })

@@ -1,5 +1,7 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
+
 import { formatDateTime } from '@/lib/analytics/format'
 
 /**
@@ -53,6 +55,20 @@ export function Controls({
   loading: boolean
   onRefresh: () => void
 }) {
+  const tabStrip = useRef<HTMLElement>(null)
+  const activeTab = useRef<HTMLButtonElement>(null)
+
+  // On a phone the strip is wider than the screen, so arriving on a later tab
+  // showed only the first few and no sign of which one was open. Scroll the
+  // strip itself rather than the page.
+  useEffect(() => {
+    const strip = tabStrip.current
+    const button = activeTab.current
+    if (!strip || !button) return
+    const offset = button.offsetLeft - (strip.clientWidth - button.clientWidth) / 2
+    strip.scrollTo({ left: Math.max(0, offset), behavior: 'smooth' })
+  }, [tab])
+
   return (
     <div className="border-b border-slate-200 bg-white">
       <div className="mx-auto max-w-7xl px-4 sm:px-6">
@@ -74,10 +90,15 @@ export function Controls({
           </button>
         </div>
 
-        <nav className="-mb-px mt-4 flex gap-1 overflow-x-auto" aria-label="Analytics sections">
+        <nav
+          ref={tabStrip}
+          className="-mb-px mt-4 flex gap-1 overflow-x-auto"
+          aria-label="Analytics sections"
+        >
           {TABS.map((item) => (
             <button
               key={item.id}
+              ref={tab === item.id ? activeTab : undefined}
               type="button"
               onClick={() => onTab(item.id)}
               className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm transition ${

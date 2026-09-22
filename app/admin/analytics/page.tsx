@@ -227,6 +227,13 @@ function SectionBody({ payload, timezone, tab }: { payload: SectionPayload; time
       const key = metric.group ?? 'default'
       map.set(key, [...(map.get(key) ?? []), metric])
     }
+    // A group can be made of charts or breakdowns alone — the Revenue tab's
+    // membership panel has no cards of its own — so the list of groups is the
+    // union of all three, not just the ones that happen to have metrics.
+    for (const item of [...payload.series, ...payload.breakdowns]) {
+      const key = item.group ?? 'default'
+      if (!map.has(key)) map.set(key, [])
+    }
     return [...map.entries()].sort(
       (a, b) => GROUP_ORDER.indexOf(a[0]) - GROUP_ORDER.indexOf(b[0])
     )
@@ -257,10 +264,8 @@ function SectionBody({ payload, timezone, tab }: { payload: SectionPayload; time
               </div>
             )}
 
-            {(groupBreakdowns.length > 0 || (group === 'default' && payload.funnels.length > 0)) && (
+            {groupBreakdowns.length > 0 && (
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                {group === 'default' &&
-                  payload.funnels.map((funnel) => <FunnelPanel key={funnel.id} funnel={funnel} />)}
                 {groupBreakdowns.map((breakdown) => (
                   <BreakdownPanel key={breakdown.id} breakdown={breakdown} />
                 ))}
@@ -269,6 +274,19 @@ function SectionBody({ payload, timezone, tab }: { payload: SectionPayload; time
           </section>
         )
       })}
+
+      {/* Funnels belong to the section, not to one group: tying them to the
+          'default' group hid the checkout funnel on every tab whose metrics
+          are all grouped. */}
+      {payload.funnels.length > 0 && (
+        <section>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {payload.funnels.map((funnel) => (
+              <FunnelPanel key={funnel.id} funnel={funnel} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {tab === 'operations' && (
         <>

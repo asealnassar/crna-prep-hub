@@ -65,6 +65,23 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
     failed.push({ source: 'Stripe', reason: 'Stripe could not be reached, so revenue is unavailable rather than zero.' })
   }
 
+  // The checkout steps are MATCHED: both come from the same set of sessions
+  // created in this window, counted as people. Dividing charges in the window
+  // by sessions in the window would compare two different populations — a
+  // charge here can belong to a session started before the window opened.
+  const sessionsInWindow = snapshot
+    ? snapshot.checkouts.filter((checkout) => within(checkout.createdAt, range.from, range.to))
+    : []
+  const paidSessionsInWindow = sessionsInWindow.filter(
+    (checkout) => checkout.status === 'complete' && checkout.paymentStatus !== 'unpaid'
+  )
+  const startedCheckoutPeople = new Set(
+    sessionsInWindow.map((checkout) => checkout.email).filter((email): email is string => !!email)
+  ).size
+  const paidPeople = new Set(
+    paidSessionsInWindow.map((checkout) => checkout.email).filter((email): email is string => !!email)
+  ).size
+
   const eventsInWindow = activity.events.filter((event) => within(event.at, range.from, range.to))
   const eventsInComparison = range.comparison
     ? activity.events.filter((event) => within(event.at, range.comparison!.from, range.comparison!.to))
@@ -167,12 +184,12 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
     revenue
       ? {
           id: 'revenue',
-          label: 'Net revenue',
+          label: 'Net revenue (after refunds)',
           value: revenue.net / 100,
           previous: revenue.previous ? revenue.previous.net / 100 : null,
           unit: 'currency' as const,
           status: 'ok' as const,
-          note: `Payments in this window less refunds issued in it, from Stripe. ${revenue.currency.toUpperCase()}, ${revenue.mode} mode.`,
+          note: `Payments in this window less refunds issued in it. Stripe fees are NOT deducted here — the Revenue tab shows those separately. ${revenue.currency.toUpperCase()}, ${revenue.mode} mode.`,
           source: { label: 'Stripe charges' },
           spark: revenue.series.gross.map((cents) => cents / 100),
         }
@@ -231,13 +248,27 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
     },
   ]
 
-  const tierRows = [...profiles.counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([tier, count]) => ({
-      key: tier,
-      label: TIER_LABELS[tier] ?? tier,
-      value: count,
-    }))
+  // Accounts with no row in user_profiles would otherwise vanish from this
+  // panel, leaving it short of the member count for no stated reason.
+  const withoutProfile = accounts.filter((user) => !profiles.tierById.has(user.id)).length
+
+  const tierRows = [
+    ...[...profiles.counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([tier, count]) => ({
+        key: tier,
+        label: TIER_LABELS[tier] ?? tier,
+        value: count,
+      })),
+    ...(withoutProfile > 0
+      ? [{
+          key: 'no_profile',
+          label: 'No membership record',
+          value: withoutProfile,
+          note: 'Signed-up accounts with no row in user_profiles.',
+        }]
+      : []),
+  ]
 
   const breakdowns: Breakdown[] = [
     {
@@ -285,20 +316,20 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
         {
           id: 'checkout',
           label: 'Started checkout',
-          value: snapshot
-            ? snapshot.checkouts.filter((checkout) => within(checkout.createdAt, range.from, range.to)).length
-            : null,
+          value: snapshot ? startedCheckoutPeople : null,
           status: snapshot ? 'ok' : 'not_tracked',
           note: snapshot
-            ? 'Stripe checkout sessions created in this window.'
+            ? 'People who opened a Stripe checkout in this window. Someone who tried twice counts once.'
             : 'Stripe is not configured in this environment.',
         },
         {
           id: 'paid',
           label: 'Paid',
-          value: revenue ? revenue.orders : null,
-          status: revenue ? 'ok' : 'not_tracked',
-          note: revenue ? 'Successful payments in this window, from Stripe.' : 'Needs Stripe.',
+          value: snapshot ? paidPeople : null,
+          status: snapshot ? 'ok' : 'not_tracked',
+          note: snapshot
+            ? 'Of those same checkouts, the ones that completed. Matched session by session, so this rate is a real conversion.'
+            : 'Needs Stripe.',
         },
       ],
     },

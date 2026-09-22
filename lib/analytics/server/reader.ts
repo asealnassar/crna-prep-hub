@@ -44,12 +44,22 @@ export type CountResult =
  * deliberately revoked from service_role returns, and it deserves a different
  * message from a table that is simply broken.
  */
-export function classifyError(error: { code?: string | null; message?: string | null } | null): {
-  reason: ReadFailure
-  detail: string
-} {
+export function classifyError(
+  error: { code?: string | null; message?: string | null } | null,
+  status?: number | null
+): { reason: ReadFailure; detail: string } {
+  // THE HTTP STATUS IS THE RELIABLE SIGNAL. A table whose privileges were
+  // revoked from the server role answers 403 with an EMPTY error body — no
+  // code, no message — which was reaching the dashboard as "Reading gpa_drafts
+  // failed:" with nothing after the colon. Observed against the live database:
+  // gpa_drafts returns 403 Forbidden, gpa_calculations returns 200.
+  if (status === 401 || status === 403) {
+    return { reason: 'denied', detail: error?.message || `HTTP ${status}` }
+  }
+  if (status === 404) return { reason: 'missing', detail: error?.message || 'HTTP 404' }
+
   const code = error?.code ?? ''
-  const message = error?.message ?? 'unknown error'
+  const message = error?.message || 'no error message was returned'
   if (code === '42P01' || code === '42703' || code === 'PGRST205') return { reason: 'missing', detail: message }
   if (code === '42501' || code === 'PGRST301') return { reason: 'denied', detail: message }
   return { reason: 'failed', detail: message }
@@ -141,9 +151,9 @@ export function createReader(admin: SupabaseClient): Reader {
           builder = applyFilters(builder, query)
           if (order) builder = builder.order(order, { ascending: true })
           if (query.tiebreak) builder = builder.order(query.tiebreak, { ascending: true })
-          const { data, error } = await builder.range(from, to)
+          const { data, error, status } = await builder.range(from, to)
           if (error) {
-            const { reason, detail } = classifyError(error)
+            const { reason, detail } = classifyError(error, status)
             return { ok: false, reason, detail }
           }
           return { ok: true, rows: (data ?? []) as T[] }
@@ -155,9 +165,9 @@ export function createReader(admin: SupabaseClient): Reader {
     async count(table: string, query: Omit<RowQuery, 'tiebreak' | 'maxRows'> = {}): Promise<CountResult> {
       let builder: any = admin.from(table).select('*', { count: 'exact', head: true })
       builder = applyFilters(builder, query)
-      const { count, error } = await builder
+      const { count, error, status } = await builder
       if (error) {
-        const { reason, detail } = classifyError(error)
+        const { reason, detail } = classifyError(error, status)
         return { ok: false, reason, detail }
       }
       return { ok: true, count: count ?? 0 }

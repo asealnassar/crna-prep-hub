@@ -121,11 +121,14 @@ export function Queues({ timezone }: { timezone: string }) {
             }`}
           >
             {item.label}
-            <span className="ml-1.5 text-xs text-slate-400">{item.count}</span>
-            {item.id === 'unlocks' && item.count > 0 && (
+            {/* One count per tab. Showing the quiet number AND the red badge
+                rendered "School requests 6 6" whenever anything was pending. */}
+            {item.id === 'unlocks' && item.count > 0 ? (
               <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
                 {item.count}
               </span>
+            ) : (
+              <span className="ml-1.5 text-xs text-slate-400">{item.count}</span>
             )}
           </button>
         ))}
