@@ -143,6 +143,34 @@ t_untouched as (
          'unchanged by this migration'              as expected,
          case when to_regclass('public.' || name) is null then 'FAIL' else 'INFO' end as verdict
   from   (values ('user_profiles'), ('interview_grants'), ('school_unlock_requests')) as u(name)
+),
+
+-- 10. RETENTION IS ACTUALLY SCHEDULED. The Privacy Policy promises visitors
+--     that usage records are deleted after 400 days; a promise nothing
+--     enforces is not a retention period. Added by migration 002.
+--
+--     Guarded with to_regclass so that a database without pg_cron reports the
+--     fact instead of erroring and taking the other 27 checks down with it.
+t_retention as (
+  select '10. retention is scheduled'               as check_name,
+         case
+           when to_regclass('cron.job') is null then '(pg_cron not installed -- migration 002 not applied)'
+           else coalesce(
+             (xpath('/row/c/text()',
+                    query_to_xml($q$select coalesce(string_agg(schedule || ' active=' || active, ', '), '(no job)') as c
+                                   from cron.job where jobname = 'analytics-retention'$q$,
+                                 false, true, '')))[1]::text,
+             '(no job)')
+         end                                        as found,
+         '17 3 * * * active=true'                   as expected,
+         case
+           when to_regclass('cron.job') is null then 'FAIL'
+           when (xpath('/row/c/text()',
+                       query_to_xml($q$select count(*) as c from cron.job
+                                       where jobname = 'analytics-retention' and active$q$,
+                                    false, true, '')))[1]::text = '1' then 'PASS'
+           else 'FAIL'
+         end                                        as verdict
 )
 
 select * from t_exists
@@ -154,4 +182,5 @@ union all select * from t_prune
 union all select * from t_no_pii
 union all select * from t_rows
 union all select * from t_untouched
+union all select * from t_retention
 order by check_name;

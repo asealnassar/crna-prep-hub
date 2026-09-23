@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 }
 
 const UPDATED = '22 September 2026'
-const CONTACT = 'asealnassar@gmail.com'
+const CONTACT = 'support@crnaprephub.com'
 
 /**
  * The privacy policy.
