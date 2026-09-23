@@ -47,6 +47,8 @@
  * the property being tested. `--rate` and `--burst` are opt-in and spend more.
  */
 
+import net from 'node:net'
+import tls from 'node:tls'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { resolve as resolvePath } from 'node:path'
@@ -88,6 +90,9 @@ const credentials = decideCredentials({
 })
 
 const BASE = (args.get('base') ?? 'http://localhost:3000').replace(/\/$/, '')
+// Re-run the refusal paths alone. Spends NOTHING: every gate below refuses
+// before the model, so this is the mode for re-checking a failed gate.
+const GATES_ONLY = flags.has('gates-only')
 const TIER = (args.get('tier') ?? '').toLowerCase()
 
 if (!credentials.ok) {
@@ -182,6 +187,73 @@ async function rawStatus(init) {
   }
 }
 
+/**
+ * One HTTP/1.1 request written by hand onto a socket, with a body deliberately
+ * SHORTER than its declared Content-Length.
+ *
+ * WHY NOT fetch(). undici validates Content-Length against the body it is given
+ * and refuses to put a mismatched request on the wire at all
+ * (UND_ERR_REQ_CONTENT_LENGTH_MISMATCH). That is undici being correct, but it
+ * means fetch cannot express the request we need to test: a client that LIES
+ * about how big its body is. Only a raw socket can.
+ *
+ * WHAT A PASS PROVES, and it is stronger than the check it replaces. We declare
+ * a body of `declared` bytes and send a few hundred. If the server answers at
+ * all, it answered without the body — it cannot have buffered bytes that were
+ * never sent. So a 413 here is positive evidence that the refusal happened
+ * before `request.text()`, not merely that a 413 came back.
+ *
+ * A timeout is a FAILURE, and a meaningful one: it means the server is sitting
+ * there waiting for the rest of the body, which is exactly the memory-holding
+ * behaviour the gate exists to prevent.
+ */
+async function rawOverstatedContentLength({ declared, bodyBytes = 200, timeoutMs = 15_000 }) {
+  const target = new URL(BASE)
+  const secure = target.protocol === 'https:'
+  const port = Number(target.port) || (secure ? 443 : 80)
+  const body = JSON.stringify({ statement: 'a'.repeat(bodyBytes) })
+
+  const head =
+    `POST ${new URL(URL_).pathname} HTTP/1.1\r\n` +
+    `Host: ${target.host}\r\n` +
+    `Content-Type: application/json\r\n` +
+    `Content-Length: ${declared}\r\n` +
+    `Cookie: ${COOKIE}\r\n` +
+    `Connection: close\r\n\r\n`
+
+  return new Promise((resolve) => {
+    let settled = false
+    let received = ''
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try { socket.destroy() } catch { /* already gone */ }
+      resolve(value)
+    }
+    const timer = setTimeout(
+      () => finish({ status: 0, note: 'timed out — the server was still waiting for the body it was promised' }),
+      timeoutMs
+    )
+    const socket = secure
+      ? tls.connect({ host: target.hostname, port, servername: target.hostname })
+      : net.connect({ host: target.hostname, port })
+
+    const send = () => {
+      socket.write(head)
+      socket.write(body)   // and deliberately nothing more
+    }
+    socket.on(secure ? 'secureConnect' : 'connect', send)
+    socket.on('data', (chunk) => {
+      received += chunk.toString('latin1')
+      const line = /^HTTP\/1\.[01] (\d{3})/.exec(received)
+      if (line) finish({ status: Number(line[1]), sent: body.length, declared })
+    })
+    socket.on('error', (e) => finish({ status: 0, note: String(e?.code ?? e?.message) }))
+    socket.on('close', () => finish({ status: 0, note: 'closed with no response' }))
+  })
+}
+
 const STATEMENT = (
   'The night I watched a charge nurse talk a family through a withdrawal of care, ' +
   'I understood that anaesthesia was where I wanted to be. I have spent four years ' +
@@ -192,7 +264,8 @@ console.log(`\nPersonal Statement Analyzer — live authenticated E2E`)
 console.log(`  target    ${URL_}`)
 console.log(`  tier      ${TIER} (as you claim; the server decides from your session)`)
 console.log(`  ledger    ${SUPABASE.url && JWT ? 'readable via your own session' : 'UNAVAILABLE — ledger checks will be skipped'}`)
-console.log(`  rate test ${flags.has('rate') ? 'ON (spends calls)' : 'off'}   burst test ${flags.has('burst') ? 'ON (spends calls)' : 'off'}\n`)
+console.log(`  rate test ${flags.has('rate') ? 'ON (spends calls)' : 'off'}   burst test ${flags.has('burst') ? 'ON (spends calls)' : 'off'}`)
+console.log(`  mode      ${GATES_ONLY ? 'GATES ONLY — no analysis, no rewrite, no paid calls' : 'full'}\n`)
 
 // Fail fast and legibly if the target is not up. Everything after this
 // assumes a server that answers; without the check, the first paid call turns
@@ -203,13 +276,26 @@ if (reachable.status === 0) {
   console.error('Is the dev server running? Start it, or pass --base https://www.crnaprephub.com\n')
   process.exit(2)
 }
+if (reachable.status === 401) {
+  console.error('\nThe server rejected this session (401) before any test ran.')
+  console.error('Authentication is the first gate, so a stale cookie makes every other check')
+  console.error(`fail with 401 and tells you nothing. Sign in again at ${BASE}, re-copy the`)
+  console.error('sb- cookies, and make sure they came from that same environment.\n')
+  process.exit(2)
+}
 paidCalls = 0  // the probe is refused at the body gate; it costs nothing
 
-const before = await readLedger()
+const before = GATES_ONLY ? null : await readLedger()
 
 // ============================================================ ANALYSE (PAID)
 console.log('ANALYSE  [1 paid OpenAI call]')
-const analysis = await call('POST', { statement: STATEMENT }, {}, { paid: true })
+let analysis = { status: 0, json: null, ms: 0 }
+let body = {}
+
+if (GATES_ONLY) {
+  console.log('  SKIP  analysis and rewrite (--gates-only). No paid calls made.')
+} else {
+analysis = await call('POST', { statement: STATEMENT }, {}, { paid: true })
 if (analysis.status === 401) {
   console.error('\n  The server rejected this session (401).')
   console.error('  Your cookie is stale or from a different environment. Sign in again,')
@@ -219,7 +305,7 @@ if (analysis.status === 401) {
 check('analyze returns 200', analysis.status === 200,
   `got ${analysis.status} ${JSON.stringify(analysis.json)?.slice(0, 200)}`)
 
-let body = analysis.json ?? {}
+body = analysis.json ?? {}
 if (analysis.status === 200) {
   const a = body.analysis ?? {}
   const wire = JSON.stringify(body)
@@ -297,6 +383,8 @@ if (analysis.status === 200 && TIER === 'ultimate') {
 }
 
 // ============================================================ INPUT GATES
+} // end of the paid region
+
 console.log('\nINPUT GATES  [all free — refused before the model]')
 const short = await call('POST', { statement: 'too short' })
 check('a short statement is refused', short.status === 400 && short.json?.code === 'too-short', `got ${short.status}`)
@@ -307,12 +395,27 @@ check('an over-long statement is refused', long.status === 400 && long.json?.cod
 const huge = await call('POST', { statement: 'a'.repeat(200_000) })
 check('an oversized body is refused with 413', huge.status === 413, `got ${huge.status}`)
 
-const lying = await rawStatus({
-  method: 'POST',
-  headers: { 'content-type': 'application/json', cookie: COOKIE, 'content-length': '999999999' },
-  body: JSON.stringify({ statement: 'a'.repeat(200) }),
-})
-check('an overstated Content-Length is refused before the body is read', lying === 413, String(lying))
+// The honest oversized case. A 200 KB body carries Content-Length ~200012
+// against a 65536 ceiling, so the header gate is what refuses it — the byte
+// measurement never runs, because request.text() is never reached.
+check('an honestly-declared oversized body is refused by the header gate', huge.status === 413,
+  `got ${huge.status}`)
+
+// The dishonest case, which fetch cannot express. See rawOverstatedContentLength.
+const lying = await rawOverstatedContentLength({ declared: 999_999_999 })
+check('an overstated Content-Length is refused WITHOUT the body being sent',
+  lying.status === 413,
+  lying.status === 0 ? lying.note : `got ${lying.status} after sending ${lying.sent} of ${lying.declared} declared bytes`)
+if (lying.status === 413) {
+  console.log(`        (answered 413 having received ${lying.sent} of ${lying.declared} promised bytes)`)
+}
+
+// And an understated one must NOT be trusted: the header says it is small, the
+// bytes say otherwise, and the real measurement is what catches it.
+const understated = await rawOverstatedContentLength({ declared: 100, bodyBytes: 0 })
+check('an understated Content-Length does not crash the route',
+  understated.status === 400 || understated.status === 413 || understated.status === 0,
+  `got ${understated.status}${understated.note ? ' — ' + understated.note : ''}`)
 
 for (const [label, payload] of [
   ['missing statement', {}], ['null statement', { statement: null }],
@@ -341,8 +444,8 @@ for (const [label, method, payload] of [
 }
 
 // ============================================================ THE LEDGER
-console.log('\nUSAGE LEDGER  [free — read through your own session, RLS-scoped]')
-const after = await readLedger()
+console.log(`\nUSAGE LEDGER  ${GATES_ONLY ? '[skipped — nothing was recorded]' : '[free — read through your own session, RLS-scoped]'}`)
+const after = GATES_ONLY ? null : await readLedger()
 if (!before || !after) {
   console.log('  SKIP  ledger unreadable (no NEXT_PUBLIC_SUPABASE_* config, or no JWT in the cookie)')
 } else {

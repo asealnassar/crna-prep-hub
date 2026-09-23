@@ -148,3 +148,61 @@ test('a truthful small request is not refused by the cheap gate', () => {
   const body = JSON.stringify({ statement: 'a'.repeat(200) })
   assert.equal(declaredTooLarge(String(Buffer.byteLength(body)), MAX_ANALYZE_BODY_BYTES), false)
 })
+
+// ------------------------------- the header gate on realistic HTTP traffic
+
+test('a real oversized request body trips the gate on its own Content-Length', () => {
+  // The live E2E could not test this by faking a header: undici validates
+  // Content-Length against the body it is given and refuses to put a
+  // mismatched request on the wire at all (UND_ERR_REQ_CONTENT_LENGTH_MISMATCH).
+  // So this asserts the thing that actually happens in production — an HONEST
+  // client serialising an oversized body and stating its true size.
+  const body = JSON.stringify({ statement: 'a'.repeat(200_000) })
+  const contentLength = String(Buffer.byteLength(body, 'utf8'))
+
+  assert.equal(declaredTooLarge(contentLength, MAX_ANALYZE_BODY_BYTES), true,
+    'the header gate must refuse this before request.text() buffers it')
+  // And it is genuinely over, not a rounding artefact of the ceiling.
+  assert.ok(Number(contentLength) > MAX_ANALYZE_BODY_BYTES * 2)
+})
+
+test('the largest legitimate request is NOT refused by the header gate', () => {
+  // The gate must not fire on a maximum-length statement, or the ceiling in
+  // checkStatement would be unreachable and the error message wrong.
+  const body = JSON.stringify({ statement: 'a'.repeat(MAX_STATEMENT_CHARS) })
+  assert.equal(
+    declaredTooLarge(String(Buffer.byteLength(body, 'utf8')), MAX_ANALYZE_BODY_BYTES),
+    false
+  )
+})
+
+test('a rewrite body carrying a full analysis is not refused by its own gate', () => {
+  // The rewrite ceiling is larger because the analysis travels back with the
+  // statement. A realistic payload must clear it.
+  const analysis = {
+    overallScore: 70,
+    categories: Array.from({ length: 6 }, (_, i) => ({
+      name: `Category ${i}`, score: 7,
+      feedback: 'f'.repeat(600), suggestion: 's'.repeat(600),
+    })),
+    admissionsImpression: 'i'.repeat(600),
+    biggestWeaknesses: Array.from({ length: 3 }, () => 'w'.repeat(600)),
+    topChanges: Array.from({ length: 3 }, () => 'c'.repeat(600)),
+    sentenceAnalysis: Array.from({ length: 7 }, () => ({
+      original: 'o'.repeat(400), label: 'Weak', improved: 'p'.repeat(400),
+    })),
+  }
+  const body = JSON.stringify({
+    statement: 'a'.repeat(MAX_STATEMENT_CHARS), analysis, token: 'v1.1.' + 'a'.repeat(64),
+  })
+  assert.equal(declaredTooLarge(String(Buffer.byteLength(body, 'utf8')), MAX_REWRITE_BODY_BYTES), false,
+    'a legitimate rewrite would be refused at the door')
+})
+
+test('an understated Content-Length is not trusted', () => {
+  // The header says 100 bytes; the body is a megabyte. The gate declines to
+  // refuse (it is not KNOWN to be oversized) and the real measurement catches
+  // it. The two together are the control; neither alone is.
+  assert.equal(declaredTooLarge('100', MAX_ANALYZE_BODY_BYTES), false)
+  assert.equal(withinBodyLimit('a'.repeat(1024 * 1024), MAX_ANALYZE_BODY_BYTES), false)
+})
