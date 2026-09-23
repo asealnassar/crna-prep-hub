@@ -335,6 +335,28 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
               </>
             )}
           </div>
+
+          {/* Every page except the landing page navigates from here, so this is
+              where a privacy policy has to be reachable from. Deliberately
+              quiet: a small text link, not another nav item. */}
+          <div className="mt-6 border-t border-white/10 pt-4 pb-2">
+            {!isCollapsed ? (
+              <Link
+                href="/privacy"
+                className="block px-3 text-[11px] text-slate-500 transition hover:text-slate-300"
+              >
+                Privacy Policy
+              </Link>
+            ) : (
+              <Link
+                href="/privacy"
+                title="Privacy Policy"
+                className="block px-3 text-center text-[11px] text-slate-500 transition hover:text-slate-300"
+              >
+                &#167;
+              </Link>
+            )}
+          </div>
         </nav>
       </div>
     </>
