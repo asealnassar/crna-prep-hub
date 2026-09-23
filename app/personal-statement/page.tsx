@@ -12,6 +12,10 @@ export default function PersonalStatementAnalyzer() {
   const [analyzing, setAnalyzing] = useState(false)
   const [rewriting, setRewriting] = useState(false)
   const [analysis, setAnalysis] = useState<any>(null)
+  // Proof the analysis came from our server, returned alongside it. The
+  // rewrite endpoint requires it and re-derives it, so a hand-edited
+  // analysis can no longer reach the model. Never displayed.
+  const [analysisToken, setAnalysisToken] = useState("")
   const [rewritten, setRewritten] = useState('')
   const [userTier, setUserTier] = useState('free')
   const [userEmail, setUserEmail] = useState('')
@@ -73,6 +77,10 @@ export default function PersonalStatementAnalyzer() {
 
     setAnalyzing(true)
     setAnalysis(null)
+    setAnalysisToken("")
+    // A rewrite belongs to the analysis it came from. Leaving it on screen
+    // beside a fresh one would show two verdicts on different drafts.
+    setRewritten("")
 
     try {
       const res = await fetch('/api/analyze-statement', {
@@ -93,6 +101,7 @@ export default function PersonalStatementAnalyzer() {
         alert(data.error)
       } else {
         setAnalysis(data.analysis)
+        setAnalysisToken(typeof data.token === "string" ? data.token : "")
       }
     } catch (error) {
       alert('Analysis failed. Please try again.')
@@ -117,7 +126,7 @@ const rewriteStatement = async () => {
       const res = await fetch('/api/analyze-statement', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ statement, analysis })
+        body: JSON.stringify({ statement, analysis, token: analysisToken })
       })
 
       const data = await res.json()

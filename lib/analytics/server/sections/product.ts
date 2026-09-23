@@ -10,6 +10,7 @@ import {
   typeLabel,
   type GrantRow,
 } from '../../interviews'
+import { isStatementOperation } from '../../../statement/usage'
 import {
   notTracked,
   type Breakdown,
@@ -513,16 +514,24 @@ export async function buildProduct(reader: Reader, range: ResolvedRange): Promis
 
   if (aiUsage.ok) {
     if (aiUsage.truncated) diagnostics.cut('resume_ai_usage')
+    // The Personal Statement Analyzer's abuse ledger shares this table --
+    // `resume_id` is nullable and `operation` is free text, so Phase 0 of that
+    // feature's hardening could add a rate limit without a migration. Its rows
+    // carry a `statement-` prefix and are excluded here, so "Resume AI actions"
+    // keeps meaning resume AI actions. One predicate, shared with the rate
+    // check, so the two can never disagree about which rows are whose.
+    // See lib/statement/usage.ts for why this arrangement is temporary.
+    const resumeAiRows = aiUsage.rows.filter((row) => !isStatementOperation(row.operation))
     metrics.push({
       id: 'resume_ai_actions',
       label: 'Resume AI actions',
       group: 'resume',
-      value: aiUsage.rows.length,
+      value: resumeAiRows.length,
       status: 'partial',
       note: 'Every attempt, including refusals. Recorded since 10 September 2026.',
       source: { label: 'resume_ai_usage' },
     })
-    if (aiUsage.rows.length > 0) {
+    if (resumeAiRows.length > 0) {
       breakdowns.push(
         {
           id: 'resume_ai_operation',
@@ -530,7 +539,7 @@ export async function buildProduct(reader: Reader, range: ResolvedRange): Promis
           group: 'resume',
           status: 'ok',
           source: { label: 'resume_ai_usage.operation' },
-          rows: rank(countBy(aiUsage.rows, (row) => row.operation)).map((row) => ({
+          rows: rank(countBy(resumeAiRows, (row) => row.operation)).map((row) => ({
             key: row.key,
             label: row.key,
             value: row.value,
@@ -542,7 +551,7 @@ export async function buildProduct(reader: Reader, range: ResolvedRange): Promis
           group: 'resume',
           status: 'ok',
           source: { label: 'resume_ai_usage.outcome' },
-          rows: rank(countBy(aiUsage.rows, (row) => row.outcome)).map((row) => ({
+          rows: rank(countBy(resumeAiRows, (row) => row.outcome)).map((row) => ({
             key: row.key,
             label: row.key,
             value: row.value,
