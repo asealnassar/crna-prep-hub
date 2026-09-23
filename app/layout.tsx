@@ -4,6 +4,7 @@ import './globals.css'
 import ClientProviders from '@/components/ClientProviders'
 import Script from 'next/script'
 import InstallPWA from '@/components/InstallPWA'  // ADD THIS LINE        
+import SiteAnalytics from '@/components/SiteAnalytics'
 const inter = Inter({ subsets: ['latin'] })
             
 export const metadata: Metadata = {
@@ -59,6 +60,10 @@ export default function RootLayout({
 <body className={inter.className}>
         <ClientProviders>{children}</ClientProviders>
         <InstallPWA />  {/* ADD THIS LINE */}
+        {/* First-party page views. Renders nothing, and stays dormant unless
+            NEXT_PUBLIC_ANALYTICS_TRACKING is 'on'. The Google Ads tag and the
+            TikTok pixel above are untouched and keep reporting as before. */}
+        <SiteAnalytics />
       </body>
     </html>
   )

@@ -33,6 +33,12 @@ import { Card, EmptyState, SectionTitle, Skeleton } from './components/primitive
 const ADMIN_EMAIL = 'asealnassar@gmail.com'
 
 const GROUP_TITLES: Record<string, { title: string; detail?: string }> = {
+  traffic: { title: 'Website traffic', detail: 'First-party, from this site only. A visit ends after 30 minutes of inactivity.' },
+  sources: { title: 'Where traffic comes from', detail: 'First touch is what introduced someone; last touch is what was in front of them at the end. They disagree on purpose.' },
+  pages: { title: 'Pages', detail: 'Landing pages are where visits begin; most-visited counts every view.' },
+  funnel: { title: 'Visitor to customer', detail: 'One cohort — visitors whose first visit falls in this window — narrowed step by step, so every rate is a real rate.' },
+  money: { title: 'Revenue by source', detail: 'Stripe revenue credited to the traffic that produced it.' },
+  ads: { title: 'Advertising', detail: 'Spend is imported by hand. Nothing here is estimated.' },
   headline: { title: 'Revenue', detail: 'From Stripe payments, not membership counts. One-time purchases, so there is no recurring revenue.' },
   todate: { title: 'Today, this week, this month' },
   lifetime: { title: 'All time' },
@@ -49,6 +55,7 @@ const GROUP_TITLES: Record<string, { title: string; detail?: string }> = {
 }
 
 const GROUP_ORDER = [
+  'traffic', 'sources', 'pages', 'funnel', 'money', 'ads',
   'headline', 'todate', 'lifetime', 'conversion', 'discounts', 'membership',
   'interviews', 'gpa', 'resume', 'statement', 'schools', 'queues', 'health',
 ]

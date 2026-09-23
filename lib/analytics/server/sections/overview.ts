@@ -5,6 +5,7 @@ import { buildRevenueReport } from '../../../billing/revenue'
 import { fetchStripeSnapshot, stripeConfigured } from '../../../billing/stripeSource'
 import { loadActivity } from '../activity'
 import { TIER_LABELS, loadProfiles } from '../profiles'
+import { coverageNote, coverageStatus, loadTraffic } from '../traffic'
 import type { AuthUserRow, Reader } from '../reader'
 
 /**
@@ -28,11 +29,12 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
   // One activity read covers this window and the one it is compared against.
   const unionFrom = range.comparison?.from ?? range.from
 
-  const [users, profiles, activity, snapshot] = await Promise.all([
+  const [users, profiles, activity, snapshot, traffic] = await Promise.all([
     reader.authUsers(),
     loadProfiles(reader),
     loadActivity(reader, { from: unionFrom, to: range.to }),
     stripeConfigured() ? fetchStripeSnapshot() : Promise.resolve(null),
+    loadTraffic(reader, { from: range.from, to: range.to }),
   ])
 
   if (!users.ok) failed.push({ source: 'auth.users', reason: users.detail })
@@ -43,6 +45,28 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
   truncated.push(...activity.truncated)
 
   const accounts: AuthUserRow[] = users.ok ? users.rows : []
+
+  // --- traffic, when first-party tracking is live ---------------------------
+  // Before the Phase 3 migration these all resolve to "not tracked" with the
+  // reason attached, which is why nothing here needs its own guard.
+  const trafficAvailable = traffic.available
+  const trafficStatus = coverageStatus(traffic.coverageStart, range.from)
+  const trafficNote = coverageNote(traffic.coverageStart, range.timezone)
+  const trafficSessions = traffic.sessions.filter((session) =>
+    within(session.started_at, range.from, range.to)
+  )
+  const visitorsInWindow = new Set(trafficSessions.map((session) => session.visitor_id)).size
+  const previousVisitors = range.comparison
+    ? new Set(
+        traffic.sessions
+          .filter((session) => within(session.started_at, range.comparison!.from, range.comparison!.to))
+          .map((session) => session.visitor_id)
+      ).size
+    : null
+  if (!traffic.available && traffic.reason) {
+    failed.push({ source: 'first-party tracking', reason: traffic.reason })
+  }
+  truncated.push(...traffic.truncated)
   const inWindow = (value: string | null) => (value ? within(value, range.from, range.to) : false)
   const inComparison = (value: string | null) =>
     !!value && !!range.comparison && within(value, range.comparison.from, range.comparison.to)
@@ -127,6 +151,27 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
     : 'Counts members who took a recorded action (interview, resume, GPA, schools, feedback, messages). Browsing alone is invisible, so this is a lower bound.'
 
   const metrics: Metric[] = [
+    trafficAvailable
+      ? {
+          id: 'visitors',
+          label: 'Website visitors',
+          value: visitorsInWindow,
+          previous: previousVisitors,
+          status: trafficStatus,
+          note: `Unique browsers in this window. ${trafficNote ?? ''}`.trim(),
+          source: { label: 'analytics_sessions', coverageStart: traffic.coverageStart },
+        }
+      : notTracked('visitors', 'Website visitors', traffic.reason ?? ''),
+    trafficAvailable
+      ? {
+          id: 'visits',
+          label: 'Visits',
+          value: trafficSessions.length,
+          status: trafficStatus,
+          note: 'A visit ends after 30 minutes of inactivity. The Acquisition tab breaks these down by source.',
+          source: { label: 'analytics_sessions', coverageStart: traffic.coverageStart },
+        }
+      : notTracked('visits', 'Visits', traffic.reason ?? ''),
     {
       id: 'total_users',
       label: 'Total users',
@@ -296,9 +341,11 @@ export async function buildOverview(reader: Reader, range: ResolvedRange): Promi
         {
           id: 'visitors',
           label: 'Visitors',
-          value: null,
-          status: 'not_tracked',
-          note: 'No first-party web analytics exists yet.',
+          value: trafficAvailable ? visitorsInWindow : null,
+          status: trafficAvailable ? trafficStatus : traffic.status,
+          note: trafficAvailable
+            ? `Unique browsers that visited in this window. ${trafficNote ?? ''} Not the same population as the steps below, which are accounts — the Acquisition tab has the matched visitor-to-customer funnel.`.trim()
+            : traffic.reason ?? undefined,
         },
         {
           id: 'registrations',

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
+import { trackSignup } from '@/lib/analytics/tracking/client'
 
 export default function SignUp() {
   const [email, setEmail] = useState('')
@@ -35,6 +36,13 @@ const handleSignUp = async (e: React.FormEvent) => {
         // and interview_count=0. The browser used to insert it as well, which
         // was redundant and required the authenticated role to hold INSERT on
         // user_profiles — a privilege that also let it write usage fields.
+
+        // Link this browser's anonymous visit history to the account it just
+        // became, so the acquisition funnel has an end. Fire-and-forget: it
+        // does not block the redirect and cannot fail the signup. This is a
+        // first-party record only -- the TikTok conversion below is untouched
+        // and is still the single signal that platform receives.
+        trackSignup(data.user.id)
 
         // Track signup with TikTok
         try {

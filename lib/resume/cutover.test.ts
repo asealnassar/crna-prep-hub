@@ -195,11 +195,18 @@ test('the migration script is the only migration code holding a service-role key
     .filter((file) => /SUPABASE_SERVICE_ROLE_KEY/.test(readFileSync(file, 'utf8')))
     .map((file) => file.slice(ROOT.length))
     .sort()
-  // An exact allow-list, not a minimum: the two offline runners and nothing
-  // else. The production runner is the one-off cutover counterpart and is
-  // guarded by productionTarget.ts, which refuses every project but production
-  // exactly as target.ts refuses production. A third holder fails here.
+  // An exact allow-list, not a minimum. The production runner is the one-off
+  // cutover counterpart and is guarded by productionTarget.ts, which refuses
+  // every project but production exactly as target.ts refuses production.
+  //
+  // import-ad-spend.ts is the third entry and is not migration code at all: it
+  // is an operator-run importer for analytics_ad_spend, a table whose RLS
+  // denies every browser role, so the server key is the only way to write it.
+  // It reads a CSV and writes one table. It is listed here deliberately -- the
+  // point of this test is that a new holder cannot appear WITHOUT somebody
+  // adding a line to this list and saying why.
   assert.deepEqual(holders, [
+    'scripts/import-ad-spend.ts',
     'scripts/migrate-v1-resumes-production.ts',
     'scripts/migrate-v1-resumes.ts',
   ])
