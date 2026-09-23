@@ -21,7 +21,7 @@
  * enabling the collection are two separate decisions.
  */
 
-import { analyticsAllowed } from '@/lib/consent/client'
+import { analyticsStatus, onConsentChange } from '@/lib/consent/client'
 
 const VISITOR_COOKIE = 'cph_vid'
 const SESSION_COOKIE = 'cph_sid'
@@ -98,28 +98,119 @@ function identify(): Identity {
 /** Set once the server answers 429, so a flood stops asking. */
 let silenced = false
 
-/** The last page path recorded, so a re-render cannot record it twice. */
+/** The last page path handed to trackPageView, so a re-render cannot repeat it. */
 let lastPath: string | null = null
+
+/** The last path actually sent. Differs from lastPath only if consent blocked it. */
+let transmittedPath: string | null = null
 
 type SendOptions = { readonly kind: 'page_view' | 'signup'; readonly userId?: string }
 
-async function send(options: SendOptions): Promise<void> {
-  if (silenced || !isTrackingEnabled() || refusesTracking()) return
-  // CONSENT IS THE LAST GATE AND THE ONE THAT CANNOT BE SKIPPED. The env flag
-  // says the feature exists; this says this visitor agreed to it. Checked on
-  // every event rather than once at start-up, so withdrawing consent stops the
-  // next page view rather than the next session.
-  if (!analyticsAllowed()) return
-  if (typeof window === 'undefined') return
-  if (!isTrackablePath(window.location.pathname)) return
+/**
+ * An event that happened, captured where and when it happened.
+ *
+ * THE URL AND THE REFERRER ARE FROZEN HERE, at the moment of the page view,
+ * and NOT read again at send time. That is the whole fix: a visitor arriving
+ * on /?utm_source=tiktok and moving to /schools before consent resolves must
+ * still be recorded as having landed on / from TikTok. Reading
+ * window.location later would report /schools and lose the campaign.
+ *
+ * THE IDENTITY IS DELIBERATELY ABSENT. Minting a visitor id means writing a
+ * cookie, and writing a tracking cookie before the visitor has agreed is the
+ * exact thing consent exists to prevent. Identity is assigned at send time,
+ * which is always after permission.
+ */
+type CapturedEvent = {
+  readonly eventId: string
+  readonly kind: 'page_view' | 'signup'
+  readonly url: string
+  readonly referrer: string | null
+  readonly userId?: string
+}
 
+/** Events waiting for consent to resolve, oldest first. */
+const pending: CapturedEvent[] = []
+
+/** A visitor who never answers must not accumulate an unbounded queue. */
+const MAX_PENDING = 20
+
+let flushing = false
+let watchingConsent = false
+
+/** Subscribes once, the first time anything has to wait. */
+function watchConsent(): void {
+  if (watchingConsent) return
+  watchingConsent = true
+
+  onConsentChange((state) => {
+    if (state.analytics === 'granted') {
+      void flushPending()
+    } else {
+      // Declined. The held events are discarded, not deferred.
+      pending.length = 0
+    }
+  })
+}
+
+/**
+ * Sends everything that was waiting, in the order it happened.
+ *
+ * SEQUENTIALLY, on purpose. The first event of a visit is what creates the
+ * session row and therefore what sets its landing page and its source; the
+ * second only increments a counter. Firing them together would let the
+ * second arrive first and record /schools as the landing page.
+ *
+ * The `flushing` guard is what makes "exactly once" true when consent
+ * resolves and the visitor clicks Accept in the same instant.
+ */
+async function flushPending(): Promise<void> {
+  if (flushing) return
+  flushing = true
+  try {
+    while (pending.length > 0) {
+      const next = pending.shift() as CapturedEvent
+      await transmit(next)
+    }
+
+    // Nothing was held, but the current page was never recorded — which
+    // happens when somebody rejects and then changes their mind. Record where
+    // they are now; the page they were on when they said no is not ours.
+    if (
+      lastPath !== null &&
+      lastPath !== transmittedPath &&
+      isTrackablePath(lastPath) &&
+      analyticsStatus() === 'granted' &&
+      typeof window !== 'undefined'
+    ) {
+      await transmit(capture({ kind: 'page_view' }))
+    }
+  } finally {
+    flushing = false
+  }
+}
+
+/** Freezes what is true right now into something sendable later. */
+function capture(options: SendOptions): CapturedEvent {
+  return {
+    eventId: newId(),
+    kind: options.kind,
+    url: window.location.href,
+    referrer: document.referrer || null,
+    ...(options.kind === 'signup' && options.userId ? { userId: options.userId } : {}),
+  }
+}
+
+async function transmit(event: CapturedEvent): Promise<void> {
+  if (silenced) return
+
+  // Identity is minted HERE, never at capture time: this is the first moment
+  // a cookie may lawfully be written.
   const identity = identify()
 
-  // The referrer is only meaningful on the first event of a visit. On an
-  // in-app navigation document.referrer still holds the ORIGINAL external
-  // referrer, and sending it again would re-assert a source the session
-  // already has.
-  const referrer = identity.startsSession ? document.referrer || null : null
+  // The referrer belongs to the event that opens the visit. On an in-app
+  // navigation document.referrer still holds the ORIGINAL external referrer,
+  // and sending it again would re-assert a source the session already has.
+  const referrer = identity.startsSession ? event.referrer : null
 
   try {
     const response = await fetch('/api/track', {
@@ -127,21 +218,44 @@ async function send(options: SendOptions): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       keepalive: true,
       body: JSON.stringify({
-        eventId: newId(),
+        eventId: event.eventId,
         visitorId: identity.visitorId,
         sessionId: identity.sessionId,
-        kind: options.kind,
-        url: window.location.href,
+        kind: event.kind,
+        url: event.url,
         referrer,
         isFirstVisit: identity.isFirstVisit,
         startsSession: identity.startsSession,
-        ...(options.kind === 'signup' && options.userId ? { userId: options.userId } : {}),
+        ...(event.userId ? { userId: event.userId } : {}),
       }),
     })
     if (response.status === 429) silenced = true
+    else transmittedPath = new URL(event.url).pathname
   } catch {
     // A blocked request, an ad blocker, an offline device: none of it is the
     // visitor's problem and none of it should surface.
+  }
+}
+
+async function send(options: SendOptions): Promise<void> {
+  if (silenced || !isTrackingEnabled() || refusesTracking()) return
+  if (typeof window === 'undefined') return
+  if (!isTrackablePath(window.location.pathname)) return
+
+  const captured = capture(options)
+
+  // CONSENT DECIDES, AND "NOT YET" IS NOT "NO". Checked on every event rather
+  // than once at start-up, so withdrawing consent stops the next page view
+  // rather than the next session.
+  switch (analyticsStatus()) {
+    case 'denied':
+      return
+    case 'unknown':
+      watchConsent()
+      if (pending.length < MAX_PENDING) pending.push(captured)
+      return
+    case 'granted':
+      await transmit(captured)
   }
 }
 
@@ -173,5 +287,14 @@ export function trackSignup(userId: string): void {
 /** Test seam: forget what has been sent. */
 export function resetForTests(): void {
   lastPath = null
+  transmittedPath = null
   silenced = false
+  pending.length = 0
+  flushing = false
+  watchingConsent = false
+}
+
+/** Test seam: how many events are waiting on consent. */
+export function pendingCountForTests(): number {
+  return pending.length
 }

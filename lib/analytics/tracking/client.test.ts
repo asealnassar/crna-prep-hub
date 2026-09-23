@@ -1,65 +1,98 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 
+import * as consent from '../../consent/client.ts'
+import { ACCEPT_ALL, REJECT_ALL } from '../../consent/policy.ts'
+import {
+  isTrackablePath, isTrackingEnabled, pendingCountForTests, resetForTests,
+  trackPageView, trackSignup,
+} from './client.ts'
+
 /**
  * The browser half, driven without a browser.
  *
- * The globals a page provides are stubbed here rather than mocked away, so the
- * cookie handling, the 30-minute session and the duplicate guard are all
- * exercised as written.
+ * THE SCENARIO THAT FAILED IN PRODUCTION IS THE FIRST TEST. A US visitor
+ * arrived at /?utm_source=tiktok&utm_medium=paid&utm_campaign=release_check
+ * and moved to /schools. The page view fired before the banner had finished
+ * asking the server which consent regime applied, saw "no consent yet",
+ * dropped the event, and never retried — so the session began on /schools,
+ * as Direct, with no campaign. The whole point of the Acquisition tab,
+ * lost on the page that mattered.
  */
 
-type Sent = { url: string; body: any }
+const SITE = 'https://www.crnaprephub.com'
 
+type Sent = { body: any }
 const sent: Sent[] = []
 let cookieJar = ''
 let status = 204
 
-function installBrowser(pathname = '/pricing', doNotTrack: string | null = null, consent = 'v1:1:1') {
+function at(path: string, search = '') {
+  ;(globalThis as any).window.location = {
+    pathname: path,
+    href: `${SITE}${path}${search}`,
+    protocol: 'https:',
+  }
+}
+
+function installBrowser({
+  path = '/',
+  search = '',
+  referrer = 'https://www.tiktok.com/',
+  cookies = '',
+  doNotTrack = null as string | null,
+} = {}) {
   sent.length = 0
-  // Tracking requires consent, so the default fixture is a visitor who gave
-  // it. The tests below that matter most are the ones that take it away.
-  cookieJar = consent ? `cph_consent=${consent}` : ''
+  cookieJar = cookies
   status = 204
 
-  const document = {
+  ;(globalThis as any).document = {
     get cookie() {
       return cookieJar
     },
     set cookie(value: string) {
       const [pair] = value.split(';')
       const [name] = pair.split('=')
-      const without = cookieJar
-        .split('; ')
-        .filter((entry) => entry.length > 0 && !entry.startsWith(`${name}=`))
-      // Max-Age=0 would be a delete; nothing here does that.
-      cookieJar = [...without, pair].join('; ')
+      const expired = /Max-Age=0/.test(value)
+      const without = cookieJar.split('; ').filter((e) => e.length > 0 && !e.startsWith(`${name}=`))
+      cookieJar = expired ? without.join('; ') : [...without, pair].join('; ')
     },
-    referrer: 'https://www.tiktok.com/',
+    referrer,
   }
-
-  ;(globalThis as any).document = document
   ;(globalThis as any).window = {
-    location: { pathname, href: `https://www.crnaprephub.com${pathname}`, protocol: 'https:' },
+    location: { pathname: path, href: `${SITE}${path}${search}`, protocol: 'https:' },
+    dataLayer: [],
+    ttq: { grantConsent() {}, revokeConsent() {} },
+    __cphConsent: null,
     doNotTrack: doNotTrack ?? undefined,
   }
-  // Node ships its own read-only `navigator`, so this one has to be defined
-  // over the top of it rather than assigned.
   Object.defineProperty(globalThis, 'navigator', {
     value: { doNotTrack: doNotTrack ?? undefined },
     configurable: true,
     writable: true,
   })
-  ;(globalThis as any).fetch = async (url: string, init: any) => {
-    sent.push({ url, body: JSON.parse(init.body) })
+  ;(globalThis as any).fetch = async (_url: string, init: any) => {
+    sent.push({ body: JSON.parse(init.body) })
     return { status }
   }
+
+  resetForTests()
 }
 
-const load = async () => {
-  // A fresh module each time, because the duplicate guard is module state.
-  const module = await import(`./client.ts?case=${Math.random()}`)
-  return module as typeof import('./client.ts')
+const settle = async () => {
+  for (let turn = 0; turn < 8; turn++) await new Promise((r) => setTimeout(r, 0))
+}
+
+/** What the banner does once it learns which regime applies. */
+const consentResolves = async (state: typeof ACCEPT_ALL) => {
+  consent.applyConsent(state)
+  await settle()
+}
+
+/** What the visitor does when they click a button on the banner. */
+const visitorDecides = async (state: typeof ACCEPT_ALL) => {
+  consent.saveConsent(state)
+  await settle()
 }
 
 beforeEach(() => {
@@ -67,235 +100,307 @@ beforeEach(() => {
   installBrowser()
 })
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+const paths = () => sent.map((s) => new URL(s.body.url).pathname)
 
-// --- the switch -------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// The exact production failure
+// ---------------------------------------------------------------------------
 
-test('tracking is OFF unless it has been explicitly switched on', async () => {
-  delete process.env.NEXT_PUBLIC_ANALYTICS_TRACKING
-  const client = await load()
-  assert.equal(client.isTrackingEnabled(), false)
+test('THE FAILURE: the landing page and its campaign survive consent resolving late', async () => {
+  installBrowser({ path: '/', search: '?utm_source=tiktok&utm_medium=paid&utm_campaign=release_check' })
 
-  client.trackPageView('/pricing')
+  // The page view fires before the banner knows the regime.
+  trackPageView('/')
   await settle()
-  assert.equal(sent.length, 0, 'nothing is sent while the switch is off')
+  assert.equal(sent.length, 0, 'nothing may be sent before consent is known')
+  assert.equal(pendingCountForTests(), 1, 'but it is HELD, not dropped')
 
-  process.env.NEXT_PUBLIC_ANALYTICS_TRACKING = 'true'
-  assert.equal(client.isTrackingEnabled(), false, "only the exact value 'on' enables it")
+  // The visitor moves on before the answer arrives.
+  at('/schools')
+  trackPageView('/schools')
+  await settle()
+  assert.equal(pendingCountForTests(), 2)
+
+  // US visitor: the banner resolves to opt-out and applies granted.
+  await consentResolves(ACCEPT_ALL)
+
+  assert.equal(sent.length, 2, 'both page views arrive')
+  assert.deepEqual(paths(), ['/', '/schools'], 'in the order they happened')
+
+  const landing = sent[0].body
+  assert.match(landing.url, /utm_source=tiktok/, 'the campaign is still on the landing URL')
+  assert.match(landing.url, /utm_campaign=release_check/)
+  assert.equal(landing.referrer, 'https://www.tiktok.com/', 'and the referrer it arrived with')
+  assert.equal(landing.startsSession, true, 'the landing page is what opens the session')
+  assert.equal(sent[1].body.startsSession, false, 'the second page does not open a second one')
+  assert.equal(sent[1].body.referrer, null, 'and does not re-assert the source')
 })
 
-test('the admin section and the API are never tracked', async () => {
-  const client = await load()
+test('the held events share one visitor and one session', async () => {
+  installBrowser({ path: '/', search: '?utm_source=tiktok' })
+  trackPageView('/')
+  at('/schools')
+  trackPageView('/schools')
+  await settle()
+  await consentResolves(ACCEPT_ALL)
 
-  assert.equal(client.isTrackablePath('/admin'), false)
-  assert.equal(client.isTrackablePath('/admin/analytics'), false)
-  assert.equal(client.isTrackablePath('/api/track'), false)
-  assert.equal(client.isTrackablePath('/authprobe'), false)
-  assert.equal(client.isTrackablePath('/pricing'), true)
-  assert.equal(client.isTrackablePath('/'), true)
-  assert.equal(client.isTrackablePath('/administrator-guide'), true, 'a path merely starting with "admin" is fine')
+  assert.equal(new Set(sent.map((s) => s.body.visitorId)).size, 1)
+  assert.equal(new Set(sent.map((s) => s.body.sessionId)).size, 1)
+  assert.equal(sent[0].body.isFirstVisit, true)
+  assert.equal(sent[1].body.isFirstVisit, false)
 })
 
-test('a visitor on an excluded path sends nothing even if asked directly', async () => {
-  installBrowser('/admin/analytics')
-  const client = await load()
-
-  client.trackPageView('/admin/analytics')
+test('NO COOKIE IS WRITTEN while consent is still unknown', async () => {
+  // Writing a tracking cookie before permission is the exact thing consent
+  // exists to prevent, so identity is minted only at send time.
+  installBrowser({ path: '/' })
+  trackPageView('/')
   await settle()
+
+  assert.equal(cookieJar.includes('cph_vid'), false)
+  assert.equal(cookieJar.includes('cph_sid'), false)
+
+  await consentResolves(ACCEPT_ALL)
+  assert.equal(cookieJar.includes('cph_vid'), true, 'and only then')
+})
+
+// ---------------------------------------------------------------------------
+// The other shapes of visit
+// ---------------------------------------------------------------------------
+
+test('a single-page visitor is recorded once, on the page they landed on', async () => {
+  installBrowser({ path: '/', search: '?utm_source=tiktok&utm_campaign=release_check' })
+  trackPageView('/')
+  await settle()
+  await consentResolves(ACCEPT_ALL)
+
+  assert.equal(sent.length, 1)
+  assert.equal(new URL(sent[0].body.url).pathname, '/')
+  assert.match(sent[0].body.url, /release_check/)
+})
+
+test('a returning visitor with a stored decision is recorded immediately', async () => {
+  installBrowser({
+    path: '/pricing',
+    cookies: 'cph_consent=v1:1:1; cph_vid=fa637d03-58f6-4b6f-8206-571469cb3358',
+  })
+
+  trackPageView('/pricing')
+  await settle()
+
+  assert.equal(sent.length, 1, 'no waiting: the answer is already on the device')
+  assert.equal(sent[0].body.isFirstVisit, false, 'and they are not a new visitor')
+  assert.equal(sent[0].body.visitorId, 'fa637d03-58f6-4b6f-8206-571469cb3358')
+})
+
+test('an opt-in visitor who accepts gets their landing page recorded', async () => {
+  installBrowser({ path: '/', search: '?utm_source=tiktok&utm_campaign=release_check' })
+  trackPageView('/')
+  await settle()
+
+  // Europe: the banner applies "denied" and waits to be asked.
+  await consentResolves(REJECT_ALL)
   assert.equal(sent.length, 0)
+
+  await visitorDecides(ACCEPT_ALL)
+  assert.equal(sent.length, 1, 'the page they arrived on is recorded when they agree')
+  assert.equal(new URL(sent[0].body.url).pathname, '/')
 })
 
-test('Do Not Track is honoured', async () => {
-  installBrowser('/pricing', '1')
-  const client = await load()
-
-  client.trackPageView('/pricing')
+test('an opt-in visitor who REJECTS has their held event discarded', async () => {
+  installBrowser({ path: '/', search: '?utm_source=tiktok' })
+  trackPageView('/')
   await settle()
+  assert.equal(pendingCountForTests(), 1)
+
+  await visitorDecides(REJECT_ALL)
+
+  assert.equal(sent.length, 0, 'nothing is sent')
+  assert.equal(pendingCountForTests(), 0, 'and nothing is kept for later')
+})
+
+test('a rejected visitor stays untracked on every subsequent page', async () => {
+  installBrowser({ path: '/' })
+  await visitorDecides(REJECT_ALL)
+
+  trackPageView('/')
+  at('/schools')
+  trackPageView('/schools')
+  at('/pricing')
+  trackPageView('/pricing')
+  await settle()
+
   assert.equal(sent.length, 0)
+  assert.equal(pendingCountForTests(), 0)
 })
 
-// --- duplicate prevention ---------------------------------------------------
+// ---------------------------------------------------------------------------
+// Withdrawal
+// ---------------------------------------------------------------------------
 
-test('the same path twice in a row is recorded once', async () => {
-  const client = await load()
+test('withdrawing consent stops the very next page view', async () => {
+  installBrowser({ path: '/', cookies: 'cph_consent=v1:1:1' })
 
-  client.trackPageView('/pricing')
-  client.trackPageView('/pricing')
-  client.trackPageView('/pricing')
+  trackPageView('/')
   await settle()
+  assert.equal(sent.length, 1)
 
-  assert.equal(sent.length, 1, 'a re-render or a Strict Mode double effect must not double-count')
+  await visitorDecides(REJECT_ALL)
+
+  at('/schools')
+  trackPageView('/schools')
+  await settle()
+  assert.equal(sent.length, 1, 'no further events')
 })
 
-test('a real navigation is recorded, including a return to an earlier page', async () => {
-  const client = await load()
+// ---------------------------------------------------------------------------
+// Exactly once
+// ---------------------------------------------------------------------------
 
-  client.trackPageView('/')
-  client.trackPageView('/pricing')
-  client.trackPageView('/')
+test('consent resolving twice does not send the held event twice', async () => {
+  installBrowser({ path: '/' })
+  trackPageView('/')
   await settle()
 
-  assert.equal(sent.length, 3)
-  assert.deepEqual(sent.map((item) => item.body.kind), ['page_view', 'page_view', 'page_view'])
+  await consentResolves(ACCEPT_ALL)
+  await consentResolves(ACCEPT_ALL)
+
+  assert.equal(sent.length, 1)
 })
 
-test('every event carries its own id, so the server can deduplicate retries', async () => {
-  const client = await load()
-
-  client.trackPageView('/')
-  client.trackPageView('/pricing')
+test('a re-render while waiting does not queue the same page twice', async () => {
+  installBrowser({ path: '/' })
+  trackPageView('/')
+  trackPageView('/')
+  trackPageView('/')
   await settle()
 
-  const ids = sent.map((item) => item.body.eventId)
+  assert.equal(pendingCountForTests(), 1)
+  await consentResolves(ACCEPT_ALL)
+  assert.equal(sent.length, 1)
+})
+
+test('every event carries its own id, so a retry cannot double-count', async () => {
+  installBrowser({ path: '/' })
+  trackPageView('/')
+  at('/schools')
+  trackPageView('/schools')
+  await settle()
+  await consentResolves(ACCEPT_ALL)
+
+  const ids = sent.map((s) => s.body.eventId)
   assert.equal(new Set(ids).size, 2)
   for (const id of ids) assert.match(id, /^[0-9a-f-]{36}$/)
 })
 
-// --- identity ---------------------------------------------------------------
-
-test('the first visit mints a visitor and a session; the next page reuses both', async () => {
-  const client = await load()
-
-  client.trackPageView('/')
-  await settle()
-  client.trackPageView('/pricing')
-  await settle()
-
-  const [first, second] = sent
-  assert.equal(first.body.isFirstVisit, true)
-  assert.equal(first.body.startsSession, true)
-  assert.equal(second.body.isFirstVisit, false, 'the visitor is not new on the second page')
-  assert.equal(second.body.startsSession, false)
-  assert.equal(first.body.visitorId, second.body.visitorId)
-  assert.equal(first.body.sessionId, second.body.sessionId)
-})
-
-test('the referrer is sent once, on the event that opens the visit', async () => {
-  const client = await load()
-
-  client.trackPageView('/')
-  await settle()
-  client.trackPageView('/pricing')
-  await settle()
-
-  assert.equal(sent[0].body.referrer, 'https://www.tiktok.com/', 'the arrival carries where it came from')
-  assert.equal(sent[1].body.referrer, null, 'an in-app navigation must not re-assert the source')
-})
-
-test('what the tracker stores is two opaque ids and nothing else', async () => {
-  const client = await load()
-
-  client.trackPageView('/')
-  await settle()
-
-  const names = cookieJar.split('; ').map((entry) => entry.split('=')[0]).sort()
-  // cph_consent is the visitor's own decision and has to persist; the two the
-  // tracker itself adds are the ones under test.
-  assert.deepEqual(names, ['cph_consent', 'cph_sid', 'cph_vid'])
-
-  for (const entry of cookieJar.split('; ')) {
-    const [name, value] = entry.split('=')
-    if (name === 'cph_consent') {
-      assert.match(value, /^v1%3A[01]%3A[01]$|^v1:[01]:[01]$/, 'a decision, not an identifier')
-      continue
-    }
-    assert.match(value, /^[0-9a-f-]{36}$/, 'a random id, carrying no information')
+test('a visitor who never answers cannot grow the queue without limit', async () => {
+  installBrowser({ path: '/' })
+  for (let index = 0; index < 200; index++) {
+    at(`/page-${index}`)
+    trackPageView(`/page-${index}`)
   }
+  await settle()
+
+  assert.ok(pendingCountForTests() <= 20, `queue capped, saw ${pendingCountForTests()}`)
 })
 
-// --- back pressure ----------------------------------------------------------
+// ---------------------------------------------------------------------------
+// The gates that were already there
+// ---------------------------------------------------------------------------
+
+test('tracking is OFF unless it has been explicitly switched on', async () => {
+  delete process.env.NEXT_PUBLIC_ANALYTICS_TRACKING
+  installBrowser({ path: '/', cookies: 'cph_consent=v1:1:1' })
+
+  assert.equal(isTrackingEnabled(), false)
+  trackPageView('/')
+  await settle()
+  assert.equal(sent.length, 0)
+  assert.equal(pendingCountForTests(), 0, 'and nothing is even held')
+})
+
+test('the admin section and the API are never tracked', () => {
+  assert.equal(isTrackablePath('/admin'), false)
+  assert.equal(isTrackablePath('/admin/analytics'), false)
+  assert.equal(isTrackablePath('/api/track'), false)
+  assert.equal(isTrackablePath('/authprobe'), false)
+  assert.equal(isTrackablePath('/'), true)
+  assert.equal(isTrackablePath('/administrator-guide'), true)
+})
+
+test('Do Not Track is honoured, with nothing held for later', async () => {
+  installBrowser({ path: '/', cookies: 'cph_consent=v1:1:1', doNotTrack: '1' })
+  trackPageView('/')
+  await settle()
+
+  assert.equal(sent.length, 0)
+  assert.equal(pendingCountForTests(), 0)
+})
 
 test('a 429 stops the tracker asking again', async () => {
-  const client = await load()
+  installBrowser({ path: '/', cookies: 'cph_consent=v1:1:1' })
   status = 429
 
-  client.trackPageView('/')
+  trackPageView('/')
   await settle()
   assert.equal(sent.length, 1)
 
   status = 204
-  client.trackPageView('/pricing')
-  client.trackPageView('/schools')
+  at('/schools')
+  trackPageView('/schools')
   await settle()
   assert.equal(sent.length, 1, 'it stays quiet for the rest of the page')
 })
 
 test('a failed request is swallowed rather than surfacing to the visitor', async () => {
-  const client = await load()
+  installBrowser({ path: '/', cookies: 'cph_consent=v1:1:1' })
   ;(globalThis as any).fetch = async () => {
     throw new Error('blocked by an extension')
   }
 
   await assert.doesNotReject(async () => {
-    client.trackPageView('/')
+    trackPageView('/')
     await settle()
   })
 })
 
-// --- the signup link --------------------------------------------------------
-
 test('a signup names the account, and only a signup does', async () => {
-  const client = await load()
+  installBrowser({ path: '/signup', cookies: 'cph_consent=v1:1:1' })
 
-  client.trackPageView('/signup')
+  trackPageView('/signup')
   await settle()
-  client.trackSignup('11111111-2222-4333-8444-555555555555')
+  trackSignup('11111111-2222-4333-8444-555555555555')
   await settle()
 
-  const pageView = sent.find((item) => item.body.kind === 'page_view')
-  const signup = sent.find((item) => item.body.kind === 'signup')
-  assert.equal(pageView?.body.userId, undefined, 'a page view never claims an account')
+  const pageView = sent.find((s) => s.body.kind === 'page_view')
+  const signup = sent.find((s) => s.body.kind === 'signup')
+  assert.equal(pageView?.body.userId, undefined)
   assert.equal(signup?.body.userId, '11111111-2222-4333-8444-555555555555')
-  assert.equal(signup?.body.visitorId, pageView?.body.visitorId, 'the same browser, now named')
+  assert.equal(signup?.body.visitorId, pageView?.body.visitorId)
 })
 
-// --- consent ----------------------------------------------------------------
+test('a signup that happens while consent is unknown is held, not lost', async () => {
+  installBrowser({ path: '/signup' })
 
-test('nothing is recorded without consent, however switched on the feature is', async () => {
-  installBrowser('/pricing', null, '')
-  const client = await load()
-
-  assert.equal(client.isTrackingEnabled(), true, 'the feature flag is on')
-  client.trackPageView('/pricing')
+  trackPageView('/signup')
+  trackSignup('11111111-2222-4333-8444-555555555555')
   await settle()
+  assert.equal(pendingCountForTests(), 2)
 
-  assert.equal(sent.length, 0, 'and it still records nothing')
+  await consentResolves(ACCEPT_ALL)
+  assert.equal(sent.filter((s) => s.body.kind === 'signup').length, 1)
 })
 
-test('analytics consent refused records nothing, even when advertising is allowed', async () => {
-  installBrowser('/pricing', null, 'v1:0:1')
-  const client = await load()
-
-  client.trackPageView('/pricing')
+test('what the tracker stores is two opaque ids and nothing else', async () => {
+  installBrowser({ path: '/', cookies: 'cph_consent=v1:1:1' })
+  trackPageView('/')
   await settle()
-  assert.equal(sent.length, 0)
-})
 
-test('consent to analytics alone is enough for the first-party tracker', async () => {
-  installBrowser('/pricing', null, 'v1:1:0')
-  const client = await load()
-
-  client.trackPageView('/pricing')
-  await settle()
-  assert.equal(sent.length, 1)
-})
-
-test('withdrawing consent stops the NEXT page view, not the next session', async () => {
-  installBrowser('/pricing', null, 'v1:1:1')
-  const client = await load()
-
-  client.trackPageView('/')
-  await settle()
-  assert.equal(sent.length, 1)
-
-  // The visitor opens the banner and rejects.
-  cookieJar = cookieJar
-    .split('; ')
-    .filter((entry) => !entry.startsWith('cph_consent='))
-    .concat('cph_consent=v1:0:0')
-    .join('; ')
-
-  client.trackPageView('/pricing')
-  await settle()
-  assert.equal(sent.length, 1, 'the very next page view is already refused')
+  const names = cookieJar.split('; ').map((e) => e.split('=')[0]).sort()
+  assert.deepEqual(names, ['cph_consent', 'cph_sid', 'cph_vid'])
+  for (const entry of cookieJar.split('; ')) {
+    const [name, value] = entry.split('=')
+    if (name === 'cph_consent') continue
+    assert.match(value, /^[0-9a-f-]{36}$/, 'a random id, carrying no information')
+  }
 })

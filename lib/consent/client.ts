@@ -138,11 +138,37 @@ export function currentConsent(regime: Regime = 'opt_in'): ConsentState {
   return storedConsent() ?? window.__cphConsent ?? defaultState(regime)
 }
 
-/** Whether first-party analytics may record anything. */
+/**
+ * THREE ANSWERS, NOT TWO.
+ *
+ * 'unknown' is the one that matters and the one this used to be missing. A
+ * visitor with no stored decision has no answer yet: the banner is still
+ * asking the server which regime applies to them. Collapsing that into "no"
+ * is what threw away the first page view of every opt-out visitor, campaign
+ * and all, because by the time consent resolved the moment had passed.
+ *
+ * Callers are expected to hold an event while this says 'unknown' rather than
+ * to drop it.
+ */
+export type ConsentStatus = 'granted' | 'denied' | 'unknown'
+
+export function analyticsStatus(): ConsentStatus {
+  if (typeof window === 'undefined') return 'denied'
+
+  // A stored decision is the visitor's own and outranks any regional default.
+  const stored = storedConsent()
+  if (stored) return stored.analytics === 'granted' ? 'granted' : 'denied'
+
+  // Otherwise: whatever the banner has applied, once it knows the regime.
+  const applied = window.__cphConsent
+  if (applied) return applied.analytics === 'granted' ? 'granted' : 'denied'
+
+  return 'unknown'
+}
+
+/** Whether first-party analytics may record anything RIGHT NOW. */
 export function analyticsAllowed(): boolean {
-  if (typeof window === 'undefined') return false
-  const state = storedConsent() ?? window.__cphConsent ?? null
-  return state?.analytics === 'granted'
+  return analyticsStatus() === 'granted'
 }
 
 /** Whether the advertising pixels may act. Used by the signup conversion. */
