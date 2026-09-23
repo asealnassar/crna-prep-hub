@@ -15,9 +15,11 @@ const sent: Sent[] = []
 let cookieJar = ''
 let status = 204
 
-function installBrowser(pathname = '/pricing', doNotTrack: string | null = null) {
+function installBrowser(pathname = '/pricing', doNotTrack: string | null = null, consent = 'v1:1:1') {
   sent.length = 0
-  cookieJar = ''
+  // Tracking requires consent, so the default fixture is a visitor who gave
+  // it. The tests below that matter most are the ones that take it away.
+  cookieJar = consent ? `cph_consent=${consent}` : ''
   status = 204
 
   const document = {
@@ -180,16 +182,24 @@ test('the referrer is sent once, on the event that opens the visit', async () =>
   assert.equal(sent[1].body.referrer, null, 'an in-app navigation must not re-assert the source')
 })
 
-test('what is stored on the device is two opaque ids and nothing else', async () => {
+test('what the tracker stores is two opaque ids and nothing else', async () => {
   const client = await load()
 
   client.trackPageView('/')
   await settle()
 
   const names = cookieJar.split('; ').map((entry) => entry.split('=')[0]).sort()
-  assert.deepEqual(names, ['cph_sid', 'cph_vid'])
+  // cph_consent is the visitor's own decision and has to persist; the two the
+  // tracker itself adds are the ones under test.
+  assert.deepEqual(names, ['cph_consent', 'cph_sid', 'cph_vid'])
+
   for (const entry of cookieJar.split('; ')) {
-    assert.match(entry.split('=')[1], /^[0-9a-f-]{36}$/, 'a random id, carrying no information')
+    const [name, value] = entry.split('=')
+    if (name === 'cph_consent') {
+      assert.match(value, /^v1%3A[01]%3A[01]$|^v1:[01]:[01]$/, 'a decision, not an identifier')
+      continue
+    }
+    assert.match(value, /^[0-9a-f-]{36}$/, 'a random id, carrying no information')
   }
 })
 
@@ -237,4 +247,55 @@ test('a signup names the account, and only a signup does', async () => {
   assert.equal(pageView?.body.userId, undefined, 'a page view never claims an account')
   assert.equal(signup?.body.userId, '11111111-2222-4333-8444-555555555555')
   assert.equal(signup?.body.visitorId, pageView?.body.visitorId, 'the same browser, now named')
+})
+
+// --- consent ----------------------------------------------------------------
+
+test('nothing is recorded without consent, however switched on the feature is', async () => {
+  installBrowser('/pricing', null, '')
+  const client = await load()
+
+  assert.equal(client.isTrackingEnabled(), true, 'the feature flag is on')
+  client.trackPageView('/pricing')
+  await settle()
+
+  assert.equal(sent.length, 0, 'and it still records nothing')
+})
+
+test('analytics consent refused records nothing, even when advertising is allowed', async () => {
+  installBrowser('/pricing', null, 'v1:0:1')
+  const client = await load()
+
+  client.trackPageView('/pricing')
+  await settle()
+  assert.equal(sent.length, 0)
+})
+
+test('consent to analytics alone is enough for the first-party tracker', async () => {
+  installBrowser('/pricing', null, 'v1:1:0')
+  const client = await load()
+
+  client.trackPageView('/pricing')
+  await settle()
+  assert.equal(sent.length, 1)
+})
+
+test('withdrawing consent stops the NEXT page view, not the next session', async () => {
+  installBrowser('/pricing', null, 'v1:1:1')
+  const client = await load()
+
+  client.trackPageView('/')
+  await settle()
+  assert.equal(sent.length, 1)
+
+  // The visitor opens the banner and rejects.
+  cookieJar = cookieJar
+    .split('; ')
+    .filter((entry) => !entry.startsWith('cph_consent='))
+    .concat('cph_consent=v1:0:0')
+    .join('; ')
+
+  client.trackPageView('/pricing')
+  await settle()
+  assert.equal(sent.length, 1, 'the very next page view is already refused')
 })

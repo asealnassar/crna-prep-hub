@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase-browser'
 import { trackSignup } from '@/lib/analytics/tracking/client'
+import { advertisingAllowed } from '@/lib/consent/client'
 
 export default function SignUp() {
   const [email, setEmail] = useState('')
@@ -44,7 +45,16 @@ const handleSignUp = async (e: React.FormEvent) => {
         // and is still the single signal that platform receives.
         trackSignup(data.user.id)
 
-        // Track signup with TikTok
+        // Track signup with TikTok — ONLY with advertising consent.
+        //
+        // This is the one advertising behaviour this release changes, and it
+        // is deliberate: this request sends the registrant's EMAIL ADDRESS to
+        // TikTok. Holding the pixel back while letting this through would make
+        // the consent banner decorative for the most sensitive flow on the
+        // site. The event, the endpoint and the payload are otherwise
+        // untouched, so a consenting visitor produces exactly the same single
+        // conversion TikTok has always received.
+        if (advertisingAllowed()) {
         try {
           await fetch('/api/tiktok-event', {
             method: 'POST',
@@ -56,6 +66,7 @@ const handleSignUp = async (e: React.FormEvent) => {
           })
         } catch (err) {
           console.error('TikTok tracking error:', err)
+        }
         }
 
         alert('Account created! You can now log in.')

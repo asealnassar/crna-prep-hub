@@ -222,6 +222,7 @@ export default function Home() {
               <Link href="/interview" className="hover:text-white transition">Interview</Link>
               <Link href="/pricing" className="hover:text-white transition">Pricing</Link>
               <Link href="/login" className="hover:text-white transition">Login</Link>
+              <Link href="/privacy" className="hover:text-white transition">Privacy</Link>
             </div>
           </div>
           <div className="text-center text-indigo-400 mt-6 sm:mt-8 text-xs sm:text-sm">

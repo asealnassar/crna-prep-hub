@@ -9,7 +9,7 @@ import { SidebarProvider, useSidebarCollapsed } from '@/lib/SidebarContext'
 
 // Pages that intentionally have no sidebar (landing/auth pages, and /admin/*
 // which has its own separate top nav bar built earlier).
-const HIDDEN_SIDEBAR_PATHS = ['/', '/login', '/signup', '/forgot-password', '/reset-password']
+const HIDDEN_SIDEBAR_PATHS = ['/', '/login', '/signup', '/forgot-password', '/reset-password', '/privacy']
 
 function ClientProvidersInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()

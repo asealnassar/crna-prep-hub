@@ -21,6 +21,8 @@
  * enabling the collection are two separate decisions.
  */
 
+import { analyticsAllowed } from '@/lib/consent/client'
+
 const VISITOR_COOKIE = 'cph_vid'
 const SESSION_COOKIE = 'cph_sid'
 const VISITOR_DAYS = 180
@@ -103,6 +105,11 @@ type SendOptions = { readonly kind: 'page_view' | 'signup'; readonly userId?: st
 
 async function send(options: SendOptions): Promise<void> {
   if (silenced || !isTrackingEnabled() || refusesTracking()) return
+  // CONSENT IS THE LAST GATE AND THE ONE THAT CANNOT BE SKIPPED. The env flag
+  // says the feature exists; this says this visitor agreed to it. Checked on
+  // every event rather than once at start-up, so withdrawing consent stops the
+  // next page view rather than the next session.
+  if (!analyticsAllowed()) return
   if (typeof window === 'undefined') return
   if (!isTrackablePath(window.location.pathname)) return
 
