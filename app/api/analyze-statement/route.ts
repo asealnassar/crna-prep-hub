@@ -1,176 +1,340 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
-import { authenticateRequest } from '@/lib/apiAuth'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { authenticateRequest, readAccessToken } from '@/lib/apiAuth'
+import {
+  MAX_ANALYZE_BODY_BYTES, MAX_REWRITE_BODY_BYTES, checkStatement, declaredTooLarge, withinBodyLimit,
+} from '@/lib/statement/limits'
+import {
+  RATE_LIMIT_CODE, REWRITE_TIER_CODE, REWRITE_TIER_MESSAGE,
+  canRewrite, canSeeSentenceAnalysis, canSeeSuggestions,
+} from '@/lib/statement/entitlement'
+import {
+  REWRITE_SYSTEM_PROMPT, analysisSystemPrompt, buildRewriteUserMessage,
+} from '@/lib/statement/prompts'
+import { parseAnalysis, redactForTier, reviewNotesFrom } from '@/lib/statement/analysis'
+import { signAnalysis, verifyAnalysisToken } from '@/lib/statement/signing'
+import {
+  STATEMENT_OPERATIONS, recordStatementAttempt, settleStatementUsage, statementRateDecision,
+} from '@/lib/statement/usage'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-})
+/**
+ * The Personal Statement Analyzer's only server surface.
+ *
+ * PHASE 0 HARDENING. The feature, the tiers and the page are unchanged. What
+ * changed is everything between the request arriving and the model being
+ * called, in this order -- and the order is the design, because each gate is
+ * cheaper than the one after it:
+ *
+ *   1. AUTHENTICATION, before the body is read. Unchanged; it was already
+ *      right.
+ *   2. BODY SIZE, on raw bytes, before parsing. There was no limit, and
+ *      App Router route handlers impose none.
+ *   3. STATEMENT LENGTH, after parsing. There was a floor and no ceiling.
+ *   4. ENTITLEMENT, from the verified session. Unchanged for the rewrite;
+ *      NEW for per-category suggestions, which were being generated for every
+ *      tier and hidden in the browser.
+ *   5. ORIGIN, for a rewrite: the analysis must carry a signature this server
+ *      issued. This is what stops the caller writing the system prompt.
+ *   6. RATE, from the ledger. There was none of any kind.
+ *   7. The model, with an abort timeout inside the function's own budget.
+ *   8. STRICT VALIDATION of what comes back, then redaction for the tier.
+ *
+ * NOTHING IS STORED. The statement is read, sent, and dropped; the only row
+ * written is a ledger entry recording that a call happened. See
+ * lib/statement/usage.ts for why that row lives where it does.
+ */
 
-export async function POST(request: NextRequest) {
-  try {
-    // Authorization runs before the body is read and before any OpenAI call,
-    // so an unauthorized request costs zero tokens.
-    const auth = await authenticateRequest()
-    if (!auth) {
-      return NextResponse.json(
-        { error: 'You must be signed in to analyze a statement.' },
-        { status: 401 }
-      )
-    }
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
 
-    const { statement } = await request.json()
+const MODEL = process.env.STATEMENT_AI_MODEL || 'gpt-4o'
 
-    if (!statement || statement.trim().length < 100) {
-      return NextResponse.json(
-        { error: 'Statement must be at least 100 characters long' },
-        { status: 400 }
-      )
-    }
+/**
+ * Below `maxDuration`, so a slow model is a clean 504 with a message rather
+ * than the platform killing the function and the browser showing the generic
+ * "Analysis failed". This route had no duration setting at all, which is the
+ * likeliest cause of long statements appearing to fail at random.
+ */
+const MODEL_TIMEOUT_MS = 50_000
 
-    // Read from the database via the verified session, never from the request
-    // body. A client claiming userTier: 'ultimate' has no effect here.
-    const isUltimate = auth.isUltimate
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-    const systemPrompt = `You are a critical CRNA admissions consultant analyzing personal statements. Be HONEST and DIRECT - don't sugarcoat weaknesses. Provide specific, actionable feedback.
+type Caller = {
+  readonly userId: string
+  readonly tier: string
+  readonly db: SupabaseClient
+}
 
-Analyze this personal statement across these categories (score 1-10 for each category):
-1. Hook Strength - Does the opening grab attention?
-2. Motivation for CRNA - Is the "why CRNA" clear and compelling?
-3. Clinical Depth - Are clinical experiences detailed and meaningful?
-4. Personal Uniqueness - Does this stand out from other applicants?
-5. Structure & Flow - Is it well-organized and easy to read?
-6. Red Flags - Any concerning elements (negativity, excuses, unprofessionalism)?
-
-For each category:
-- Give a score (1-10)
-- Provide 2-3 sentences of critical feedback
-- Suggest ONE specific improvement
-
-Then provide:
-- Admissions Committee Impression (2-3 sentences)
-- Biggest Weaknesses (top 3)
-- Top 3 Changes to Improve Acceptance Chances
-
-${isUltimate ? 'Also identify 5-7 specific sentences that are weak/generic/strong with improved versions.' : ''}
-
-Calculate the overall score as a percentage (0-100) by averaging all category scores and multiplying by 10.
-
-Return ONLY valid JSON in this exact format:
-{
-  "overallScore": number (0-100 as a percentage),
-  "categories": [
-    {
-      "name": "Hook Strength",
-      "score": number,
-      "feedback": "string",
-      "suggestion": "string"
-    }
-  ],
-  "admissionsImpression": "string",
-  "biggestWeaknesses": ["string", "string", "string"],
-  "topChanges": ["string", "string", "string"]
-  ${isUltimate ? ', "sentenceAnalysis": [{"original": "string", "label": "Weak|Generic|Strong", "improved": "string"}]' : ''}
-}`
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: statement }
-      ],
-      temperature: 0.7,
-      max_tokens: 2500,
-      response_format: { type: 'json_object' }
-    })
-
-    const result = JSON.parse(completion.choices[0].message.content || '{}')
-
-    return NextResponse.json({ analysis: result })
-  } catch (error: any) {
-    console.error('OpenAI Error:', error)
+/** Authenticates and builds a client scoped to the caller's own JWT. */
+async function admit(): Promise<Caller | NextResponse> {
+  const auth = await authenticateRequest()
+  if (!auth) {
     return NextResponse.json(
-      { error: 'Analysis failed. Please try again.' },
-      { status: 500 }
+      { error: 'You must be signed in to analyze a statement.' },
+      { status: 401 }
     )
+  }
+  const token = await readAccessToken()
+  if (!token) {
+    return NextResponse.json(
+      { error: 'You must be signed in to analyze a statement.' },
+      { status: 401 }
+    )
+  }
+  // The anon key plus the caller's own JWT, so RLS is in force and the ledger
+  // functions see the real user. No service role anywhere in this file.
+  const db = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    }
+  )
+  return { userId: auth.userId, tier: auth.tier, db }
+}
+
+const tooLarge = () =>
+  NextResponse.json({ error: 'That request is too large.' }, { status: 413 })
+
+/**
+ * Reads the body under a byte ceiling.
+ *
+ * TWO GATES, because they protect different things. The Content-Length check
+ * refuses an honestly-declared oversized request WITHOUT buffering it, which is
+ * the only one that saves memory. The byte measurement then runs on what
+ * actually arrived, which is the one a liar cannot get past.
+ */
+async function readBody(
+  request: NextRequest,
+  maxBytes: number
+): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; response: NextResponse }> {
+  if (declaredTooLarge(request.headers.get('content-length'), maxBytes)) {
+    return { ok: false, response: tooLarge() }
+  }
+  const raw = await request.text()
+  if (!withinBodyLimit(raw, maxBytes)) {
+    return { ok: false, response: tooLarge() }
+  }
+  try {
+    const parsed = raw === '' ? null : JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return {
+        ok: false,
+        response: NextResponse.json({ error: 'Malformed request.' }, { status: 400 }),
+      }
+    }
+    return { ok: true, body: parsed as Record<string, unknown> }
+  } catch {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: 'Malformed request.' }, { status: 400 }),
+    }
   }
 }
 
-// Rewrite endpoint
-export async function PUT(request: NextRequest) {
+function rateRefusal(rate: { retryAfterSeconds: number; message: string }): NextResponse {
+  return NextResponse.json(
+    { error: rate.message, code: RATE_LIMIT_CODE },
+    { status: 429, headers: { 'Retry-After': String(rate.retryAfterSeconds) } }
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Analyse
+// ---------------------------------------------------------------------------
+
+export async function POST(request: NextRequest) {
+  const caller = await admit()
+  if (caller instanceof NextResponse) return caller
+
+  const read = await readBody(request, MAX_ANALYZE_BODY_BYTES)
+  if (!read.ok) return read.response
+
+  const checked = checkStatement(read.body.statement)
+  if (!checked.ok) {
+    return NextResponse.json({ error: checked.message, code: checked.code }, { status: 400 })
+  }
+  const statement = checked.statement
+
+  // Tier from the verified session, never from the body. What the tier may not
+  // see is not asked for, so it is not generated and not billed.
+  const includeSuggestions = canSeeSuggestions(caller.tier)
+  const includeSentenceAnalysis = canSeeSentenceAnalysis(caller.tier)
+
+  if (!process.env.OPENAI_API_KEY) {
+    return NextResponse.json({ error: 'Analysis is unavailable right now.' }, { status: 503 })
+  }
+
+  // RECORDED BEFORE THE CHECK, so a burst of simultaneous requests can see each
+  // other. A failed write falls back to the old ordering rather than taking the
+  // feature down with it -- degraded, never open. See lib/statement/usage.ts.
+  const usageId = await recordStatementAttempt(caller.db, STATEMENT_OPERATIONS.analyze)
+  const rate = await statementRateDecision(caller.db, caller.userId, { selfRecorded: usageId !== null })
+  if (!rate.allowed) {
+    await settleStatementUsage(caller.db, usageId, 'rejected')
+    return rateRefusal(rate)
+  }
+
+  let completion: string
   try {
-    // Both checks precede the body read and the OpenAI call.
-    const auth = await authenticateRequest()
-    if (!auth) {
-      return NextResponse.json(
-        { error: 'You must be signed in to use the rewrite feature.' },
-        { status: 401 }
-      )
-    }
-
-    // Server-side tier check. The hidden UI button was never a control.
-    if (!auth.isUltimate) {
-      return NextResponse.json(
-        { error: 'Rewrite feature is Ultimate only' },
-        { status: 403 }
-      )
-    }
-
-    const { statement, analysis } = await request.json()
-
-    // Build detailed improvement instructions from analysis
-    let improvementInstructions = `You are a CRNA admissions expert. Completely rewrite this personal statement to be highly competitive.
-
-CRITICAL IMPROVEMENTS REQUIRED:
-
-Category-Specific Fixes:`
-
-    if (analysis?.categories) {
-      analysis.categories.forEach((cat: any) => {
-        improvementInstructions += `\n\n${cat.name} (Current: ${cat.score}/10):
-- ${cat.suggestion}`
-      })
-    }
-
-    if (analysis?.topChanges) {
-      improvementInstructions += `\n\nTOP 3 MANDATORY CHANGES:\n`
-      analysis.topChanges.forEach((change: string, idx: number) => {
-        improvementInstructions += `${idx + 1}. ${change}\n`
-      })
-    }
-
-    if (analysis?.sentenceAnalysis) {
-      improvementInstructions += `\n\nSENTENCE-LEVEL IMPROVEMENTS:\n`
-      analysis.sentenceAnalysis.forEach((item: any) => {
-        if (item.label === 'Weak' || item.label === 'Generic') {
-          improvementInstructions += `- Replace: "${item.original}"\n  With: "${item.improved}"\n`
-        }
-      })
-    }
-
-    improvementInstructions += `\n\nADDITIONAL REQUIREMENTS:
-- Create a powerful hook that immediately grabs attention
-- Make the "why CRNA" motivation crystal clear and compelling
-- Add specific clinical examples with concrete details (patients, procedures, outcomes)
-- Remove ALL generic phrases and clichés
-- Ensure smooth transitions between paragraphs
-- Keep the applicant's authentic voice and experiences
-- Aim for a score of 90%+ across all categories
-
-Return ONLY the completely rewritten statement (no preamble, no explanation, just the improved essay).`
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: improvementInstructions },
-        { role: 'user', content: `Original statement:\n\n${statement}` }
-      ],
-      temperature: 0.8,
-      max_tokens: 2500
-    })
-
-    return NextResponse.json({ rewritten: completion.choices[0].message.content })
+    const response = await openai.chat.completions.create(
+      {
+        model: MODEL,
+        messages: [
+          { role: 'system', content: analysisSystemPrompt({ includeSuggestions, includeSentenceAnalysis }) },
+          { role: 'user', content: statement },
+        ],
+        temperature: 0.4,
+        max_tokens: 2500,
+        response_format: { type: 'json_object' },
+      },
+      { signal: AbortSignal.timeout(MODEL_TIMEOUT_MS) }
+    )
+    completion = response.choices[0]?.message?.content ?? ''
   } catch (error) {
-    console.error('Rewrite error:', error)
-    return NextResponse.json({ error: 'Rewrite failed' }, { status: 500 })
+    // Never the error object: an OpenAI error echoes the request, and the
+    // request is the applicant's personal statement.
+    const name = (error as { name?: string })?.name
+    console.error('statement analyze: model call failed', name)
+    await settleStatementUsage(caller.db, usageId, 'failed')
+    const timedOut = name === 'TimeoutError' || name === 'AbortError'
+    return NextResponse.json(
+      { error: timedOut ? 'That took too long to analyze. Please try again.' : 'Analysis failed. Please try again.' },
+      { status: timedOut ? 504 : 502 }
+    )
+  }
+
+  const parsed = parseAnalysis(completion, { includeSuggestions, includeSentenceAnalysis })
+  if (!parsed.ok) {
+    console.error('statement analyze: malformed model response —', parsed.reason)
+    await settleStatementUsage(caller.db, usageId, 'rejected')
+    return NextResponse.json({ error: 'Analysis failed. Please try again.' }, { status: 502 })
+  }
+
+  // Redacted on the way out, over whatever the model actually produced. The
+  // page's tier conditionals are presentation; this is the entitlement.
+  const analysis = redactForTier(parsed.value, caller.tier)
+
+  await settleStatementUsage(caller.db, usageId, 'proposed')
+
+  // The token binds this analysis to this user and this statement. A rewrite
+  // presents it back; see lib/statement/signing.ts. A null key means rewrites
+  // will refuse, which is the correct failure for a misconfigured server.
+  const token = signAnalysis({ userId: caller.userId, statement, analysis })
+
+  return NextResponse.json({ analysis, token })
+}
+
+// ---------------------------------------------------------------------------
+// Rewrite
+// ---------------------------------------------------------------------------
+
+export async function PUT(request: NextRequest) {
+  const caller = await admit()
+  if (caller instanceof NextResponse) return caller
+
+  // Entitlement before anything expensive, and before the body is read.
+  if (!canRewrite(caller.tier)) {
+    return NextResponse.json(
+      { error: REWRITE_TIER_MESSAGE, code: REWRITE_TIER_CODE },
+      { status: 403 }
+    )
+  }
+
+  const read = await readBody(request, MAX_REWRITE_BODY_BYTES)
+  if (!read.ok) return read.response
+
+  const checked = checkStatement(read.body.statement)
+  if (!checked.ok) {
+    return NextResponse.json({ error: checked.message, code: checked.code }, { status: 400 })
+  }
+  const statement = checked.statement
+
+  // The analysis is read through the SAME strict validator the model's own
+  // output goes through, so what reaches the prompt builder is a known shape
+  // with bounded fields — never the raw object off the wire.
+  const revalidated = parseAnalysis(JSON.stringify(read.body.analysis ?? null), {
+    includeSuggestions: true,
+    includeSentenceAnalysis: true,
+  })
+  if (!revalidated.ok) {
+    return NextResponse.json(
+      { error: 'Please analyze your statement again before rewriting.', code: 'analysis-unreadable' },
+      { status: 400 }
+    )
+  }
+
+  // ORIGIN. The signature is checked against the analysis EXACTLY as the client
+  // sent it, which is what the server signed — not against the revalidated
+  // copy, which normalises. A single altered character fails here, so nothing
+  // a caller composed can reach the model.
+  const verdict = verifyAnalysisToken({
+    token: read.body.token,
+    userId: caller.userId,
+    statement,
+    analysis: read.body.analysis,
+  })
+  if (!verdict.ok) {
+    console.error('statement rewrite: token rejected —', verdict.reason)
+    // 'unavailable' is a server misconfiguration, not the applicant's doing:
+    // telling them to analyze again would send them round a loop that cannot
+    // succeed until the signing key is present.
+    const message =
+      verdict.reason === 'unavailable'
+        ? 'Rewrite is unavailable right now. Please try again later.'
+        : verdict.reason === 'expired'
+          ? 'That analysis has expired. Please analyze your statement again.'
+          : 'Please analyze your statement again before rewriting.'
+    return NextResponse.json(
+      { error: message, code: `analysis-token-${verdict.reason}` },
+      { status: verdict.reason === 'unavailable' ? 503 : 400 }
+    )
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    return NextResponse.json({ error: 'Rewrite is unavailable right now.' }, { status: 503 })
+  }
+
+  const usageId = await recordStatementAttempt(caller.db, STATEMENT_OPERATIONS.rewrite)
+  const rate = await statementRateDecision(caller.db, caller.userId, { selfRecorded: usageId !== null })
+  if (!rate.allowed) {
+    await settleStatementUsage(caller.db, usageId, 'rejected')
+    return rateRefusal(rate)
+  }
+
+  try {
+    const response = await openai.chat.completions.create(
+      {
+        model: MODEL,
+        messages: [
+          // A CONSTANT. Nothing is interpolated into the system turn, ever.
+          { role: 'system', content: REWRITE_SYSTEM_PROMPT },
+          { role: 'user', content: buildRewriteUserMessage(statement, reviewNotesFrom(revalidated.value)) },
+        ],
+        temperature: 0.6,
+        max_tokens: 2500,
+      },
+      { signal: AbortSignal.timeout(MODEL_TIMEOUT_MS) }
+    )
+
+    const rewritten = response.choices[0]?.message?.content?.trim() ?? ''
+    if (rewritten === '') {
+      await settleStatementUsage(caller.db, usageId, 'rejected')
+      return NextResponse.json({ error: 'Rewrite failed. Please try again.' }, { status: 502 })
+    }
+
+    await settleStatementUsage(caller.db, usageId, 'proposed')
+    return NextResponse.json({ rewritten })
+  } catch (error) {
+    const name = (error as { name?: string })?.name
+    console.error('statement rewrite: model call failed', name)
+    await settleStatementUsage(caller.db, usageId, 'failed')
+    const timedOut = name === 'TimeoutError' || name === 'AbortError'
+    return NextResponse.json(
+      { error: timedOut ? 'That took too long to rewrite. Please try again.' : 'Rewrite failed. Please try again.' },
+      { status: timedOut ? 504 : 502 }
+    )
   }
 }

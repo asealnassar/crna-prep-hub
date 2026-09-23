@@ -8,6 +8,7 @@ import { readResume, saveStrength } from '@/lib/resume/repo/resumeRepo'
 import {
   AI_RATE_LIMITS, RATE_LIMIT_CODE, checkAiRate, rateLedgerWindowMs,
 } from '@/lib/resume/entitlement'
+import { STATEMENT_OPERATION_PATTERN } from '@/lib/statement/usage'
 import { scoreDeterministic } from '@/lib/resume/score/deterministic'
 import { buildRubricPrompt, parseRubric, rubricEligibility, rubricUnavailable } from '@/lib/resume/score/rubric'
 import { compose, isStale } from '@/lib/resume/score/compose'
@@ -171,6 +172,12 @@ async function rateDecision(db: SupabaseClient, userId: string) {
     .from('resume_ai_usage')
     .select('created_at')
     .eq('user_id', userId)
+    // The Personal Statement Analyzer namespaces its own rows into this table
+    // (see lib/statement/usage.ts). They are a different feature with a
+    // different, tighter budget, so they must not count against the resume
+    // ceiling -- without this, analysing an essay would quietly consume a
+    // resume AI allowance the applicant never spent.
+    .not('operation', 'like', STATEMENT_OPERATION_PATTERN)
     .gte('created_at', since)
     .order('created_at', { ascending: false })
     .limit(500)
