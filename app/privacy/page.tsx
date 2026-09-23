@@ -160,8 +160,28 @@ export default function PrivacyPolicy() {
 
           <Section title="How long we keep things">
             <p>
-              Usage records are deleted after 400 days. Your account and the content you created
-              are kept until you ask us to delete them.
+              <strong className="font-semibold text-slate-900">Deleted after 400 days.</strong>{' '}
+              The record of which pages were viewed and which visits happened &mdash; for
+              everyone, whether or not you have an account. If you have never registered, this
+              is everything we hold about you, and after 400 days there is nothing left.
+            </p>
+            <p className="mt-3">
+              <strong className="font-semibold text-slate-900">Kept while you have an account.</strong>{' '}
+              If you registered, we keep one short record linking your account to how you first
+              arrived: the date of your first visit, the site or campaign that referred you, and
+              the first page you landed on. We keep it so we can understand which of our efforts
+              actually help nurses find us. It is not deleted on the 400-day schedule, because
+              it is tied to your account rather than to your browsing.
+            </p>
+            <p className="mt-3">
+              <strong className="font-semibold text-slate-900">Deleting your account.</strong>{' '}
+              When your account is deleted, that link is severed immediately and the remaining
+              record becomes anonymous. It is then deleted on the normal schedule, within 400
+              days of your last visit.
+            </p>
+            <p className="mt-3">
+              The content you created &mdash; interviews, resumes, statements, messages &mdash;
+              is kept until you ask us to delete it.
             </p>
           </Section>
 

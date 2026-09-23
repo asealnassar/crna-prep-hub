@@ -79,8 +79,16 @@ create table public.analytics_visitors (
   user_id             uuid references auth.users (id) on delete set null,
   linked_at           timestamptz,
 
+  -- IF THERE IS AN ACCOUNT, WE KNOW WHEN IT WAS LINKED. Deliberately NOT the
+  -- biconditional `(user_id is null) = (linked_at is null)`, which was the
+  -- first version of this line and was wrong in a way that only shows up on
+  -- the day it matters most: the foreign key above is ON DELETE SET NULL, so
+  -- deleting an account nulls user_id and leaves linked_at set -- which that
+  -- constraint rejected, making the DELETE fail. A visitor row would then
+  -- block erasure of the account it points at. A detached row keeps its
+  -- timestamp, counts as anonymous, and is pruned on the normal schedule.
   constraint analytics_visitors_linked_together
-    check ((user_id is null) = (linked_at is null))
+    check (user_id is null or linked_at is not null)
 );
 
 comment on table public.analytics_visitors is

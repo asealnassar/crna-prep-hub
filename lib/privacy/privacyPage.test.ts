@@ -51,6 +51,39 @@ test('the retention period on the page matches the one the database enforces', (
   assert.match(schedule, /analytics_prune\(400\)/, 'and the scheduled job enforces that same number')
 })
 
+test('the page says what is KEPT, not only what is deleted', () => {
+  // analytics_prune deletes every event and session, and every visitor row
+  // with no account attached -- but it deliberately keeps the visitor row of
+  // anyone who registered, along with how they first found us. A policy that
+  // mentioned only the 400 days would be describing half the behaviour.
+  const migration = read('../../supabase/migrations/20260922_001_analytics_traffic.sql')
+
+  assert.match(migration, /vis\.user_id is null/, 'the function keeps account-linked rows')
+  assert.match(PAGE, /Kept while you have an account/i, 'and the policy has to say so')
+  assert.match(PAGE, /first visit/i)
+  assert.match(PAGE, /Deleting your account/i, 'and what happens when the account goes')
+})
+
+test('deleting an account cannot be blocked by an analytics row', () => {
+  // ON DELETE SET NULL nulls user_id and leaves linked_at set. The first
+  // version of this constraint was the biconditional, which rejected exactly
+  // that row and made DELETE FROM auth.users fail -- a visitor record would
+  // have blocked erasure of the account it pointed at.
+  const migration = read('../../supabase/migrations/20260922_001_analytics_traffic.sql')
+
+  assert.match(migration, /on delete set null/)
+  assert.match(
+    migration,
+    /check \(user_id is null or linked_at is not null\)/,
+    'the constraint must tolerate a detached row'
+  )
+  assert.doesNotMatch(
+    migration,
+    /check \(\(user_id is null\) = \(linked_at is null\)\)/,
+    'the biconditional is the bug'
+  )
+})
+
 test('the cookies named on the page are the cookies the code actually sets', () => {
   const tracker = read('../analytics/tracking/client.ts')
   const consent = read('../consent/policy.ts')
