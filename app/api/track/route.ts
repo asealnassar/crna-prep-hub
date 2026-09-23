@@ -27,6 +27,27 @@ export const dynamic = 'force-dynamic'
 
 const limiter = new RateLimiter(60, 1)
 
+/**
+ * THE SWITCH IS HONOURED ON BOTH SIDES.
+ *
+ * NEXT_PUBLIC_ANALYTICS_TRACKING gates the browser, and for a while that was
+ * all it gated. Once the tables existed, this endpoint would happily write a
+ * row for anyone who posted to it, whether or not tracking was supposed to be
+ * on — which was found by posting one during the release verification and
+ * discovering a visitor, a session and an event sitting in production.
+ *
+ * Real visitors were never the risk: their browser sends nothing while the
+ * flag is off. But "disabled" has to mean disabled, not "disabled unless you
+ * know the URL", and the collection has to be switchable off in an emergency
+ * without waiting for a rebuild to reach every cached page.
+ *
+ * The same variable drives both sides, so enabling tracking stays one
+ * decision: set it, redeploy, and the browser and the endpoint start together.
+ */
+function trackingEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ANALYTICS_TRACKING === 'on'
+}
+
 /** Warn once per cold start rather than on every event. */
 let warnedAboutMissingTables = false
 
@@ -51,6 +72,10 @@ function ownHosts(request: Request): string[] {
 const accepted = () => new NextResponse(null, { status: 204, headers: { 'Cache-Control': 'no-store' } })
 
 export async function POST(request: Request) {
+  // Nothing is recorded while tracking is off. Answered 204 like every other
+  // refusal, so a stale page still holding the old bundle sees no error.
+  if (!trackingEnabled()) return accepted()
+
   // Same-origin only. A tracker runs on our pages; nothing else needs to post
   // here, and no CORS headers are sent, so a browser will not let it.
   const origin = request.headers.get('origin')
