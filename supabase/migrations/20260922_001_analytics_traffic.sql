@@ -238,11 +238,23 @@ grant select, insert, update, delete on public.analytics_ad_spend to service_rol
 -- page_view_count = 4 and both write 5. Here it is `count + 1` inside one
 -- statement in one transaction.
 --
--- DEDUPLICATION LIVES HERE TOO. The event insert is ON CONFLICT DO NOTHING on
--- the unique event_id, and the page-view counter is incremented ONLY when that
--- insert actually wrote a row. A retried request, a double-fired navigation or
--- a refresh loop therefore changes nothing at all, rather than inflating the
--- count while the event is correctly ignored.
+-- DEDUPLICATION IS A BARRIER, NOT A FILTER. A replayed event_id must change
+-- NOTHING, and an earlier version of this function only half managed that: the
+-- event row and the page-view counter were protected by ON CONFLICT, but every
+-- statement above them still ran. A replay therefore still bumped the
+-- visitor's last_seen_at, could still attach an account to an unlinked
+-- visitor, and -- if the replay carried a different session_id -- still
+-- created an entire extra session that no event would ever belong to.
+--
+-- The event id is now checked FIRST and the function returns immediately if it
+-- has been seen. Nothing below that line executes for a duplicate.
+--
+-- AND THE CHECK IS SAFE UNDER CONCURRENCY. `if exists` on its own is a race:
+-- two copies of the same request arriving together would both look, both see
+-- nothing, and both proceed. A transaction-scoped advisory lock keyed on the
+-- event id serialises them, so the second waits for the first to commit and
+-- then sees its row. The lock is released when the transaction ends, whether
+-- it commits or rolls back.
 --
 -- THE CLOCK IS OURS. occurred_at is now(), never a value from the browser: a
 -- device with a wrong clock would otherwise land events in the wrong day, or
@@ -282,6 +294,20 @@ declare
   -- two rows. Counting rows in a row counter removes the trap.
   inserted integer := 0;
 begin
+  -- 0. THE IDEMPOTENCY BARRIER. Everything below this point is skipped for an
+  --    event that has already been recorded.
+  --
+  --    The lock is taken before the look, so two identical requests arriving
+  --    at the same instant cannot both decide the event is new. It is keyed on
+  --    a hash of the event id, so different events never wait on each other; a
+  --    hash collision costs two unrelated events a moment of queueing and
+  --    changes no answer, because the check below is on the id itself.
+  perform pg_advisory_xact_lock(hashtextextended(p_event_id::text, 0));
+
+  if exists (select 1 from public.analytics_events where event_id = p_event_id) then
+    return false;
+  end if;
+
   -- 1. The visitor, with first touch frozen at creation.
   insert into public.analytics_visitors (
     visitor_id, first_seen_at, last_seen_at,
@@ -320,7 +346,10 @@ begin
   )
   on conflict (session_id) do nothing;
 
-  -- 4. The event. The unique event_id is what makes this idempotent.
+  -- 4. The event. The barrier at the top means this can no longer conflict;
+  --    ON CONFLICT DO NOTHING stays as a second line of defence, and as the
+  --    thing that makes the UNIQUE index the real guarantee rather than the
+  --    lock.
   insert into public.analytics_events (
     event_id, session_id, visitor_id, occurred_at, kind, path, referrer_host
   )
