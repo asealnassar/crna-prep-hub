@@ -22,7 +22,17 @@ import { join } from 'node:path'
 const ROOT = new URL('../../', import.meta.url).pathname
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 /** Executable text only, so a comment naming the component cannot pass a test. */
-const codeOnly = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ')
+/**
+ * LINE comments first, THEN block comments -- the order matters.
+ *
+ * ClientProviders line 10 contains the path `/admin/*` inside a `//` comment.
+ * Stripping block comments first treats that `/*` as an opening token, and the
+ * non-greedy match then runs to the next `*\/` anywhere in the file, deleting
+ * every line in between. That stayed invisible only while no later block
+ * comment existed to close it; adding one silently erased the render block and
+ * failed test 7 with "the sidebar stays conditional".
+ */
+const codeOnly = (s: string) => s.replace(/^\s*\/\/.*$/gm, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ')
 
 /** Every .tsx/.ts under app/ and components/, excluding tests. */
 function sourceFiles(): string[] {
@@ -70,10 +80,13 @@ test('1c: only one non-test file imports it', () => {
 
 test('2: ClientProviders holds the single render, gated on an authenticated user', () => {
   const src = codeOnly(read('components/ClientProviders.tsx'))
+  // The key was added deliberately, so this now ENFORCES it rather than
+  // merely tolerating it: an account switch must remount the modal. See
+  // lib/messaging/accountSwitch.test.ts.
   assert.match(
     src,
-    /\{!loading && user && <MessagesModal userEmail=\{user\.email \|\| ''\} isAdmin=\{isAdmin\} \/>\}/,
-    'the global mount and its auth gate must be unchanged',
+    /\{!loading && user && <MessagesModal key=\{user\.id\} userEmail=\{user\.email \|\| ''\} isAdmin=\{isAdmin\} \/>\}/,
+    'the global mount, its auth gate and its account key must be unchanged',
   )
 })
 

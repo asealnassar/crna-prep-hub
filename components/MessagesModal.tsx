@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { pageAll, fetchByIdChunks, uniqueIds } from '@/lib/messaging/pagination'
+import { createRefreshScheduler } from '@/lib/messaging/refreshScheduler'
+import { mayApplyInboxResult } from '@/lib/messaging/sessionGuard'
 
 interface MessagesModalProps {
   userEmail: string
@@ -76,7 +78,42 @@ const [searchQuery, setSearchQuery] = useState('')
    * side and then corrected.
    */
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
-  
+
+  /**
+   * The live session id, and whether this component still exists.
+   *
+   * An inbox read takes seconds (8.86s measured against the admin inbox). If
+   * the account changes while one is in flight, the finished result belongs to
+   * the PREVIOUS user. Refs, not state: the read that must be vetted was
+   * started by an earlier render and closes over that render's state, so only
+   * a ref reflects what is true at the moment the result comes back.
+   *
+   * `undefined` means the auth listener has not resolved yet. See
+   * lib/messaging/sessionGuard.ts for why that counts as permission.
+   */
+  const sessionUserId = useRef<string | null | undefined>(undefined)
+  const isMounted = useRef(true)
+
+  useEffect(() => {
+    isMounted.current = true
+    return () => {
+      isMounted.current = false
+      // The badge lives in SidebarContext, ABOVE this component, so it does
+      // not go away when this does. Left alone, the previous account's unread
+      // count stays on screen through a logout and into the next account's
+      // session until their first inbox read finishes -- 8.86s, measured.
+      //
+      // Safe against the in-flight read that may still be running: it belongs
+      // to this instance, whose isMounted is now false, so the session guard
+      // refuses its write. Zeroing here cannot be undone by it.
+      //
+      // `setMessagesUnreadCount` is a useState setter, which React guarantees
+      // is stable, so capturing it in a mount-only effect is not a stale
+      // closure.
+      setGlobalMessagesUnreadCount(0)
+    }
+  }, [])
+
 const [compose, setCompose] = useState({
     subject: '',
     message: '',
@@ -103,6 +140,19 @@ const [compose, setCompose] = useState({
     if (isAdmin) loadUsers()
     getAdminId()
 
+    // Every reload below ends in fetchInboxMeta(), and for a large inbox that
+    // one call reads every thread, every message body and every read receipt.
+    // Measured 2026-09-22: 8,999 Supabase requests from /api/messages/participants
+    // in a day, against 24 messages actually sent. The triggers, not the
+    // messages, were the cost -- so they are coalesced here.
+    //
+    // Coalesced, never dropped: a burst settles quickly, a sustained stream
+    // still refreshes at the ceiling, and a throttled tab switch is deferred
+    // to the end of its window rather than discarded. See refreshScheduler.ts.
+    // The promise is returned, not discarded: the scheduler uses it to avoid
+    // starting a second full inbox read while one is still running.
+    const scheduler = createRefreshScheduler({ run: () => loadThreads() })
+
     // Polling (even slowed down) still costs egress on every single active user,
     // every few seconds, whether anything actually changed or not. Supabase
     // Realtime instead pushes an event only when a row actually changes — idle
@@ -113,21 +163,24 @@ const [compose, setCompose] = useState({
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'thread_messages' },
         () => {
-          loadThreads()
+          scheduler.onRealtimeEvent()
         }
       )
       .subscribe()
 
-    // Still refresh once when the tab becomes visible again, in case the
-    // realtime connection dropped while the tab was in the background.
+    // Still refresh when the tab becomes visible again, in case the realtime
+    // connection dropped while the tab was in the background -- but at most
+    // once per window, because a working session spent switching between
+    // editor and browser fired a full inbox read on every single switch.
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        loadThreads()
+        scheduler.onVisible()
       }
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
+      scheduler.cancel()
       supabase.removeChannel(channel)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
@@ -139,9 +192,13 @@ const [compose, setCompose] = useState({
   useEffect(() => {
     let cancelled = false
     supabase.auth.getUser().then(({ data }) => {
+      sessionUserId.current = data?.user?.id ?? null
       if (!cancelled) setCurrentUserId(data?.user?.id ?? null)
     })
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      // The ref is what an in-flight inbox read is vetted against, so it must
+      // be updated here too -- not only the state used for rendering.
+      sessionUserId.current = session?.user?.id ?? null
       setCurrentUserId(session?.user?.id ?? null)
     })
     return () => { cancelled = true; sub.subscription.unsubscribe() }
@@ -218,6 +275,16 @@ const [compose, setCompose] = useState({
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
+    // Whose inbox this read is for. Checked again before anything is written,
+    // because the account can change during the seconds this takes.
+    const loadedFor = user.id
+    const stillOurs = () =>
+      mayApplyInboxResult({
+        mounted: isMounted.current,
+        loadedFor,
+        sessionUserId: sessionUserId.current,
+      })
+
     // Both reads below are size-limited by PostgREST, and both limits had been
     // reached: the participant select capped at 1000 of 1097 rows, and the
     // 1097-id `.in()` was rejected outright at the HTTP layer. The rejection
@@ -239,6 +306,7 @@ const [compose, setCompose] = useState({
       threadIds = uniqueIds(myParticipations.map(p => p.thread_id))
 
       if (threadIds.length === 0) {
+        if (!stillOurs()) return
         setLoadFailed(false)
         setMetaDegraded(false)
         setThreads([])
@@ -262,12 +330,14 @@ const [compose, setCompose] = useState({
       // A failed read is not an empty inbox. Leave whatever is on screen and
       // say so, rather than replacing real conversations with a blank state.
       console.error('Inbox load failed:', (error as any)?.code, (error as any)?.message)
+      if (!stillOurs()) return
       setLoadFailed(true)
       return
     }
 
     // Single request: addresses, per-thread state and broadcast groups.
     const meta = await fetchInboxMeta()
+    if (!stillOurs()) return
     setLoadFailed(false)
     setMetaDegraded(!meta.ok)
     const metaByThread = new Map<string, any>(meta.threads.map((t: any) => [t.thread_id, t]))
@@ -341,6 +411,10 @@ const [compose, setCompose] = useState({
       String(b.lastMessageTime).localeCompare(String(a.lastMessageTime))
     )
 
+    // Last check before the result is rendered. The unread count in particular
+    // writes to SidebarContext, which outlives this component -- so without
+    // this, a signed-out account's count could land on the next one's badge.
+    if (!stillOurs()) return
     setThreads(combined)
     setGlobalMessagesUnreadCount(individual.filter(t => t.unreadCount > 0).length)
   }
