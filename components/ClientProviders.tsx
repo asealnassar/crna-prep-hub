@@ -50,7 +50,23 @@ function ClientProvidersInner({ children }: { children: React.ReactNode }) {
         <Sidebar isLoggedIn={!!user} userEmail={user?.email || ''} isAdmin={isAdmin} onCollapsedChange={setSidebarCollapsed} />
       )}
       {children}
-      {!loading && user && <MessagesModal userEmail={user.email || ''} isAdmin={isAdmin} />}
+      {/* KEYED BY ACCOUNT, deliberately.
+
+          Signing in as a second account without signing out first replaces the
+          session and emits SIGNED_IN with no SIGNED_OUT, so `user` goes from A
+          to B without ever being null and React would otherwise KEEP the same
+          modal instance -- leaving A's conversations on screen, A's unread
+          count in the badge, and A's Realtime channel subscribed under A's
+          token, all under B's session.
+
+          Keying on the id makes React tear the instance down and build a new
+          one: A's state is discarded, A's refresh scheduler is cancelled, A's
+          channel is removed, and B's inbox loads on a fresh subscription.
+
+          user.id, never `user`. onAuthStateChange fires on TOKEN_REFRESHED and
+          hands back a NEW user object with the SAME id; keying on the object
+          would remount roughly hourly and refetch the whole inbox each time. */}
+      {!loading && user && <MessagesModal key={user.id} userEmail={user.email || ''} isAdmin={isAdmin} />}
     </>
   )
 }
