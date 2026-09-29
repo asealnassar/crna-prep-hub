@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { authenticateRequest } from '@/lib/apiAuth'
+import { authenticateRequest, isAdminEmail } from '@/lib/apiAuth'
+import {
+  STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
+} from '@/lib/statement/studioGate'
 import { extractDocument, type DocumentRefusal } from '@/lib/statement/extract/extractDocument'
 import { MAX_EXTRACTED_CHARS, MAX_SAVED_CHARS, MAX_UPLOAD_BYTES } from '@/lib/statement/extract/limits'
 
@@ -15,14 +18,21 @@ import { MAX_EXTRACTED_CHARS, MAX_SAVED_CHARS, MAX_UPLOAD_BYTES } from '@/lib/st
  *
  * ORDER OF GATES, cheapest first, matching /api/analyze-statement's own design:
  *
- *   1. AUTHENTICATION, before the body is touched.
- *   2. CONTENT TYPE, so a JSON caller is refused before multipart parsing.
- *   3. DECLARED SIZE, from Content-Length, before the body is buffered.
- *   4. MULTIPART, exactly one file, non-empty.
- *   5. MEASURED SIZE, on the bytes that actually arrived.
- *   6. FORMAT, from the file's signature -- never its name or MIME type.
- *   7. EXTRACTION, in memory, under the approved budget and capacity gate.
- *   8. THE CHARACTER CEILING, by refusing rather than truncating.
+ *   1. THE STUDIO GATE. While STATEMENT_STUDIO_MODE is 'internal' this endpoint
+ *      does not exist for anyone but an administrator.
+ *   2. AUTHENTICATION, before the body is touched.
+ *   3. CONTENT TYPE, so a JSON caller is refused before multipart parsing.
+ *   4. DECLARED SIZE, from Content-Length, before the body is buffered.
+ *   5. MULTIPART, exactly one file, non-empty.
+ *   6. MEASURED SIZE, on the bytes that actually arrived.
+ *   7. FORMAT, from the file's signature -- never its name or MIME type.
+ *   8. EXTRACTION, in memory, under the approved budget and capacity gate.
+ *   9. THE CHARACTER CEILING, by refusing rather than truncating.
+ *
+ * WHY THE GATE IS ABOVE EVERYTHING. A blocked caller must cost this application
+ * no multipart parse and no PDF worker, so the gate sits above the content-type
+ * check rather than beside it. `extractDocument` is unreachable until access is
+ * allowed.
  *
  * WHAT AUTHENTICATION CAN AND CANNOT DO HERE. The session is verified before
  * anything reads or parses the body, so an unauthenticated upload costs this
@@ -169,16 +179,38 @@ function refuse(code: DocumentRefusal, characters?: number, detail?: string): Ne
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  // 1. AUTHENTICATION, before the body is read or parsed.
+  // 1. THE STUDIO GATE, read before anything touches the request body.
+  const mode = statementStudioMode()
+
+  // 2. AUTHENTICATION, and with it the administrator check the gate needs.
   const auth = await authenticateRequest()
-  if (!auth) {
+
+  const access = statementStudioAccess({
+    isAdmin: isAdminEmail(auth?.email),
+    isAuthenticated: auth !== null,
+    mode,
+  })
+  if (!access.allowed) {
+    // THE HIDDEN ANSWER IS THE GATE'S OWN NEUTRAL BODY, imported rather than
+    // copied, so all five Studio surfaces answer a blocked caller with one
+    // identical response by construction. It names no draft, no upload, no
+    // administrator, no flag, no mode and no Studio -- this route reads files and
+    // has no drafts to report missing -- and it is never a 403: a 403 would
+    // confirm both that this endpoint exists and that somebody else may use it.
+    if (access.reason === 'hidden') {
+      return NextResponse.json(STATEMENT_STUDIO_HIDDEN_BODY, { status: access.status })
+    }
+    // 'general' mode keeps the answer this route has always given.
     return NextResponse.json(
       { error: 'You must be signed in to upload a statement.', code: 'unauthenticated' },
-      { status: 401 },
+      { status: access.status },
     )
   }
+  // Unreachable while the gate requires authentication. Kept so that a change
+  // to the gate cannot quietly admit an anonymous upload.
+  if (!auth) return NextResponse.json(STATEMENT_STUDIO_HIDDEN_BODY, { status: 404 })
 
-  // 2. CONTENT TYPE. `formData()` on a JSON body throws, and a thrown parse is a
+  // 3. CONTENT TYPE. `formData()` on a JSON body throws, and a thrown parse is a
   // worse answer than a clear one.
   const contentType = request.headers.get('content-type') ?? ''
   if (!contentType.toLowerCase().includes('multipart/form-data')) {
@@ -188,7 +220,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     )
   }
 
-  // 3. DECLARED SIZE, before buffering. An honest client states its size, so an
+  // 4. DECLARED SIZE, before buffering. An honest client states its size, so an
   // honestly oversized request is refused without reading it. A liar is not
   // trusted: a missing, malformed or understated header simply falls through to
   // the measured check, which is the real control.
@@ -197,7 +229,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (Number(declared.trim()) > MAX_DECLARED_BODY_BYTES) return refuse('too-large')
   }
 
-  // 4. MULTIPART, exactly one file.
+  // 5. MULTIPART, exactly one file.
   const form = await request.formData().catch(() => null)
   if (!form) {
     return NextResponse.json(
@@ -228,7 +260,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const bytes = new Uint8Array(await file.arrayBuffer())
 
-  // 5-8. Measured size, format from the signature, extraction, and the ceiling.
+  // 6-9. Measured size, format from the signature, extraction, and the ceiling.
   //
   // CANCELLATION IS WIRED, WITH A CAVEAT. `request.signal` aborts when the
   // platform tells us the connection is gone, and that reaches the PDF worker's

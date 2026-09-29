@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { authenticateRequest, readAccessToken } from '@/lib/apiAuth'
+import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
+import {
+  STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
+} from '@/lib/statement/studioGate'
 import { checkDraftUpdate } from '@/lib/statement/draft/validate'
 import { deleteDraft, readDraft, updateDraft } from '@/lib/statement/draft/draftRepo'
 import {
@@ -39,11 +42,42 @@ export const dynamic = 'force-dynamic'
 type Caller = { userId: string; db: SupabaseClient }
 type Context = { params: Promise<{ id: string }> }
 
-/** Identical to the collection route's. Anon key plus the caller's JWT; no service role. */
+/**
+ * Byte-for-byte the collection route's, and a test holds it that way.
+ *
+ * The Studio gate runs first, so while STATEMENT_STUDIO_MODE is 'internal' a
+ * non-admin caller is answered with the gate's neutral hidden body -- before a
+ * token is read, before a client is built, before any statement is issued. That
+ * is a DIFFERENT body from the one failed() below sends for a draft this caller
+ * may open but which does not exist; studioGate.ts says why the two must not be
+ * merged. Anon key plus the caller's JWT; no service role.
+ */
 async function admit(): Promise<Caller | NextResponse> {
-  const auth = await authenticateRequest()
-  if (!auth) return NextResponse.json(UNAUTHENTICATED_BODY, { status: 401 })
+  // 1. The rollout state, read once for this request.
+  const mode = statementStudioMode()
 
+  // 2-3. Who is calling, and whether they are an administrator.
+  const auth = await authenticateRequest()
+
+  // 4. The same decision app/statement-studio/[id]/page.tsx takes.
+  const access = statementStudioAccess({
+    isAdmin: isAdminEmail(auth?.email),
+    isAuthenticated: auth !== null,
+    mode,
+  })
+
+  // 5-6. A blocked caller is answered HERE: no token is read, no client is
+  // built, and the repository is never reached.
+  if (!access.allowed) {
+    const body = access.reason === 'hidden' ? STATEMENT_STUDIO_HIDDEN_BODY : UNAUTHENTICATED_BODY
+    return NextResponse.json(body, { status: access.status })
+  }
+
+  // Unreachable while the gate requires authentication. Kept so that a change
+  // to the gate cannot quietly produce an anonymous caller below this line.
+  if (!auth) return NextResponse.json(STATEMENT_STUDIO_HIDDEN_BODY, { status: 404 })
+
+  // 7. Only now.
   const token = await readAccessToken()
   if (!token) return NextResponse.json(UNAUTHENTICATED_BODY, { status: 401 })
 

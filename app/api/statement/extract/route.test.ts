@@ -1,9 +1,10 @@
-import test, { beforeEach, mock } from 'node:test'
+import test, { after, beforeEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { STATEMENT_STUDIO_HIDDEN_BODY } from '../../../../lib/statement/studioGate.ts'
 
 /**
  * The document-upload endpoint.
@@ -26,9 +27,11 @@ import { fileURLToPath } from 'node:url'
  * POST() is a function call. Real HTTP verification is a separate step.
  *
  * NO PRODUCTION CREDENTIALS. The authentication mock returns a fixed fictional
- * user. `authenticateRequest` -- the only thing that reads a cookie, contacts
- * Supabase or touches process.env -- is replaced, so no session, key or network
- * call is involved.
+ * user. `authenticateRequest` -- the only thing that reads a cookie or contacts
+ * Supabase -- is replaced, so no session, key or network call is involved. The
+ * route does read one environment variable of its own now, STATEMENT_STUDIO_MODE,
+ * which these tests set and restore themselves; it is a rollout flag, not a
+ * credential.
  */
 
 const ROUTE_PATH = '../../../../app/api/statement/extract/route.ts'
@@ -48,6 +51,52 @@ const before = (haystack: string, first: string, second: string) => {
   assert.ok(a < b, `${first} does not run before ${second}`)
 }
 
+/**
+ * THE STUDIO MODE BASELINE FOR THIS FILE IS 'general'.
+ *
+ * Every extraction test here describes a NORMAL authenticated applicant --
+ * sizes, formats, scans, budgets, refusal codes. 'general' is the mode that
+ * admits one. Left unset the gate defaults to 'internal' and answers all of them
+ * 404, which would test the gate instead of the extractor.
+ *
+ * The gate tests set the mode they need through withMode(), which restores it
+ * when that test ends, and beforeEach() restores this baseline regardless. The
+ * process value is put back in after().
+ */
+const ORIGINAL_MODE = process.env.STATEMENT_STUDIO_MODE
+process.env.STATEMENT_STUDIO_MODE = 'general'
+after(() => {
+  if (ORIGINAL_MODE === undefined) delete process.env.STATEMENT_STUDIO_MODE
+  else process.env.STATEMENT_STUDIO_MODE = ORIGINAL_MODE
+})
+
+/** Sets the mode for one test and puts it back when that test ends. */
+function withMode(t: { after: (fn: () => void) => void }, mode: string | undefined): void {
+  const previous = process.env.STATEMENT_STUDIO_MODE
+  if (mode === undefined) delete process.env.STATEMENT_STUDIO_MODE
+  else process.env.STATEMENT_STUDIO_MODE = mode
+  t.after(() => {
+    if (previous === undefined) delete process.env.STATEMENT_STUDIO_MODE
+    else process.env.STATEMENT_STUDIO_MODE = previous
+  })
+}
+
+/**
+ * THE GATE-HIDDEN BODY: spelled out, AND checked against the real constant.
+ *
+ * It is STATEMENT_STUDIO_HIDDEN_BODY from lib/statement/studioGate.ts, which all
+ * five Studio endpoints now import, so one identical response is sent by
+ * construction rather than by three copies agreeing. Spelling it out here means
+ * a change to that constant has to be acknowledged in this file; checking it
+ * against the import means this file and
+ * app/api/statement/drafts/route.test.ts are asserting the same bytes, which is
+ * how the two families are proven byte-equivalent across two test processes.
+ *
+ * Note what it is NOT: the draft not-found body. This route reads uploaded
+ * files and has no drafts to report missing.
+ */
+const GATE_HIDDEN = { error: 'Not found.', code: 'not-found' }
+
 // ===================================================================
 // PART 1 — ordering and absence, proven by reading
 // ===================================================================
@@ -58,6 +107,31 @@ test('route: authentication happens before the body is read or parsed', () => {
   // And it is the very first thing in the handler.
   const firstStatement = POST.slice(POST.indexOf('{'), POST.indexOf('{') + 200)
   assert.match(firstStatement, /authenticateRequest\(\)/)
+})
+
+test('route: the Studio gate is the first thing the handler does', () => {
+  before(POST, 'statementStudioMode()', 'authenticateRequest()')
+  before(POST, 'authenticateRequest()', 'statementStudioAccess(')
+  // Nothing touches the request until the gate has allowed it.
+  before(POST, 'statementStudioAccess(', "request.headers.get('content-type')")
+  before(POST, 'statementStudioAccess(', "request.headers.get('content-length')")
+  before(POST, 'statementStudioAccess(', 'request.formData()')
+  before(POST, 'statementStudioAccess(', 'extractDocument(')
+  // And the mode is determined before anything else at all.
+  const firstStatement = POST.slice(POST.indexOf('{'), POST.indexOf('{') + 200)
+  assert.match(firstStatement, /statementStudioMode\(\)/)
+})
+
+test('route: the gate is the STATEMENT one, and there is no 403 anywhere', () => {
+  assert.ok(SOURCE.includes("from '@/lib/statement/studioGate'"))
+  assert.ok(SOURCE.includes('const mode = statementStudioMode()'))
+  assert.ok(SOURCE.includes('isAdmin: isAdminEmail(auth?.email)'))
+  // Never the resume cutover flag: that would release the Studio the day
+  // resumes are cut over.
+  for (const forbidden of ['RESUME_BUILDER_MODE', 'resumeBuilderMode', 'resumeV2Access']) {
+    assert.equal(SOURCE.includes(forbidden), false, `${forbidden} must not appear`)
+  }
+  assert.equal(/\b403\b/.test(CODE), false, 'a hidden endpoint must never answer 403')
 })
 
 test('route: Content-Length is consulted before the body is buffered', () => {
@@ -222,12 +296,20 @@ const FAKE_USER = { userId: '00000000-0000-4000-8000-000000000000', email: null,
  * what failed nine of the ten Group 4 tests before any assertion ran.
  */
 let session: typeof FAKE_USER | null = null
+let admin = false
+let extractCalls = 0
 
 const AUTH_MODULE = fileURLToPath(new URL('../../../../lib/apiAuth.ts', import.meta.url))
+const EXTRACT_MODULE = fileURLToPath(
+  new URL('../../../../lib/statement/extract/extractDocument.ts', import.meta.url),
+)
 
-/** Unauthenticated is the default, so no test can inherit another's session. */
+/** Unauthenticated, non-admin, general mode: no test inherits another's setup. */
 beforeEach(() => {
   session = null
+  admin = false
+  extractCalls = 0
+  process.env.STATEMENT_STUDIO_MODE = 'general'
 })
 
 let mocksInstalled = false
@@ -240,7 +322,7 @@ let routePost: ((request: Request) => Promise<Response>) | null = null
  * `--experimental-test-module-mocks`; installing at module scope or in a `before`
  * hook would make the flag mandatory for the Part 1 selection too.
  */
-function installMocksOnce(): void {
+async function installMocksOnce(): Promise<void> {
   if (mocksInstalled) return
   mocksInstalled = true
 
@@ -297,8 +379,36 @@ function installMocksOnce(): void {
     namedExports: {
       authenticateRequest: async () => session,
       readAccessToken: async () => (session ? 'fictional-token' : null),
-      isAdminEmail: () => false,
+      isAdminEmail: () => admin,
       ADMIN_EMAILS: [] as readonly string[],
+    },
+  })
+
+  // ---------------------------------------------------------------------
+  // THE EXTRACTOR, WRAPPED RATHER THAN REPLACED.
+  //
+  // The real module is imported FIRST and then delegated to, so every test
+  // below still exercises the genuine signature detection, capacity gate, time
+  // budget and refusal codes -- no extraction behaviour is simulated, and the
+  // module-level capacity state the simultaneous-PDF test contends for is the
+  // same instance it always was.
+  //
+  // The wrapper exists for exactly one reason: to COUNT invocations, so that
+  // "a blocked caller never causes extraction" is measured rather than inferred
+  // from a status code.
+  //
+  // extractDocument.ts imports nothing from next and nothing from apiAuth, so
+  // importing it here, after those two mocks, cannot contaminate it.
+  // ---------------------------------------------------------------------
+  const realExtract = (await import(pathToFileURL(EXTRACT_MODULE).href)) as {
+    extractDocument: (...args: never[]) => Promise<unknown>
+  }
+  mock.module(EXTRACT_MODULE, {
+    namedExports: {
+      extractDocument: async (...args: never[]) => {
+        extractCalls += 1
+        return realExtract.extractDocument(...args)
+      },
     },
   })
 }
@@ -314,7 +424,7 @@ function installMocksOnce(): void {
  * the gate, which is the thing under test.
  */
 async function handler(authed: boolean): Promise<(request: Request) => Promise<Response>> {
-  installMocksOnce()
+  await installMocksOnce()
   session = authed ? FAKE_USER : null
   if (!routePost) {
     // Imported AFTER the mocks are installed. Both are in place by this line.
@@ -330,7 +440,8 @@ function upload(bytes: Uint8Array, filename = 'statement.txt', field = 'file'): 
   return new Request('http://localhost/api/statement/extract', { method: 'POST', body: form })
 }
 
-test('route: an unauthenticated request is refused 401 BEFORE the body is parsed', async () => {
+test('route: general mode — an unauthenticated request is 401 BEFORE the body is parsed', async (t) => {
+  withMode(t, 'general')
   const POSTFn = await handler(false)
   // A body that would fail multipart parsing. A 401 rather than a 400 proves the
   // parse never ran.
@@ -343,6 +454,157 @@ test('route: an unauthenticated request is refused 401 BEFORE the body is parsed
   assert.equal(response.status, 401)
   const body = await response.json()
   assert.equal(body.code, 'unauthenticated')
+})
+
+// ------------------------------------------------------------- the Studio gate
+
+/** One request, at the given identity. */
+const post = async (authed: boolean, request: Request): Promise<Response> =>
+  (await handler(authed))(request)
+
+/** A TXT upload that WOULD succeed for an admitted caller. */
+const goodUpload = () => upload(new Uint8Array(Buffer.from('My statement.', 'utf8')))
+
+/** A body that would make multipart parsing throw. */
+const brokenMultipart = () =>
+  new Request('http://localhost/api/statement/extract', {
+    method: 'POST',
+    headers: { 'content-type': 'multipart/form-data; boundary=----nope' },
+    body: 'this is not a valid multipart body',
+  })
+
+test('gate: internal — an anonymous upload gets the hidden 404 and no extraction', async (t) => {
+  withMode(t, 'internal')
+  const response = await post(false, goodUpload())
+  assert.equal(response.status, 404)
+  assert.deepEqual(await response.json(), GATE_HIDDEN)
+  assert.equal(extractCalls, 0, 'extraction must never be invoked for a blocked caller')
+})
+
+test('gate: internal — an authenticated NON-admin upload gets the hidden 404 and no extraction', async (t) => {
+  withMode(t, 'internal')
+  admin = false
+  const response = await post(true, goodUpload())
+  assert.equal(response.status, 404)
+  assert.deepEqual(await response.json(), GATE_HIDDEN)
+  assert.equal(extractCalls, 0, 'a normal user must not be able to cause any extraction')
+})
+
+test('gate: internal — the two blocked responses are byte-identical', async (t) => {
+  withMode(t, 'internal')
+  const anonymous = await (await post(false, goodUpload())).text()
+  admin = false
+  const signedIn = await (await post(true, goodUpload())).text()
+  assert.equal(anonymous, signedIn, 'a prober must not be able to tell the two cases apart')
+  assert.equal(anonymous, JSON.stringify(GATE_HIDDEN))
+  assert.equal(extractCalls, 0)
+})
+
+test('gate: internal — a blocked caller is refused before multipart parsing', async (t) => {
+  withMode(t, 'internal')
+  // A 404 rather than a 400 proves the parse never ran, exactly as the 401 test
+  // above proves it for general mode.
+  const response = await post(true, brokenMultipart())
+  assert.equal(response.status, 404)
+  assert.deepEqual(await response.json(), GATE_HIDDEN)
+  assert.equal(extractCalls, 0)
+})
+
+test('gate: internal — an oversized upload is hidden, not refused as too large', async (t) => {
+  withMode(t, 'internal')
+  // 413 would confirm the endpoint exists and reads sizes. 404 says nothing.
+  const response = await post(
+    true,
+    new Request('http://localhost/api/statement/extract', {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=x', 'content-length': '99999999' },
+      body: 'x',
+    }),
+  )
+  assert.equal(response.status, 404)
+  assert.deepEqual(await response.json(), GATE_HIDDEN)
+  assert.equal(extractCalls, 0)
+})
+
+test('gate: internal — the hidden answer names nothing, and is never 403', async (t) => {
+  withMode(t, 'internal')
+  const response = await post(true, goodUpload())
+  assert.notEqual(response.status, 403, 'a hidden endpoint must never answer 403')
+  const text = (await response.text()).toLowerCase()
+  for (const word of [
+    // The approved list.
+    'draft', 'statement', 'studio', 'admin', 'internal', 'upload', 'extract',
+    'forbidden', 'permission',
+    // Plus these, which this body also does not contain: nothing reveals what
+    // kind of endpoint refused the caller, or that signing in would help.
+    'flag', 'beta', 'denied', 'role', 'sign', 'file',
+  ]) {
+    assert.equal(text.includes(word), false, `the hidden answer leaked "${word}"`)
+  }
+})
+
+test('gate: the hidden body IS the gate constant, and names no draft', () => {
+  assert.deepEqual(GATE_HIDDEN, STATEMENT_STUDIO_HIDDEN_BODY)
+  assert.equal(JSON.stringify(GATE_HIDDEN), '{"error":"Not found.","code":"not-found"}')
+  // The draft body this route used to send is gone from the route entirely.
+  assert.equal(SOURCE.includes('NOT_FOUND_BODY'), false)
+  assert.equal(SOURCE.includes('draft/http'), false, 'no dependency on the draft http module')
+})
+
+test('gate: internal — an authenticated ADMIN upload is extracted normally', async (t) => {
+  withMode(t, 'internal')
+  admin = true
+  const response = await post(true, goodUpload())
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.format, 'txt')
+  assert.equal(body.text, 'My statement.')
+  assert.equal(extractCalls, 1, 'an admitted admin does reach extraction')
+})
+
+test('gate: general — an anonymous upload is 401, and still no extraction', async (t) => {
+  withMode(t, 'general')
+  const response = await post(false, goodUpload())
+  assert.equal(response.status, 401)
+  assert.equal((await response.json()).code, 'unauthenticated')
+  assert.equal(extractCalls, 0)
+})
+
+test('gate: general — an authenticated NON-admin upload is extracted', async (t) => {
+  withMode(t, 'general')
+  admin = false
+  const response = await post(true, goodUpload())
+  assert.equal(response.status, 200, 'general mode is what one env change will turn on')
+  assert.equal((await response.json()).text, 'My statement.')
+  assert.equal(extractCalls, 1)
+})
+
+test('gate: general — an authenticated ADMIN upload is extracted too', async (t) => {
+  withMode(t, 'general')
+  admin = true
+  const response = await post(true, goodUpload())
+  assert.equal(response.status, 200)
+  assert.equal(extractCalls, 1)
+})
+
+test('gate: an unknown or absent mode FAILS CLOSED to internal', async (t) => {
+  // One registration, so the restore runs once however many values are tried.
+  withMode(t, 'internal')
+  admin = false
+
+  for (const value of ['beta', 'v2', 'on', 'true', '1', '', ' ', 'GENERALLY', 'general,beta']) {
+    process.env.STATEMENT_STUDIO_MODE = value
+    const response = await post(true, goodUpload())
+    assert.equal(response.status, 404, `STATEMENT_STUDIO_MODE="${value}" must hide the endpoint`)
+    assert.deepEqual(await response.json(), GATE_HIDDEN)
+  }
+
+  delete process.env.STATEMENT_STUDIO_MODE
+  const absent = await post(true, goodUpload())
+  assert.equal(absent.status, 404, 'an unset flag must hide the endpoint')
+  assert.deepEqual(await absent.json(), GATE_HIDDEN)
+
+  assert.equal(extractCalls, 0, 'no unknown mode may reach extraction')
 })
 
 test('route: a signed-in TXT upload returns the text and its eligibility', async () => {

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { authenticateRequest, readAccessToken } from '@/lib/apiAuth'
+import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
+import {
+  STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
+} from '@/lib/statement/studioGate'
 import { checkDraftCreate } from '@/lib/statement/draft/validate'
 import { createDraft, listDrafts } from '@/lib/statement/draft/draftRepo'
 import {
@@ -23,10 +26,12 @@ import {
  *
  * ORDER OF GATES, cheapest first, matching /api/statement/extract:
  *
- *   1. AUTHENTICATION, before the body is read and before any query.
- *   2. BODY, parsed and checked for being an object at all.
- *   3. VALIDATION, by checkDraftCreate -- not duplicated here.
- *   4. PERSISTENCE, by the repository.
+ *   1. THE STUDIO GATE. While STATEMENT_STUDIO_MODE is 'internal' this endpoint
+ *      does not exist for anyone but an administrator.
+ *   2. AUTHENTICATION, before the body is read and before any query.
+ *   3. BODY, parsed and checked for being an object at all.
+ *   4. VALIDATION, by checkDraftCreate -- not duplicated here.
+ *   5. PERSISTENCE, by the repository.
  *
  * NOTHING FROM THE REQUEST DECIDES OWNERSHIP. `user_id` comes from the verified
  * session, never from the body, and RLS refuses any row whose owner is not the
@@ -44,7 +49,24 @@ export const dynamic = 'force-dynamic'
 type Caller = { userId: string; db: SupabaseClient }
 
 /**
- * Authenticates and builds the caller-scoped client, or answers 401.
+ * Applies the Studio gate, then authenticates and builds the caller-scoped
+ * client. Or answers, having touched nothing.
+ *
+ * THE GATE IS FIRST, and it is the same decision the Studio page takes --
+ * lib/statement/studioGate.ts, reading STATEMENT_STUDIO_MODE. Gating the page
+ * alone would leave this endpoint open to any signed-in user, which is not what
+ * "internal only" means.
+ *
+ * THE HIDDEN ANSWER IS STATEMENT_STUDIO_HIDDEN_BODY, the gate's own neutral
+ * body, shared by all five Studio endpoints so that a blocked caller gets one
+ * identical response whichever they probed. It is deliberately NOT this family's
+ * draft not-found body, which means "you may use this, the row is not there" and
+ * belongs only to a caller already admitted. There is no 403 anywhere: a 403
+ * confirms both that the endpoint exists and that somebody else may use it.
+ *
+ * IDENTICAL TO THE ITEM ROUTE'S, deliberately -- a test asserts the two function
+ * bodies are byte-for-byte the same. Both families must be gated the same way,
+ * and the cheapest way to be sure of that is for there to be nothing to compare.
  *
  * The anon key plus the caller's own JWT, exactly as
  * app/api/resume-v2/draft/route.ts does, so RLS sees the real user. There is no
@@ -52,9 +74,31 @@ type Caller = { userId: string; db: SupabaseClient }
  * the signed-in applicant may make about their own rows.
  */
 async function admit(): Promise<Caller | NextResponse> {
-  const auth = await authenticateRequest()
-  if (!auth) return NextResponse.json(UNAUTHENTICATED_BODY, { status: 401 })
+  // 1. The rollout state, read once for this request.
+  const mode = statementStudioMode()
 
+  // 2-3. Who is calling, and whether they are an administrator.
+  const auth = await authenticateRequest()
+
+  // 4. The same decision app/statement-studio/[id]/page.tsx takes.
+  const access = statementStudioAccess({
+    isAdmin: isAdminEmail(auth?.email),
+    isAuthenticated: auth !== null,
+    mode,
+  })
+
+  // 5-6. A blocked caller is answered HERE: no token is read, no client is
+  // built, and the repository is never reached.
+  if (!access.allowed) {
+    const body = access.reason === 'hidden' ? STATEMENT_STUDIO_HIDDEN_BODY : UNAUTHENTICATED_BODY
+    return NextResponse.json(body, { status: access.status })
+  }
+
+  // Unreachable while the gate requires authentication. Kept so that a change
+  // to the gate cannot quietly produce an anonymous caller below this line.
+  if (!auth) return NextResponse.json(STATEMENT_STUDIO_HIDDEN_BODY, { status: 404 })
+
+  // 7. Only now.
   const token = await readAccessToken()
   if (!token) return NextResponse.json(UNAUTHENTICATED_BODY, { status: 401 })
 

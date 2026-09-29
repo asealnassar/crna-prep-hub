@@ -1,8 +1,9 @@
-import test, { beforeEach, mock } from 'node:test'
+import test, { after, beforeEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { STATEMENT_STUDIO_HIDDEN_BODY } from '../../../../lib/statement/studioGate.ts'
 
 /**
  * The statement draft API, both route modules.
@@ -38,6 +39,54 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 // nothing here reaches the network, and the repository is mocked out entirely.
 process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://fixture.supabase.co'
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'fixture-anon-key'
+
+/**
+ * THE STUDIO MODE BASELINE FOR THIS FILE IS 'general'.
+ *
+ * Every behaviour test here describes a NORMAL authenticated applicant -- draft
+ * validation, conflicts, 404s, leakage -- and 'general' is the mode that admits
+ * one. Left unset, the gate would default to 'internal' and answer all of them
+ * 404, which would be a test of the gate rather than of the route.
+ *
+ * The gate tests set the mode they need through withMode(), which restores it
+ * when that test ends, and beforeEach() puts this baseline back regardless. No
+ * test can inherit another's mode. The process value is restored in after().
+ */
+const ORIGINAL_MODE = process.env.STATEMENT_STUDIO_MODE
+process.env.STATEMENT_STUDIO_MODE = 'general'
+after(() => {
+  if (ORIGINAL_MODE === undefined) delete process.env.STATEMENT_STUDIO_MODE
+  else process.env.STATEMENT_STUDIO_MODE = ORIGINAL_MODE
+})
+
+/** Sets the mode for one test and puts it back when that test ends. */
+function withMode(t: { after: (fn: () => void) => void }, mode: string | undefined): void {
+  const previous = process.env.STATEMENT_STUDIO_MODE
+  if (mode === undefined) delete process.env.STATEMENT_STUDIO_MODE
+  else process.env.STATEMENT_STUDIO_MODE = mode
+  t.after(() => {
+    if (previous === undefined) delete process.env.STATEMENT_STUDIO_MODE
+    else process.env.STATEMENT_STUDIO_MODE = previous
+  })
+}
+
+/**
+ * THE GATE-HIDDEN BODY: spelled out, AND checked against the real constant.
+ *
+ * Spelled out so a change to STATEMENT_STUDIO_HIDDEN_BODY has to be
+ * acknowledged here. Checked against the import so that this file and
+ * app/api/statement/extract/route.test.ts are asserting the same bytes -- which
+ * is how the two families' hidden responses are proven byte-equivalent, given
+ * that neither test process can call the other's handler.
+ */
+const GATE_HIDDEN = { error: 'Not found.', code: 'not-found' }
+
+/**
+ * What an ADMITTED caller gets for a draft that is absent or invisible to them.
+ * A different answer on purpose: they may use this endpoint, and the row is not
+ * there. See lib/statement/studioGate.ts for why the two must not be merged.
+ */
+const DRAFT_NOT_FOUND = { error: 'That draft could not be found.', code: 'not-found' }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../../../..')
@@ -135,6 +184,44 @@ test('source: no repository detail is ever put in a response', () => {
   }
 })
 
+test('source: both draft routes are gated by the SAME statement gate', () => {
+  for (const [name, src] of [['collection', COLLECTION_SRC], ['item', ITEM_SRC]] as const) {
+    assert.ok(src.includes("from '@/lib/statement/studioGate'"), `${name} must import the gate`)
+    assert.ok(src.includes('statementStudioAccess({'), `${name} must apply the gate`)
+    // Read into a local FIRST, so the mode is determined before the request is
+    // authenticated -- step 1 of the documented order.
+    assert.ok(src.includes('const mode = statementStudioMode()'), `${name} must read the statement flag`)
+    // Not the resume cutover flag, and not the resume gate. Coupling the Studio
+    // to RESUME_BUILDER_MODE would release it the day resumes are cut over.
+    assert.equal(src.includes('RESUME_BUILDER_MODE'), false, `${name} must not read the resume flag`)
+    assert.equal(src.includes('resumeBuilderMode'), false)
+    assert.equal(src.includes('resumeV2Access'), false)
+  }
+
+  // The two admit() functions are byte-for-byte the same, so one family cannot
+  // end up gated differently from the other by an edit to only one file.
+  const admitBody = (src: string) => {
+    const at = src.indexOf('async function admit')
+    assert.notEqual(at, -1)
+    return src.slice(at, src.indexOf('\n}\n', at))
+  }
+  assert.equal(admitBody(COLLECTION_SRC), admitBody(ITEM_SRC))
+
+  // And inside admit(), the gate precedes the token and the client.
+  for (const [name, src] of [['collection', COLLECTION_SRC], ['item', ITEM_SRC]] as const) {
+    const body = admitBody(src)
+    const at = (needle: string) => {
+      const i = body.indexOf(needle)
+      assert.notEqual(i, -1, `${name}: ${needle} is absent from admit()`)
+      return i
+    }
+    assert.ok(at('statementStudioMode()') < at('authenticateRequest()'), `${name}: mode first`)
+    assert.ok(at('authenticateRequest()') < at('statementStudioAccess({'), `${name}: then identity`)
+    assert.ok(at('statementStudioAccess({') < at('readAccessToken()'), `${name}: gate before token`)
+    assert.ok(at('statementStudioAccess({') < at('createClient('), `${name}: gate before client`)
+  }
+})
+
 // ==========================================================================
 // PART 2 -- invocation
 // ==========================================================================
@@ -145,14 +232,19 @@ assert.ok(
 )
 
 let session: typeof FAKE_USER | null = null
+let admin = false
+let tokenReads = 0
 let repoCalls: { fn: string; args: unknown[] }[] = []
 let repoReplies: Record<string, unknown> = {}
 let installed = false
 
 beforeEach(() => {
   session = null
+  admin = false
+  tokenReads = 0
   repoCalls = []
   repoReplies = {}
+  process.env.STATEMENT_STUDIO_MODE = 'general'
 })
 
 /** Records the call and returns whatever the test queued for that function. */
@@ -187,11 +279,17 @@ function installMocksOnce(): void {
   })
 
   // One fictional identity. No real user, no credential, no network.
+  // `readAccessToken` COUNTS ITS CALLS. That is how the tests observe that a
+  // blocked caller never gets as far as token or client work: the gate returns
+  // above this line, so the counter stays at zero.
   mock.module(AUTH_MODULE, {
     namedExports: {
       authenticateRequest: async () => session,
-      readAccessToken: async () => (session ? 'fictional-token' : null),
-      isAdminEmail: () => false,
+      readAccessToken: async () => {
+        tokenReads += 1
+        return session ? 'fictional-token' : null
+      },
+      isAdminEmail: () => admin,
       ADMIN_EMAILS: [] as string[],
     },
   })
@@ -257,7 +355,8 @@ const called = (fn: string) => repoCalls.filter((c) => c.fn === fn)
 
 // ------------------------------------------------------------ authentication
 
-test('auth: every collection method is 401 and reaches no repository call', async () => {
+test('auth: general mode — every collection method is 401, and reaches no repository call', async (t) => {
+  withMode(t, 'general')
   const mod = await collection(false)
   for (const [name, res] of [
     ['GET', await mod.GET()],
@@ -269,7 +368,8 @@ test('auth: every collection method is 401 and reaches no repository call', asyn
   assert.equal(repoCalls.length, 0, 'no repository function may be reached unauthenticated')
 })
 
-test('auth: every item method is 401 and reaches no repository call', async () => {
+test('auth: general mode — every item method is 401, and reaches no repository call', async (t) => {
+  withMode(t, 'general')
   const mod = await item(false)
   for (const [name, res] of [
     ['GET', await mod.GET(jsonRequest('GET'), ctx(ID))],
@@ -280,6 +380,177 @@ test('auth: every item method is 401 and reaches no repository call', async () =
     assert.equal((await res.json()).code, 'unauthenticated')
   }
   assert.equal(repoCalls.length, 0)
+})
+
+// ------------------------------------------------------------- the Studio gate
+
+/** Every Studio draft method, exercised once, for the gate tests. */
+async function allMethods(authed: boolean): Promise<{ name: string; res: Response }[]> {
+  const c = await collection(authed)
+  const i = await item(authed)
+  return [
+    { name: 'GET /drafts', res: await c.GET() },
+    { name: 'POST /drafts', res: await c.POST(jsonRequest('POST', { title: 't', essay: 'e' })) },
+    { name: 'GET /drafts/[id]', res: await i.GET(jsonRequest('GET'), ctx(ID)) },
+    {
+      name: 'PATCH /drafts/[id]',
+      res: await i.PATCH(jsonRequest('PATCH', { title: 't', essay: 'e', expectedRevision: 1 }), ctx(ID)),
+    },
+    { name: 'DELETE /drafts/[id]', res: await i.DELETE(jsonRequest('DELETE'), ctx(ID)) },
+  ]
+}
+
+test('gate: internal — an anonymous caller gets the hidden 404 from every method', async (t) => {
+  withMode(t, 'internal')
+  for (const { name, res } of await allMethods(false)) {
+    assert.equal(res.status, 404, name)
+    assert.deepEqual(await res.json(), GATE_HIDDEN, name)
+  }
+  assert.equal(repoCalls.length, 0, 'no repository function may be reached')
+  assert.equal(tokenReads, 0, 'no access token may be read past the gate')
+})
+
+test('gate: internal — an authenticated NON-admin gets the hidden 404 from every method', async (t) => {
+  withMode(t, 'internal')
+  admin = false
+  for (const { name, res } of await allMethods(true)) {
+    assert.equal(res.status, 404, name)
+    assert.deepEqual(await res.json(), GATE_HIDDEN, name)
+  }
+  // List, create, read, update and delete: all five unreachable for a normal user.
+  assert.equal(repoCalls.length, 0, 'a blocked user must cause no draft query or write')
+  assert.equal(tokenReads, 0, 'no access token may be read past the gate')
+})
+
+test('gate: internal — the blocked responses are byte-identical for both callers', async (t) => {
+  withMode(t, 'internal')
+  const anonymous = await Promise.all((await allMethods(false)).map((m) => m.res.text()))
+  admin = false
+  const signedIn = await Promise.all((await allMethods(true)).map((m) => m.res.text()))
+  const unique = new Set([...anonymous, ...signedIn])
+  assert.equal(unique.size, 1, 'a prober must not be able to tell the two cases apart')
+  assert.deepEqual([...unique], [JSON.stringify(GATE_HIDDEN)])
+})
+
+test('gate: internal — the hidden answer names nothing, and is never 403', async (t) => {
+  withMode(t, 'internal')
+  for (const { name, res } of await allMethods(true)) {
+    assert.notEqual(res.status, 403, `${name} must never answer 403`)
+    const text = (await res.text()).toLowerCase()
+    for (const word of [
+      // The approved list, plus four this body also happens not to contain.
+      'draft', 'statement', 'studio', 'admin', 'internal', 'upload', 'extract',
+      'forbidden', 'permission',
+      'flag', 'beta', 'denied', 'role',
+    ]) {
+      assert.equal(text.includes(word), false, `${name} leaked "${word}"`)
+    }
+  }
+})
+
+test('gate: internal — an authenticated ADMIN is admitted to the collection', async (t) => {
+  withMode(t, 'internal')
+  admin = true
+  repoReplies.listDrafts = { ok: true, value: [summary()] }
+  const res = await (await collection(true)).GET()
+  assert.equal(res.status, 200)
+  assert.equal(called('listDrafts').length, 1)
+  assert.ok(tokenReads > 0, 'an admitted caller does go on to read a token')
+})
+
+test('gate: internal — an authenticated ADMIN is admitted to every item method', async (t) => {
+  withMode(t, 'internal')
+  admin = true
+  repoReplies.readDraft = { ok: true, value: draft() }
+  repoReplies.updateDraft = { ok: true, value: draft({ revision: 2 }) }
+  repoReplies.deleteDraft = { ok: true, value: { id: ID } }
+  const i = await item(true)
+  assert.equal((await i.GET(jsonRequest('GET'), ctx(ID))).status, 200)
+  assert.equal(
+    (await i.PATCH(jsonRequest('PATCH', { title: 't', essay: 'e', expectedRevision: 1 }), ctx(ID))).status,
+    200,
+  )
+  assert.equal((await i.DELETE(jsonRequest('DELETE'), ctx(ID))).status, 200)
+  assert.deepEqual(repoCalls.map((c) => c.fn), ['readDraft', 'updateDraft', 'deleteDraft'])
+})
+
+test('gate: the hidden body IS the gate constant, and is NOT the draft 404', () => {
+  assert.deepEqual(GATE_HIDDEN, STATEMENT_STUDIO_HIDDEN_BODY)
+  assert.notDeepEqual(GATE_HIDDEN, DRAFT_NOT_FOUND, 'the two answers must stay distinct')
+  // Neutral: nothing in it says what kind of endpoint refused the caller.
+  assert.equal(JSON.stringify(GATE_HIDDEN), '{"error":"Not found.","code":"not-found"}')
+})
+
+test('gate: internal — an admitted ADMIN still gets the DRAFT 404 for a missing draft', async (t) => {
+  withMode(t, 'internal')
+  admin = true
+  repoReplies.readDraft = { ok: false, reason: 'not-found' }
+  repoReplies.updateDraft = { ok: false, reason: 'not-found' }
+  repoReplies.deleteDraft = { ok: false, reason: 'not-found' }
+
+  const i = await item(true)
+  const responses = [
+    ['GET', await i.GET(jsonRequest('GET'), ctx(ID))],
+    ['PATCH', await i.PATCH(jsonRequest('PATCH', { title: 't', essay: 'e', expectedRevision: 1 }), ctx(ID))],
+    ['DELETE', await i.DELETE(jsonRequest('DELETE'), ctx(ID))],
+  ] as const
+
+  for (const [name, res] of responses) {
+    assert.equal(res.status, 404, name)
+    // Admitted, so the honest answer: this draft is not there. NOT the gate's
+    // neutral body -- that would take away the one thing they need to be told.
+    assert.deepEqual(await res.json(), DRAFT_NOT_FOUND, name)
+  }
+  // And the gate really did admit them: the repository was reached three times.
+  assert.deepEqual(repoCalls.map((c) => c.fn), ['readDraft', 'updateDraft', 'deleteDraft'])
+})
+
+test('gate: general — an anonymous caller gets 401, not the hidden 404', async (t) => {
+  withMode(t, 'general')
+  for (const { name, res } of await allMethods(false)) {
+    assert.equal(res.status, 401, name)
+    assert.equal((await res.json()).code, 'unauthenticated', name)
+  }
+  assert.equal(repoCalls.length, 0)
+})
+
+test('gate: general — an authenticated NON-admin is admitted', async (t) => {
+  withMode(t, 'general')
+  admin = false
+  repoReplies.listDrafts = { ok: true, value: [] }
+  const res = await (await collection(true)).GET()
+  assert.equal(res.status, 200, 'general mode is what one env change will turn on')
+  assert.equal(called('listDrafts').length, 1)
+})
+
+test('gate: general — an authenticated ADMIN is admitted too', async (t) => {
+  withMode(t, 'general')
+  admin = true
+  repoReplies.listDrafts = { ok: true, value: [] }
+  assert.equal((await (await collection(true)).GET()).status, 200)
+  assert.equal(called('listDrafts').length, 1)
+})
+
+test('gate: an unknown or absent mode FAILS CLOSED to internal', async (t) => {
+  // One registration, so the restore runs once however many values are tried.
+  withMode(t, 'internal')
+  admin = false
+  repoReplies.listDrafts = { ok: true, value: [] }
+
+  for (const value of ['beta', 'v2', 'on', 'true', '1', '', ' ', 'GENERALLY', 'general,beta']) {
+    process.env.STATEMENT_STUDIO_MODE = value
+    const res = await (await collection(true)).GET()
+    assert.equal(res.status, 404, `STATEMENT_STUDIO_MODE="${value}" must hide the endpoint`)
+    assert.deepEqual(await res.json(), GATE_HIDDEN)
+  }
+
+  delete process.env.STATEMENT_STUDIO_MODE
+  const absent = await (await collection(true)).GET()
+  assert.equal(absent.status, 404, 'an unset flag must hide the endpoint')
+  assert.deepEqual(await absent.json(), GATE_HIDDEN)
+
+  assert.equal(repoCalls.length, 0, 'no unknown mode may reach the repository')
+  assert.equal(tokenReads, 0, 'no unknown mode may reach token or client work')
 })
 
 // -------------------------------------------------------------- GET collection
