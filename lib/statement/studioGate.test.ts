@@ -367,7 +367,22 @@ test('the route is not indexable while it is unreleased', () => {
   assert.match(LAYOUT, /follow: true/)
 })
 
-test('the library page does not exist yet', () => {
-  // Step 2 is the editor shell only. /statement-studio itself must still 404.
-  assert.equal(existsSync(path('../../app/statement-studio/page.tsx')), false)
+test('both Studio routes exist, and NEITHER is reachable ungated', () => {
+  // This replaced 'the library page does not exist yet'. That was a scaffold
+  // guard for the editor-shell step, when /statement-studio itself still had to
+  // 404; the library page is now an approved route, so the assertion it was
+  // protecting has moved. What is worth holding is not that the route is absent
+  // but that no Studio page is reachable without the gate.
+  const library = path('../../app/statement-studio/page.tsx')
+  assert.equal(existsSync(library), true, 'the library route should exist now')
+
+  for (const [name, source] of [
+    ['editor', PAGE],
+    ['library', stripComments(readFileSync(library, 'utf8'))],
+  ] as const) {
+    assert.match(source, /statementStudioAccess\(\{/, `${name} must apply the gate`)
+    assert.match(source, /mode: statementStudioMode\(\)/, `${name} must read the statement flag`)
+    assert.match(source, /notFound\(\)/, `${name} must refuse a blocked visitor`)
+    assert.doesNotMatch(source, /^import[^\n]*lib\/resume/m, `${name} must not use the resume gate`)
+  }
 })
