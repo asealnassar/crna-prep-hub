@@ -4,20 +4,26 @@ import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAut
 import { statementStudioAccess, statementStudioMode } from '@/lib/statement/studioGate'
 import { isDraftId } from '@/lib/statement/draft/http'
 import { readDraft } from '@/lib/statement/draft/draftRepo'
+import StatementStudioClient from '../components/StatementStudioClient'
 
 /**
- * Personal Statement Studio: one draft, opened read-only.
+ * Personal Statement Studio: one draft, open for editing.
  *
- * THIS IS A SHELL. It proves the route, the gate, the id check and the server
- * read, and it renders the draft as text. There is no editor, no autosave, no
- * upload and no analysis yet, and nothing here talks to the draft HTTP API from
- * the browser. Those arrive as their own steps; /personal-statement continues to
- * serve users in the meantime.
+ * EVERY GATE BELOW IS UNCHANGED from the read-only shell this replaced -- the
+ * Studio gate, the session, the caller-scoped client, the id check, the
+ * indistinguishable 404 and the generic failure. What changed is only the last
+ * line: the persisted draft is handed to a client editor instead of being
+ * printed as text.
  *
- * A SERVER COMPONENT, with no client child. The gate runs before any markup
+ * A SERVER COMPONENT STILL. The gate runs before any markup or client bundle
  * exists, so a blocked visitor is refused by the server rather than by code they
- * could have read: nothing about the Studio ships to someone who cannot use it.
- * Because the shell is not interactive, this step ships no client bundle at all.
+ * could have read. The editor is a client child and receives the draft as a
+ * prop: THE BROWSER NEVER RE-FETCHES IT. The initial read already happened here,
+ * with the caller's own JWT, and asking for it again from the browser would be a
+ * second answer to a question already settled.
+ *
+ * Upload, analysis, version history, delete and navigation guards are still
+ * absent; /personal-statement continues to serve users in the meantime.
  *
  * The read is made with the caller's own JWT, so RLS decides what they may open.
  * A draft that belongs to someone else is not "forbidden" here; it simply does
@@ -90,39 +96,7 @@ export default async function StatementStudioPage({
   }
   const draft = read.value
 
-  return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
-      <p className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
-        Internal preview, read only. Editing, autosave, upload and “Analyze this
-        Draft” are not wired up yet.
-      </p>
-
-      <h1 className="text-2xl font-bold text-slate-900">{draft.title}</h1>
-
-      {/*
-        The timestamp is printed as stored. Formatting it on the server picks the
-        server's locale and timezone for someone else's clock, and formatting it
-        on the client would need a client component this step does not have.
-      */}
-      <p className="mt-2 text-xs text-slate-500">
-        Revision {draft.revision} · {draft.essay.length} characters · saved{' '}
-        {draft.updatedAt}
-      </p>
-
-      {/*
-        whitespace-pre-wrap, so the author's paragraphs survive. The text is
-        interpolated, which React escapes; dangerouslySetInnerHTML has no place
-        anywhere near a document somebody pasted in.
-      */}
-      {draft.essay.length > 0 ? (
-        <article className="mt-6 whitespace-pre-wrap rounded-xl border border-gray-300 bg-white px-4 py-4 text-sm leading-relaxed text-gray-800">
-          {draft.essay}
-        </article>
-      ) : (
-        <p className="mt-6 rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-slate-500">
-          This draft is empty.
-        </p>
-      )}
-    </main>
-  )
+  // The persisted draft, in full, straight into the editor. Its `revision` is
+  // what seeds autosave -- the client never invents one.
+  return <StatementStudioClient draft={draft} />
 }

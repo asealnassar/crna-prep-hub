@@ -356,10 +356,20 @@ test('the shell does not reach the draft API, or autosave, from anywhere', () =>
 })
 
 test('the draft is rendered as escaped text, whitespace preserved', () => {
-  assert.doesNotMatch(PAGE, /dangerouslySetInnerHTML/)
-  assert.match(PAGE, /\{draft\.title\}/)
-  assert.match(PAGE, /\{draft\.essay\}/)
-  assert.match(PAGE, /whitespace-pre-wrap/)
+  // The rendering MOVED when the read-only shell became an editor: the page now
+  // hands the draft to StatementStudioClient. The guarantee did not move, so it
+  // is asserted where the markup now lives, and the page is checked for handing
+  // the draft over rather than reaching past the editor to print it itself.
+  const editor = stripComments(
+    readFileSync(path('../../app/statement-studio/components/StatementStudioClient.tsx'), 'utf8')
+  )
+  for (const [name, source] of [['page', PAGE], ['editor', editor]] as const) {
+    assert.doesNotMatch(source, /dangerouslySetInnerHTML/, `${name} must never set raw HTML`)
+  }
+  assert.match(PAGE, /<StatementStudioClient draft=\{draft\} \/>/)
+  assert.match(editor, /\{draft\.title\}/)
+  assert.match(editor, /value=\{essay\}/)
+  assert.match(editor, /whitespace-pre-wrap/)
 })
 
 test('the route is not indexable while it is unreleased', () => {
