@@ -13,6 +13,17 @@ import { MAX_TITLE_CHARS } from '@/lib/statement/draft/validate'
 import type { StatementDraft } from '@/lib/statement/draft/rows'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
+  ACCEPT_ATTRIBUTE,
+  EXTRACT_ENDPOINT,
+  EXTRACT_FIELD,
+  IMPORT_MESSAGES,
+  checkUploadFile,
+  importNoticeFor,
+  importOutcomeFrom,
+  mayApplyImport,
+  type ImportNotice,
+} from '@/lib/statement/draft/upload'
+import {
   COPY_MESSAGES,
   NAV_MESSAGES,
   RELOAD_MESSAGES,
@@ -52,7 +63,16 @@ const LIBRARY = '/statement-studio'
  * if nobody has typed since. If they have, their newer text stands and the next
  * autosave carries it. See titleAfterSave() for the reasoning.
  *
- * Still deferred: upload, analysis, schools, prompts, version history, delete.
+ * IMPORTING A DOCUMENT IS JUST AN EDIT. The upload control sends one file to
+ * the committed extraction endpoint, which parses nothing in the browser, and on
+ * a valid reply it sets the essay and dispatches the same `edited` event typing
+ * does. There is NO second persistence path: the driver decides whether the
+ * result is saveable and when to save it, which is why a 27,000-character import
+ * simply sits there, complete and visibly unsaved, issuing no requests at all.
+ * An import never touches the title.
+ *
+ * Still deferred: analysis, schools, prompts, version history, delete,
+ * drag-and-drop, upload history.
  */
 export default function StatementStudioClient({ draft }: { draft: StatementDraft }) {
   const router = useRouter()
@@ -70,6 +90,9 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
   const [reloading, setReloading] = useState(false)
   const [leaving, setLeaving] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importNotice, setImportNotice] = useState<ImportNotice | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
 
   /**
    * SINGLE FLIGHT, taken synchronously. nextAction() already returns 'idle'
@@ -96,6 +119,24 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
   useEffect(() => {
     saveRef.current = save
   }, [save])
+
+  /**
+   * The live essay, for the extraction continuation to compare against.
+   *
+   * WHY A REF AND NOT A STATE UPDATER. Deciding "has the essay changed since the
+   * upload began?" inside setEssay's functional form would read the answer after
+   * the updater ran, which is after the decision has to be made -- and React may
+   * run an updater more than once. This is written synchronously on every
+   * keystroke, so the comparison is always against what is on screen now.
+   */
+  const essayRef = useRef(essay)
+  useEffect(() => {
+    essayRef.current = essay
+  }, [essay])
+
+  /** Identity of the extraction in flight. One at a time, and no other may apply. */
+  const uploadRef = useRef<object | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
 
   // --- waiting for a save to settle ---------------------------------------
 
@@ -126,6 +167,7 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
     () => () => {
       alive.current = false
       snapshotRef.current = null
+      uploadRef.current = null
       const waiting = settleWaiters.current
       settleWaiters.current = []
       for (const resolve of waiting) resolve(false)
@@ -224,8 +266,11 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
 
   const onEssayChange = useCallback((value: string) => {
     setEssay(value)
+    // Synchronously, so an extraction reply arriving in this same tick sees it.
+    essayRef.current = value
     setNotice(null)
     setCopied('idle')
+    setImportNotice(null)
     // Dispatched on EVERY edit, including during a save. The engine restarts the
     // dirty window while a request is in flight, so a success landing after this
     // reports 'dirty' rather than 'saved'.
@@ -265,6 +310,104 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [])
+
+  // --- importing a document ------------------------------------------------
+
+  /**
+   * One file to the committed extraction endpoint, and nothing else.
+   *
+   * NOTHING IS TOUCHED UNTIL A VALID REPLY IS IN HAND. Choosing a file, starting
+   * the request and every failure path leave the essay exactly as it is -- there
+   * is no clearing, no placeholder, no partial application.
+   *
+   * THE INPUT IS ALWAYS RESET, so the same file can be chosen again deliberately
+   * after either outcome. Nothing retries by itself, and the bytes are never
+   * kept in state.
+   */
+  const onFileChosen = useCallback(
+    async (chosen: FileList | null) => {
+      const clearInput = () => {
+        if (fileInput.current) fileInput.current.value = ''
+      }
+
+      // A conflict is unresolved work. Replacing the preserved essay with an
+      // import would destroy the very thing Copy my version exists to rescue.
+      if (saveRef.current.status === 'conflict') {
+        setImportError(IMPORT_MESSAGES.conflicted)
+        clearInput()
+        return
+      }
+      // One extraction at a time.
+      if (uploadRef.current !== null) {
+        clearInput()
+        return
+      }
+      if (chosen === null || chosen.length === 0) {
+        clearInput()
+        return
+      }
+      if (chosen.length > 1) {
+        setImportError(IMPORT_MESSAGES.oneFile)
+        clearInput()
+        return
+      }
+
+      const file = chosen[0]
+      // Name and size only: the document is never read in the browser.
+      const precheck = checkUploadFile({ name: file.name, size: file.size })
+      if (!precheck.ok) {
+        setImportError(precheck.message)
+        clearInput()
+        return
+      }
+
+      const token = {}
+      uploadRef.current = token
+      // The essay as it stands now. The reply applies only if it still is this.
+      const essayAtStart = essayRef.current
+      setImporting(true)
+      setImportError(null)
+      setImportNotice(null)
+      setNotice(null)
+
+      try {
+        const form = new FormData()
+        form.append(EXTRACT_FIELD, file)
+        const response = await fetch(EXTRACT_ENDPOINT, { method: 'POST', body: form })
+        const body = await response.json().catch(() => null)
+        const outcome = importOutcomeFrom({ status: response.status, body })
+        if (!alive.current || uploadRef.current !== token) return
+
+        if (!outcome.ok) {
+          setImportError(outcome.message)
+          return
+        }
+        // Newer typing wins. The extracted text is discarded, not queued.
+        if (!mayApplyImport({ essayAtStart, currentEssay: essayRef.current })) {
+          setImportError(IMPORT_MESSAGES.stale)
+          return
+        }
+
+        // THE WHOLE extracted string. Nothing is cut, whatever its length.
+        setEssay(outcome.document.text)
+        essayRef.current = outcome.document.text
+        setImportNotice(importNoticeFor(outcome.document))
+        // The SAME event typing dispatches. The driver decides the rest: a
+        // document over the save ceiling simply blocks, with no request and no
+        // timer, until the applicant trims it.
+        setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
+      } catch {
+        if (alive.current && uploadRef.current === token) {
+          setImportError(IMPORT_MESSAGES.network)
+        }
+      } finally {
+        if (uploadRef.current === token) uploadRef.current = null
+        if (alive.current) setImporting(false)
+        clearInput()
+      }
+    },
+    []
+  )
 
   // --- recovery ------------------------------------------------------------
 
@@ -319,9 +462,13 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
       // so a save response still in the air cannot reconcile its title over the
       // draft that was just loaded.
       snapshotRef.current = null
+      uploadRef.current = null
       setTitle(outcome.draft.title)
       setEssay(outcome.draft.essay)
+      essayRef.current = outcome.draft.essay
       setCopied('idle')
+      setImportNotice(null)
+      setImportError(null)
       // `reloaded` returns the engine to a clean state at the SERVER's revision.
       setSave((state) =>
         reduce(state, { type: 'reloaded', at: Date.now(), revision: outcome.draft.revision })
@@ -455,7 +602,7 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
             type="text"
             value={title}
             onChange={(event) => onTitleChange(event.target.value)}
-            readOnly={status.frozen}
+            readOnly={conflicted}
             autoComplete="off"
             spellCheck
             placeholder="Give this draft a title"
@@ -482,6 +629,56 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
         {essay.length.toLocaleString('en-US')} of{' '}
         {MAX_SAVED_CHARS.toLocaleString('en-US')} characters
       </p>
+
+      {/*
+        A real file input, no drag-and-drop. `accept` offers the three formats
+        the route can read; the byte-signature check on the server is the
+        authority, and a renamed file is refused there rather than here.
+      */}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <label
+          className={
+            importing || conflicted
+              ? 'cursor-not-allowed rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm font-medium text-slate-400'
+              : 'cursor-pointer rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-gray-50'
+          }
+        >
+          {importing ? 'Reading document…' : 'Import PDF, DOCX or TXT'}
+          <input
+            ref={fileInput}
+            type="file"
+            accept={ACCEPT_ATTRIBUTE}
+            disabled={importing || conflicted}
+            onChange={(event) => void onFileChosen(event.target.files)}
+            className="hidden"
+          />
+        </label>
+        <span className="text-xs text-slate-500">
+          Replaces the essay. The title is left alone.
+        </span>
+      </div>
+
+      {importNotice !== null && (
+        <p
+          role="status"
+          className={
+            importNotice.overLimit
+              ? 'mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900'
+              : 'mt-3 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900'
+          }
+        >
+          {importNotice.text}
+        </p>
+      )}
+
+      {importError !== null && (
+        <p
+          role="alert"
+          className="mt-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"
+        >
+          {importError}
+        </p>
+      )}
 
       {conflicted && (
         <div className="mt-4 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
@@ -554,7 +751,7 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
       <textarea
         value={essay}
         onChange={(event) => onEssayChange(event.target.value)}
-        readOnly={status.frozen}
+        readOnly={conflicted}
         spellCheck
         aria-label="Personal statement"
         placeholder="Write your personal statement here."

@@ -374,10 +374,12 @@ test('the page still gates, still reads server-side, and hands the draft down', 
 test('the initial draft comes from props; the only GET is the deliberate reload', () => {
   // Two requests exist in the whole component and no more: the autosave PATCH,
   // and the GET that happens ONLY when the applicant clicks Reload.
-  assert.equal(CLIENT.split('fetch(').length - 1, 2)
+  assert.equal(CLIENT.split('fetch(').length - 1, 3)
   assert.deepEqual([...new Set(CLIENT.match(/method: '[A-Z]+'/g) ?? [])].sort(), [
     "method: 'GET'",
     "method: 'PATCH'",
+    // The extraction POST. It persists nothing; see upload.test.ts.
+    "method: 'POST'",
   ])
   // Nothing loads the draft on mount: the essay is seeded from the prop.
   assert.match(CLIENT, /useState\(draft\.essay\)/)
@@ -447,13 +449,20 @@ test('a title edit takes the SAME path as an essay edit', () => {
   assert.match(onTitle, /type: 'edited', at: Date\.now\(\)/)
   // No second endpoint and no title-only request anywhere.
   assert.doesNotMatch(onTitle, /fetch\(/)
-  assert.equal(CLIENT.split('fetch(').length - 1, 2, 'still only the PATCH and the reload GET')
+  assert.equal(CLIENT.split('fetch(').length - 1, 3, 'the PATCH, the reload GET, the extraction POST')
 })
 
-test('a frozen editor stays SELECTABLE, so a manual copy still works', () => {
-  // readOnly, not disabled: a disabled textarea cannot be selected in most
+test('a conflicted editor stays SELECTABLE, and a FAILED one stays editable', () => {
+  // readOnly, not disabled: a disabled field cannot be selected in most
   // browsers, and copying your own text is the point of a frozen conflict.
-  assert.match(CLIENT, /readOnly=\{status\.frozen\}/)
+  //
+  // AND IT IS KEYED ON THE CONFLICT, NOT ON `frozen`. `frozen` is also true for
+  // a terminal failure, but the engine clears error/attempt/retryAt on an edit
+  // from 'failed' -- editing is its designed recovery -- so a readOnly field
+  // there would trap the applicant with work they could not fix.
+  assert.match(CLIENT, /readOnly=\{conflicted\}/)
+  assert.equal(CLIENT.split('readOnly={conflicted}').length - 1, 2, 'title and essay')
+  assert.doesNotMatch(CLIENT, /readOnly=\{status\.frozen\}/)
   assert.doesNotMatch(CLIENT, /disabled=\{status\.frozen\}/)
 })
 
@@ -461,11 +470,14 @@ test('none of the deferred features crept in', () => {
   // Judged on WIRING, not on words: the banner legitimately says that upload
   // and analysis are not connected yet, which is a notice, not a feature.
   for (const deferred of [
-    /<input[^>]*type="file"/, /FormData/,
-    /\/api\/statement\/extract/, /\/api\/analyze-statement/,
+    // Upload has landed, so a file input, FormData and the extraction endpoint
+    // are expected now; upload.test.ts owns their invariants. These remain out
+    // of scope.
+    /\/api\/analyze-statement/, /recordStatementAttempt/,
     /schoolId/, /promptId/,
-    /method: '(DELETE|POST)'/,
+    /method: 'DELETE'/,
     /versionHistory/, /\bmerge\b/i,
+    /onDrop/, /onDragOver/, /dataTransfer/,
   ]) {
     assert.doesNotMatch(CLIENT, deferred, `${deferred} belongs to a later step`)
   }
@@ -1071,7 +1083,7 @@ test('a conflict preserves the local title, and no stale snapshot may alter it',
   // A snapshot from the save that conflicted exists, but the component only
   // reconciles on save-succeeded, and the reload retires it outright.
   const reload = CLIENT.slice(CLIENT.indexOf('const reloadLatest'), CLIENT.indexOf('const retrySave'))
-  assert.match(reload, /snapshotRef\.current = null\n\s*setTitle\(outcome\.draft\.title\)/)
+  assert.match(reload, /snapshotRef\.current = null\n\s*uploadRef\.current = null\n\s*setTitle\(outcome\.draft\.title\)/)
   // Identity, not a flag: a response holding a retired snapshot cannot match.
   assert.match(CLIENT, /snapshotRef\.current === snapshot/)
   assert.match(CLIENT, /if \(snapshotRef\.current === snapshot\) snapshotRef\.current = null/)

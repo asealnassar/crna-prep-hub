@@ -387,9 +387,12 @@ test('the draft is rendered as escaped text, whitespace preserved', () => {
   assert.doesNotMatch(editor, /dangerouslySetInnerHTML/)
   assert.match(editor, /whitespace-pre-wrap/)
 
-  // A frozen conflict makes the title read-only -- still visible, still
-  // selectable -- rather than disabled, which would block copying it.
-  assert.match(editor, /readOnly=\{status\.frozen\}/)
+  // A conflict makes the title read-only -- still visible, still selectable --
+  // rather than disabled, which would block copying it. Keyed on the conflict
+  // and not on `frozen`, so a terminal failure stays editable: that is the
+  // shared engine's own recovery path out of 'failed'.
+  assert.match(editor, /readOnly=\{conflicted\}/)
+  assert.doesNotMatch(editor, /readOnly=\{status\.frozen\}/)
   assert.doesNotMatch(editor, /disabled=\{status\.frozen\}/)
 })
 
