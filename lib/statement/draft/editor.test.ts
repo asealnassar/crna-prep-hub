@@ -11,7 +11,7 @@ import {
   type AutosaveState,
 } from '../../resume/draft/autosave.ts'
 import { SAVE_MESSAGES, saveEventFrom } from './save.ts'
-import { checkTitle } from './validate.ts'
+import { MAX_TITLE_CHARS, checkTitle } from './validate.ts'
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 import {
   BLOCKED_MESSAGES,
@@ -22,10 +22,12 @@ import {
   canRetrySave,
   draftApiPath,
   reloadOutcomeFrom,
+  saveAttemptFor,
   settleVerdict,
   statementDriverAction,
   statementSaveRequest,
   statementStatus,
+  titleAfterSave,
 } from './editor.ts'
 
 /**
@@ -427,17 +429,25 @@ test('the client never invents a revision, on any path', () => {
   assert.doesNotMatch(CLIENT, /revision \+ 1|revision\+\+|\+\+revision/)
 })
 
-test('the editor edits the essay, does not truncate, and the title stays read-only', () => {
+test('both fields are editable, and neither is ever truncated', () => {
   assert.match(CLIENT, /<textarea/)
   assert.match(CLIENT, /value=\{essay\}/)
+  assert.match(CLIENT, /<input\n[\s\S]*?value=\{title\}/)
+  // No maxLength on either: it would silently shorten pasted text. The only
+  // trim in the whole component is the character COUNT, which is display.
   assert.doesNotMatch(CLIENT, /maxLength/)
-  assert.doesNotMatch(CLIENT, /\.slice\(0,|substring\(|\.trim\(\)/)
+  assert.doesNotMatch(CLIENT, /\.slice\(0,|substring\(/)
+  assert.deepEqual(CLIENT.match(/\.trim\(\)/g), ['.trim()'])
+  assert.match(CLIENT, /const titleCharacters = title\.trim\(\)\.length/)
+})
 
-  // The title is rendered from state and has NO input of any kind.
-  assert.match(CLIENT, /<h1[^>]*>\s*\{title\}/)
-  assert.doesNotMatch(CLIENT, /<input/)
-  // setTitle exists for one reason only: adopting a reloaded server title.
-  assert.deepEqual(CLIENT.match(/setTitle\([^)]*\)/g), ['setTitle(outcome.draft.title)'])
+test('a title edit takes the SAME path as an essay edit', () => {
+  const onTitle = CLIENT.slice(CLIENT.indexOf('const onTitleChange'), CLIENT.indexOf('const onEssayChange'))
+  assert.match(onTitle, /setTitle\(value\)/)
+  assert.match(onTitle, /type: 'edited', at: Date\.now\(\)/)
+  // No second endpoint and no title-only request anywhere.
+  assert.doesNotMatch(onTitle, /fetch\(/)
+  assert.equal(CLIENT.split('fetch(').length - 1, 2, 'still only the PATCH and the reload GET')
 })
 
 test('a frozen editor stays SELECTABLE, so a manual copy still works', () => {
@@ -836,4 +846,266 @@ test('nothing can resolve or write into an unmounted editor', () => {
     assert.equal(CLIENT.split(`addEventListener('${name}'`).length - 1, 1, name)
     assert.equal(CLIENT.split(`removeEventListener('${name}'`).length - 1, 1, name)
   }
+})
+
+// ================================== PART 5: title snapshot + reconciliation
+
+const PADDED = 'My Statement '
+const TRIMMED = 'My Statement'
+
+test('the snapshot records the RAW title and sends the NORMALISED one', () => {
+  const attempt = saveAttemptFor({ title: PADDED, essay: doc.essay, revision: 7 })
+  assert.equal(attempt.ok, true)
+  if (!attempt.ok) return
+
+  assert.deepEqual(attempt.snapshot, {
+    raw: PADDED,
+    sent: TRIMMED,
+    essay: doc.essay,
+    expectedRevision: 7,
+  })
+  // The body is the normalised one, and still exactly three fields.
+  assert.deepEqual(Object.keys(attempt.body), ['title', 'essay', 'expectedRevision'])
+  assert.deepEqual(attempt.body, { title: TRIMMED, essay: doc.essay, expectedRevision: 7 })
+  // Normalisation happened once, in the validator, and the raw is untouched.
+  assert.notEqual(attempt.snapshot.raw, attempt.body.title)
+  assert.equal(attempt.snapshot.sent, attempt.body.title)
+})
+
+test('the snapshot essay is verbatim and the revision is the engine’s', () => {
+  const essay = '  leading, trailing and\n\ninternal whitespace  '
+  const state = reduce(initialState(12), { type: 'edited', at: T0 })
+  const attempt = saveAttemptFor({ title: PADDED, essay, revision: state.revision })
+  assert.equal(attempt.ok, true)
+  if (!attempt.ok) return
+  assert.equal(attempt.snapshot.essay, essay, 'the essay is never trimmed')
+  assert.equal(attempt.body.essay, essay)
+  assert.equal(attempt.snapshot.expectedRevision, 12)
+})
+
+test('an unsaveable document yields no snapshot at all', () => {
+  for (const over of [
+    { title: '   ' },
+    { title: 'a'.repeat(MAX_TITLE_CHARS + 1) },
+    { essay: 'a'.repeat(MAX_SAVED_CHARS + 1) },
+  ]) {
+    const attempt = saveAttemptFor({ ...doc, revision: 4, ...over })
+    assert.equal(attempt.ok, false)
+    assert.equal(attempt.ok === false && 'snapshot' in attempt, false)
+  }
+})
+
+test('CASE A: nobody typed, so the field adopts what was persisted', () => {
+  const attempt = saveAttemptFor({ title: PADDED, essay: doc.essay, revision: 7 })
+  assert.equal(attempt.ok, true)
+  if (!attempt.ok) return
+  // The field still reads exactly what it read when the request left.
+  assert.equal(titleAfterSave({ snapshot: attempt.snapshot, currentTitle: PADDED }), TRIMMED)
+})
+
+test('CASE B: somebody typed, so the newer title is NOT overwritten', () => {
+  const attempt = saveAttemptFor({ title: PADDED, essay: doc.essay, revision: 7 })
+  assert.equal(attempt.ok, true)
+  if (!attempt.ok) return
+  for (const typed of ['My Final Statement', 'My Statement  ', 'M', '', 'My Statementx']) {
+    assert.equal(
+      titleAfterSave({ snapshot: attempt.snapshot, currentTitle: typed }),
+      null,
+      `"${typed}" must survive an older response`
+    )
+  }
+})
+
+test('the comparison is against the RAW title, not the normalised one', () => {
+  const attempt = saveAttemptFor({ title: PADDED, essay: doc.essay, revision: 7 })
+  assert.equal(attempt.ok, true)
+  if (!attempt.ok) return
+  // Someone who trimmed it themselves during the request has typed. The field
+  // already equals `sent`, so there is nothing to do -- but the reason is that
+  // it matches, not that the raw comparison was skipped.
+  assert.equal(titleAfterSave({ snapshot: attempt.snapshot, currentTitle: TRIMMED }), null)
+  // And a title that merely NORMALISES to the same thing is still newer text.
+  const other = saveAttemptFor({ title: '  Spaced  ', essay: doc.essay, revision: 7 })
+  assert.equal(other.ok, true)
+  if (!other.ok) return
+  assert.equal(titleAfterSave({ snapshot: other.snapshot, currentTitle: ' Spaced ' }), null)
+})
+
+test('a title that needed no normalisation causes no needless update', () => {
+  const attempt = saveAttemptFor({ title: TRIMMED, essay: doc.essay, revision: 7 })
+  assert.equal(attempt.ok, true)
+  if (!attempt.ok) return
+  assert.equal(titleAfterSave({ snapshot: attempt.snapshot, currentTitle: TRIMMED }), null)
+})
+
+test('no snapshot means no reconciliation', () => {
+  assert.equal(titleAfterSave({ snapshot: null, currentTitle: PADDED }), null)
+})
+
+test('nothing normalises the title BEFORE the server has confirmed it', () => {
+  // The whole point: the visible field keeps the applicant's spacing while the
+  // request is in flight, and only changes once the write is confirmed.
+  let state = reduce(initialState(7), { type: 'edited', at: T0 })
+  state = reduce(state, { type: 'save-started', at: T0 + 1200 })
+  assert.equal(state.status, 'saving')
+  // Mid-flight there is nothing to reconcile to.
+  assert.equal(titleAfterSave({ snapshot: null, currentTitle: PADDED }), null)
+  // The component only calls titleAfterSave inside the save-succeeded branch.
+  const body = CLIENT.slice(CLIENT.indexOf('const event = saveEventFrom'), CLIENT.indexOf('setSave((state) => reduce(state, event))'))
+  assert.match(body, /event\.type === 'save-succeeded' && snapshotRef\.current === snapshot/)
+  assert.equal(CLIENT.split('titleAfterSave(').length - 1, 1, 'exactly one reconciliation site')
+})
+
+test('an essay edit during a title save still lets the title reconcile', () => {
+  const attempt = saveAttemptFor({ title: PADDED, essay: 'before', revision: 7 })
+  assert.equal(attempt.ok, true)
+  if (!attempt.ok) return
+  // The essay moved, the title did not: the title may still be corrected, and
+  // the engine independently keeps the document dirty for the newer essay.
+  assert.equal(titleAfterSave({ snapshot: attempt.snapshot, currentTitle: PADDED }), TRIMMED)
+
+  let state = reduce(initialState(7), { type: 'edited', at: T0 })
+  state = reduce(state, { type: 'save-started', at: T0 + 1200 })
+  state = reduce(state, { type: 'edited', at: T0 + 1300 })
+  state = reduce(state, saveEventFrom({ status: 200, body: { draft: { revision: 8 } }, at: T0 + 1400 }))
+  assert.equal(state.status, 'dirty', 'the newer essay is still unsaved')
+  assert.equal(state.revision, 8, 'and the revision advanced from the server')
+})
+
+test('a title-only edit during an essay save leaves the document dirty', () => {
+  let state = reduce(initialState(7), { type: 'edited', at: T0 })
+  state = reduce(state, { type: 'save-started', at: T0 + 1200 })
+  // The applicant retitles mid-flight. Same event as any other edit.
+  state = reduce(state, { type: 'edited', at: T0 + 1250 })
+  state = reduce(state, saveEventFrom({ status: 200, body: { draft: { revision: 8 } }, at: T0 + 1400 }))
+  assert.equal(state.status, 'dirty')
+  assert.equal(statementStatus(state, null).text, STATEMENT_STATUS.dirty)
+  assert.deepEqual(act(state, T0 + 2500), { kind: 'save' })
+  // And that next save carries the SERVER's new revision.
+  const next = saveAttemptFor({ title: 'My Final Statement', essay: doc.essay, revision: state.revision })
+  assert.equal(next.ok && next.body.expectedRevision, 8)
+})
+
+test('sequential saves reconcile only their OWN snapshot', () => {
+  const first = saveAttemptFor({ title: 'One ', essay: doc.essay, revision: 7 })
+  const second = saveAttemptFor({ title: 'Two ', essay: doc.essay, revision: 8 })
+  assert.equal(first.ok && second.ok, true)
+  if (!first.ok || !second.ok) return
+
+  // The first response arriving while the field reads "Two " must do nothing.
+  assert.equal(titleAfterSave({ snapshot: first.snapshot, currentTitle: 'Two ' }), null)
+  // The second, against its own raw, reconciles.
+  assert.equal(titleAfterSave({ snapshot: second.snapshot, currentTitle: 'Two ' }), 'Two')
+  assert.notEqual(first.snapshot.expectedRevision, second.snapshot.expectedRevision)
+})
+
+test('a failed save normalises nothing', () => {
+  // The component reconciles only in the save-succeeded branch, so a failure
+  // leaves the field exactly as typed. Proven at the state level too: a failure
+  // does not advance the revision the next attempt will use.
+  const failed = failedState(7)
+  assert.equal(failed.revision, 7)
+  const attempt = saveAttemptFor({ title: PADDED, essay: doc.essay, revision: failed.revision })
+  assert.equal(attempt.ok && attempt.snapshot.raw, PADDED)
+})
+
+test('Retry uses the CURRENT title, never the old snapshot’s', () => {
+  const failed = failedState(7)
+  // The old attempt was about "My Statement ".
+  const stale = saveAttemptFor({ title: PADDED, essay: doc.essay, revision: 7 })
+  assert.equal(stale.ok && stale.snapshot.sent, TRIMMED)
+
+  // The applicant has since retitled. Retry validates what is on screen now.
+  assert.equal(canRetrySave({ state: failed, title: 'Renamed after failing', essay: doc.essay }), true)
+  const retried = reduce(failed, { type: 'retry', at: T0 + 5000 })
+  const fresh = saveAttemptFor({
+    title: 'Renamed after failing',
+    essay: doc.essay,
+    revision: retried.revision,
+  })
+  assert.equal(fresh.ok && fresh.body.title, 'Renamed after failing')
+  assert.equal(fresh.ok && fresh.snapshot.raw, 'Renamed after failing')
+  assert.equal(fresh.ok && fresh.body.expectedRevision, 7, 'the revision is not reset')
+})
+
+test('an invalid title blocks the save without touching the text', () => {
+  const dirty = reduce(initialState(7), { type: 'edited', at: T0 })
+  for (const [name, title] of [
+    ['whitespace only', '   '],
+    ['empty', ''],
+    ['201 characters', 'a'.repeat(MAX_TITLE_CHARS + 1)],
+  ] as const) {
+    for (const now of [T0, T0 + 1200, T0 + 100_000]) {
+      assert.equal(act(dirty, now, { title }).kind, 'blocked', `${name} at ${now - T0}ms`)
+    }
+  }
+  // Exactly 200 after trimming is fine.
+  assert.deepEqual(
+    act(dirty, T0 + 1200, { title: `  ${'a'.repeat(MAX_TITLE_CHARS)}  ` }),
+    { kind: 'save' }
+  )
+  // And the blocked message names the title, so the applicant knows what to fix.
+  const blocked = act(dirty, T0 + 1200, { title: '  ' })
+  assert.equal(
+    blocked.kind === 'blocked' && blocked.message,
+    BLOCKED_MESSAGES['invalid-title']
+  )
+})
+
+test('title-only unsaved work blocks navigation exactly like essay work', () => {
+  // There is no title-specific state: a title edit is an `edited` event, so
+  // every guard reads the same autosave state.
+  const dirty = reduce(initialState(7), { type: 'edited', at: T0 })
+  assert.equal(hasUnsavedWork(dirty), true)
+  assert.equal(settleVerdict(dirty), null, 'navigation must wait, not leave')
+
+  let saved = reduce(dirty, { type: 'save-started', at: T0 + 1200 })
+  saved = reduce(saved, saveEventFrom({ status: 200, body: { draft: { revision: 8 } }, at: T0 + 1300 }))
+  assert.equal(hasUnsavedWork(saved), false)
+  assert.equal(settleVerdict(saved), true, 'a settled title save may leave')
+})
+
+test('a conflict preserves the local title, and no stale snapshot may alter it', () => {
+  const state = conflicted(7)
+  assert.equal(state.status, 'conflict')
+  // A snapshot from the save that conflicted exists, but the component only
+  // reconciles on save-succeeded, and the reload retires it outright.
+  const reload = CLIENT.slice(CLIENT.indexOf('const reloadLatest'), CLIENT.indexOf('const retrySave'))
+  assert.match(reload, /snapshotRef\.current = null\n\s*setTitle\(outcome\.draft\.title\)/)
+  // Identity, not a flag: a response holding a retired snapshot cannot match.
+  assert.match(CLIENT, /snapshotRef\.current === snapshot/)
+  assert.match(CLIENT, /if \(snapshotRef\.current === snapshot\) snapshotRef\.current = null/)
+  // Unmount retires it too.
+  assert.match(CLIENT, /alive\.current = false\n\s*snapshotRef\.current = null/)
+})
+
+test('a reload replaces the title from the validated server draft', () => {
+  const outcome = reloadOutcomeFrom({
+    status: 200,
+    body: { draft: { id: ID, title: '  Server title  ', essay: 'Server essay.', revision: 9 } },
+    expectedId: ID,
+  })
+  assert.equal(outcome.ok, true)
+  assert.equal(outcome.ok && outcome.draft.title, 'Server title', 'trimmed by checkTitle')
+  // And the engine is clean afterwards, so the reloaded title is not dirty.
+  const reloaded = reduce(conflicted(7), { type: 'reloaded', at: T0, revision: 9 })
+  assert.equal(hasUnsavedWork(reloaded), false)
+})
+
+test('arbitrary server prose can never reach the title field', () => {
+  // The only server value that ever becomes the title is a reload's, and it
+  // must survive checkTitle first.
+  for (const hostile of ['', '   ', 'a'.repeat(MAX_TITLE_CHARS + 1), 42, null, undefined, {}]) {
+    const outcome = reloadOutcomeFrom({
+      status: 200,
+      body: { draft: { id: ID, title: hostile, essay: '', revision: 9 } },
+      expectedId: ID,
+    })
+    assert.equal(outcome.ok, false, `${JSON.stringify(hostile) ?? 'undefined'} must be refused`)
+  }
+  // A save response never supplies a title at all: reconciliation uses the
+  // snapshot this client built, not anything the server sent back.
+  const attempt = saveAttemptFor({ title: PADDED, essay: doc.essay, revision: 7 })
+  assert.equal(attempt.ok && attempt.snapshot.sent, TRIMMED)
+  assert.doesNotMatch(CLIENT, /body\.draft\.title|body\.title/)
 })

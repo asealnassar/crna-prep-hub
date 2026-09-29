@@ -367,14 +367,30 @@ test('the draft is rendered as escaped text, whitespace preserved', () => {
     assert.doesNotMatch(source, /dangerouslySetInnerHTML/, `${name} must never set raw HTML`)
   }
   assert.match(PAGE, /<StatementStudioClient draft=\{draft\} \/>/)
-  // The title renders from local state, seeded from the prop, so a conflict
-  // reload can show a title changed elsewhere. It is still interpolated, which
-  // is what makes it escaped; there is no title input.
+  // The title is EDITABLE now, so "no input" is no longer the invariant. What
+  // still has to hold is where its value comes from and how it reaches the DOM.
+  //
+  // ORIGIN: local state seeded from the persisted draft, and the only other
+  // writers are the applicant's own keystrokes, a validated conflict reload, and
+  // the post-save reconciliation. Nothing else may set it.
   assert.match(editor, /useState\(draft\.title\)/)
-  assert.match(editor, /<h1[^>]*>\s*\{title\}/)
-  assert.doesNotMatch(editor, /<input/)
+  assert.deepEqual(
+    [...new Set(editor.match(/setTitle\((?:\(current\) =>|[a-zA-Z.]+)/g) ?? [])].sort(),
+    ['setTitle((current) =>', 'setTitle(outcome.draft.title', 'setTitle(value']
+  )
+
+  // ESCAPING: both fields reach the DOM as React `value` props, which are set as
+  // DOM properties and never parsed as markup. Neither is interpolated into
+  // HTML, and nothing anywhere sets raw HTML.
+  assert.match(editor, /<input\n[\s\S]*?value=\{title\}/)
   assert.match(editor, /value=\{essay\}/)
+  assert.doesNotMatch(editor, /dangerouslySetInnerHTML/)
   assert.match(editor, /whitespace-pre-wrap/)
+
+  // A frozen conflict makes the title read-only -- still visible, still
+  // selectable -- rather than disabled, which would block copying it.
+  assert.match(editor, /readOnly=\{status\.frozen\}/)
+  assert.doesNotMatch(editor, /disabled=\{status\.frozen\}/)
 })
 
 test('the route is not indexable while it is unreleased', () => {

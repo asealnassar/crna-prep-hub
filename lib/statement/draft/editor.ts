@@ -144,6 +144,93 @@ export function statementSaveRequest(input: {
   return { ok: true, body: checked.input }
 }
 
+// ------------------------------------------------- the save snapshot
+
+/**
+ * The document as it was when ONE request began.
+ *
+ * WHY BOTH TITLES. checkTitle trims, so the string that goes to the database is
+ * not always the string on screen. `raw` is what the applicant could see at the
+ * moment the request left; `sent` is what was actually persisted. Reconciliation
+ * needs both: `raw` to recognise that nobody has typed since, and `sent` to know
+ * what the field should now read.
+ *
+ * ONE SNAPSHOT BELONGS TO ONE REQUEST. It is taken before the fetch and is never
+ * recomputed from React state afterwards -- state may have moved on, and the
+ * whole point is to compare against what was true when the request started.
+ * There is no queue: Statement sends the entire document every time.
+ */
+export interface SaveSnapshot {
+  /** The visible title when this save began, untrimmed. */
+  readonly raw: string
+  /** The normalised title this save actually put in the database. */
+  readonly sent: string
+  /** The essay this save sent, verbatim. */
+  readonly essay: string
+  /** The revision this save was compared and swapped against. */
+  readonly expectedRevision: number
+}
+
+export type SaveAttempt =
+  | { readonly ok: true; readonly body: DraftUpdateInput; readonly snapshot: SaveSnapshot }
+  | { readonly ok: false; readonly code: DraftRefusal; readonly message: string }
+
+/**
+ * The request body and the snapshot that belongs to it, built together so they
+ * cannot disagree.
+ *
+ * NORMALISATION HAPPENS HERE AND NOWHERE ELSE -- inside checkDraftUpdate, the
+ * same function the route validates with. The component never trims a title.
+ */
+export function saveAttemptFor(input: {
+  title: string
+  essay: string
+  revision: number
+}): SaveAttempt {
+  const request = statementSaveRequest(input)
+  if (!request.ok) return request
+  return {
+    ok: true,
+    body: request.body,
+    snapshot: {
+      raw: input.title,
+      sent: request.body.title,
+      essay: request.body.essay,
+      expectedRevision: request.body.expectedRevision,
+    },
+  }
+}
+
+/**
+ * What the title field should read once a save has succeeded, or null to leave
+ * it exactly as it is.
+ *
+ * THE COMPARISON IS AGAINST `raw`, NOT `sent`. If it compared against the
+ * normalised title, then an applicant who typed "My Statement " and then
+ * corrected it to "My Statement" during the request would look identical to one
+ * who typed nothing -- and the reconciliation would be a no-op in a case where
+ * it happens not to matter, but the same reasoning applied to any other edit
+ * would silently discard it. Comparing raw-to-raw asks the only question worth
+ * asking: is what I can see still the document this response is about?
+ *
+ *   unchanged since the request  -> adopt `sent`, so Saved is honest
+ *   changed since the request    -> null; the newer text is the applicant's and
+ *                                  the next autosave will carry it
+ *
+ * Returning null when the field already equals `sent` keeps a settled editor
+ * from re-rendering for nothing.
+ */
+export function titleAfterSave(input: {
+  snapshot: SaveSnapshot | null
+  currentTitle: string
+}): string | null {
+  const { snapshot, currentTitle } = input
+  if (snapshot === null) return null
+  if (currentTitle !== snapshot.raw) return null
+  if (currentTitle === snapshot.sent) return null
+  return snapshot.sent
+}
+
 /** What the driver should do, including "nothing, and schedule no timer". */
 export type DriverAction =
   | AutosaveAction

@@ -9,6 +9,7 @@ import {
   type AutosaveState,
 } from '@/lib/resume/draft/autosave'
 import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
+import { MAX_TITLE_CHARS } from '@/lib/statement/draft/validate'
 import type { StatementDraft } from '@/lib/statement/draft/rows'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
@@ -18,10 +19,13 @@ import {
   canRetrySave,
   draftApiPath,
   reloadOutcomeFrom,
+  saveAttemptFor,
   settleVerdict,
   statementDriverAction,
   statementSaveRequest,
   statementStatus,
+  titleAfterSave,
+  type SaveSnapshot,
 } from '@/lib/statement/draft/editor'
 
 const LIBRARY = '/statement-studio'
@@ -40,12 +44,15 @@ const LIBRARY = '/statement-studio'
  * newer, and the only correct answer is to ask. The applicant's text stays on
  * screen and selectable until they choose Reload, and no merge is attempted.
  *
- * THE TITLE IS STILL READ-ONLY, and is now local state only so that a reload can
- * show the persisted title if it changed elsewhere. There is no title input and
- * a reload never marks the document dirty.
+ * THE TITLE IS EDITABLE, AND RECONCILED AGAINST WHAT WAS ACTUALLY PERSISTED.
+ * checkTitle trims, so "My Statement " is stored as "My Statement" -- and an
+ * indicator reading Saved over a field that still shows the trailing space would
+ * be a lie. Each save carries a snapshot of the title as it looked when the
+ * request left; on success, the field is corrected to the persisted string ONLY
+ * if nobody has typed since. If they have, their newer text stands and the next
+ * autosave carries it. See titleAfterSave() for the reasoning.
  *
- * Still deferred: title editing, upload, analysis, schools, prompts, version
- * history, delete.
+ * Still deferred: upload, analysis, schools, prompts, version history, delete.
  */
 export default function StatementStudioClient({ draft }: { draft: StatementDraft }) {
   const router = useRouter()
@@ -71,6 +78,13 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
    */
   const inFlight = useRef(false)
   const reloadInFlight = useRef(false)
+  /**
+   * The snapshot belonging to the request currently in flight, and the thing a
+   * late continuation checks itself against. Identity is the test: a reload sets
+   * this to null, so an older response cannot reconcile a title over a freshly
+   * loaded draft even if it arrives afterwards.
+   */
+  const snapshotRef = useRef<SaveSnapshot | null>(null)
   /** Set to false on unmount, so no late response writes to a dead component. */
   const alive = useRef(true)
   /**
@@ -111,6 +125,7 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
   useEffect(
     () => () => {
       alive.current = false
+      snapshotRef.current = null
       const waiting = settleWaiters.current
       settleWaiters.current = []
       for (const resolve of waiting) resolve(false)
@@ -121,12 +136,16 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
   // --- saving --------------------------------------------------------------
 
   const startSave = useCallback(
-    async (revision: number, snapshotTitle: string, snapshot: string) => {
+    async (revision: number, rawTitle: string, rawEssay: string) => {
       if (inFlight.current) return
 
-      const request = statementSaveRequest({ title: snapshotTitle, essay: snapshot, revision })
-      if (!request.ok) return
+      // The snapshot is taken HERE, from the values this save is about, and is
+      // never recomputed from React state afterwards.
+      const attempt = saveAttemptFor({ title: rawTitle, essay: rawEssay, revision })
+      if (!attempt.ok) return
+      const snapshot = attempt.snapshot
 
+      snapshotRef.current = snapshot
       inFlight.current = true
       setSave((state) => reduce(state, { type: 'save-started', at: Date.now() }))
 
@@ -134,14 +153,24 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
         const response = await fetch(draftApiPath(draft.id), {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(request.body),
+          body: JSON.stringify(attempt.body),
         })
         const body = await response.json().catch(() => null)
         // THE ONE MAPPING. saveEventFrom decides success, conflict, and whether
         // a failure is retryable; none of that is repeated here.
-        setSave((state) =>
-          reduce(state, saveEventFrom({ status: response.status, body, at: Date.now() }))
-        )
+        const event = saveEventFrom({ status: response.status, body, at: Date.now() })
+        if (!alive.current) return
+
+        // RECONCILE ONLY ON SUCCESS, AND ONLY FOR THIS SNAPSHOT. A conflict or a
+        // failure persisted nothing, so there is nothing to reconcile to; and a
+        // snapshot that has been retired -- by a reload, or by a later save --
+        // is no longer about the document on screen.
+        if (event.type === 'save-succeeded' && snapshotRef.current === snapshot) {
+          // The functional form reads the LIVE title at commit time, which is
+          // what makes "has anyone typed since?" answerable at all.
+          setTitle((current) => titleAfterSave({ snapshot, currentTitle: current }) ?? current)
+        }
+        setSave((state) => reduce(state, event))
       } catch {
         // The request never arrived, so the write did not happen and trying
         // again is safe. An existing message is reused rather than a new one
@@ -155,6 +184,8 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
           })
         )
       } finally {
+        // This request is over either way; its snapshot must not outlive it.
+        if (snapshotRef.current === snapshot) snapshotRef.current = null
         inFlight.current = false
       }
     },
@@ -179,6 +210,17 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
 
     void startSave(save.revision, title, essay)
   }, [save, title, essay, tick, startSave])
+
+  /**
+   * A title edit is an edit. Same engine event, same dirty window, same
+   * debounce, same navigation guard -- there is no title-specific save path and
+   * no second endpoint.
+   */
+  const onTitleChange = useCallback((value: string) => {
+    setTitle(value)
+    setNotice(null)
+    setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
+  }, [])
 
   const onEssayChange = useCallback((value: string) => {
     setEssay(value)
@@ -273,7 +315,10 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
         setNotice(outcome.message)
         return
       }
-      // Only now is the local version replaced.
+      // Only now is the local version replaced. The snapshot is retired first,
+      // so a save response still in the air cannot reconcile its title over the
+      // draft that was just loaded.
+      snapshotRef.current = null
       setTitle(outcome.draft.title)
       setEssay(outcome.draft.essay)
       setCopied('idle')
@@ -373,6 +418,8 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
 
   const status = statementStatus(save, blocked)
   const conflicted = save.status === 'conflict'
+  /** Trimmed, because that is the length the limit actually applies to. */
+  const titleCharacters = title.trim().length
   const canRetry = canRetrySave({ state: save, title, essay })
 
   return (
@@ -390,8 +437,31 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
       </a>
 
       <div className="mt-4 flex items-start justify-between gap-4">
-        {/* Rendered, never edited. Local state only so a reload can update it. */}
-        <h1 className="min-w-0 text-2xl font-bold text-slate-900">{title}</h1>
+        {/*
+          EDITABLE, and saved with the essay as one document. No maxLength:
+          stopping at the limit would silently shorten a pasted title, which is
+          the one thing the rules say not to do. A long title is refused,
+          visibly, with the count in front of the applicant.
+
+          readOnly (not disabled) while frozen, so a conflicted title stays
+          selectable and copyable alongside the essay.
+        */}
+        <div className="min-w-0 flex-1">
+          <label htmlFor="statement-title" className="sr-only">
+            Draft title
+          </label>
+          <input
+            id="statement-title"
+            type="text"
+            value={title}
+            onChange={(event) => onTitleChange(event.target.value)}
+            readOnly={status.frozen}
+            autoComplete="off"
+            spellCheck
+            placeholder="Give this draft a title"
+            className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1 -ml-2 text-2xl font-bold text-slate-900 hover:border-gray-300 focus:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 read-only:hover:border-transparent"
+          />
+        </div>
         <p
           role="status"
           aria-live="polite"
@@ -406,7 +476,10 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
       </div>
 
       <p className="mt-1 text-xs text-slate-500">
-        Revision {save.revision} · {essay.length.toLocaleString('en-US')} of{' '}
+        Revision {save.revision} · title {titleCharacters.toLocaleString('en-US')}/
+        {MAX_TITLE_CHARS.toLocaleString('en-US')}
+        {titleCharacters > MAX_TITLE_CHARS ? ' — too long to save' : ''} · essay{' '}
+        {essay.length.toLocaleString('en-US')} of{' '}
         {MAX_SAVED_CHARS.toLocaleString('en-US')} characters
       </p>
 
