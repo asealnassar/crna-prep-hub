@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test --import ./test/register.mjs \"lib/**/*.test.ts\""
+    "test": "node --test --experimental-test-module-mocks --import ./test/register.mjs \"lib/**/*.test.ts\" \"app/api/**/*.test.ts\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.14.1",
