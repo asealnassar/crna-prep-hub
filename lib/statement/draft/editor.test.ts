@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_AUTOSAVE,
+  hasUnsavedWork,
   initialState,
   nextAction,
   reduce,
@@ -14,8 +15,14 @@ import { checkTitle } from './validate.ts'
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 import {
   BLOCKED_MESSAGES,
+  COPY_MESSAGES,
+  NAV_MESSAGES,
+  RELOAD_MESSAGES,
   STATEMENT_STATUS,
-  draftSavePath,
+  canRetrySave,
+  draftApiPath,
+  reloadOutcomeFrom,
+  settleVerdict,
   statementDriverAction,
   statementSaveRequest,
   statementStatus,
@@ -339,7 +346,7 @@ test('every status the editor can show is Statement’s own wording', () => {
 })
 
 test('the save path carries the id, and the body does not', () => {
-  assert.equal(draftSavePath('d1e2f3a4-0000-4000-8000-000000000001'),
+  assert.equal(draftApiPath('d1e2f3a4-0000-4000-8000-000000000001'),
     '/api/statement/drafts/d1e2f3a4-0000-4000-8000-000000000001')
 })
 
@@ -362,12 +369,23 @@ test('the page still gates, still reads server-side, and hands the draft down', 
   assert.ok(gate !== -1 && gate < PAGE.indexOf('readDraft(db'))
 })
 
-test('the client never re-fetches the draft it was handed', () => {
-  assert.doesNotMatch(CLIENT, /\bGET\b/)
-  // The only request in the whole component is the PATCH.
-  assert.equal(CLIENT.split('fetch(').length - 1, 1)
-  assert.match(CLIENT, /method: 'PATCH'/)
-  assert.match(CLIENT, /fetch\(draftSavePath\(draft\.id\)/)
+test('the initial draft comes from props; the only GET is the deliberate reload', () => {
+  // Two requests exist in the whole component and no more: the autosave PATCH,
+  // and the GET that happens ONLY when the applicant clicks Reload.
+  assert.equal(CLIENT.split('fetch(').length - 1, 2)
+  assert.deepEqual([...new Set(CLIENT.match(/method: '[A-Z]+'/g) ?? [])].sort(), [
+    "method: 'GET'",
+    "method: 'PATCH'",
+  ])
+  // Nothing loads the draft on mount: the essay is seeded from the prop.
+  assert.match(CLIENT, /useState\(draft\.essay\)/)
+  assert.match(CLIENT, /useState\(draft\.title\)/)
+  // The GET lives inside reloadLatest, and reloadLatest is only ever called by
+  // the button -- never from an effect.
+  const reload = CLIENT.slice(CLIENT.indexOf('const reloadLatest'), CLIENT.indexOf('const retrySave'))
+  assert.match(reload, /method: 'GET'/)
+  assert.match(reload, /cache: 'no-store'/)
+  assert.deepEqual(CLIENT.match(/void reloadLatest\(\)/g), ['void reloadLatest()'])
 })
 
 test('the client uses the shared engine in place, and forks nothing', () => {
@@ -400,38 +418,422 @@ test('the client never displays state.error directly', () => {
   assert.doesNotMatch(CLIENT, /save\.error|state\.error|describe\(/)
 })
 
-test('the client never invents a revision', () => {
+test('the client never invents a revision, on any path', () => {
   assert.match(CLIENT, /initialState\(draft\.revision\)/)
-  assert.match(CLIENT, /startSave\(save\.revision, essay\)/)
+  assert.match(CLIENT, /startSave\(save\.revision, title, essay\)/)
+  // A reload adopts the SERVER's revision, never storedRevision.
+  assert.match(CLIENT, /revision: outcome\.draft\.revision/)
+  assert.doesNotMatch(CLIENT, /storedRevision/)
   assert.doesNotMatch(CLIENT, /revision \+ 1|revision\+\+|\+\+revision/)
 })
 
-test('the editor edits the essay, does not truncate, and leaves the title alone', () => {
+test('the editor edits the essay, does not truncate, and the title stays read-only', () => {
   assert.match(CLIENT, /<textarea/)
   assert.match(CLIENT, /value=\{essay\}/)
   assert.doesNotMatch(CLIENT, /maxLength/)
   assert.doesNotMatch(CLIENT, /\.slice\(0,|substring\(|\.trim\(\)/)
-  // The title is rendered, not edited.
-  assert.match(CLIENT, /\{draft\.title\}/)
-  assert.doesNotMatch(CLIENT, /setTitle|<input/)
+
+  // The title is rendered from state and has NO input of any kind.
+  assert.match(CLIENT, /<h1[^>]*>\s*\{title\}/)
+  assert.doesNotMatch(CLIENT, /<input/)
+  // setTitle exists for one reason only: adopting a reloaded server title.
+  assert.deepEqual(CLIENT.match(/setTitle\([^)]*\)/g), ['setTitle(outcome.draft.title)'])
+})
+
+test('a frozen editor stays SELECTABLE, so a manual copy still works', () => {
+  // readOnly, not disabled: a disabled textarea cannot be selected in most
+  // browsers, and copying your own text is the point of a frozen conflict.
+  assert.match(CLIENT, /readOnly=\{status\.frozen\}/)
+  assert.doesNotMatch(CLIENT, /disabled=\{status\.frozen\}/)
 })
 
 test('none of the deferred features crept in', () => {
   // Judged on WIRING, not on words: the banner legitimately says that upload
   // and analysis are not connected yet, which is a notice, not a feature.
   for (const deferred of [
-    /beforeunload/, /visibilitychange/, /addEventListener/,
     /<input[^>]*type="file"/, /FormData/,
     /\/api\/statement\/extract/, /\/api\/analyze-statement/,
     /schoolId/, /promptId/,
     /method: '(DELETE|POST)'/,
-    /type: 'reloaded'/, /type: 'flush'/, /type: 'retry'/,
+    /versionHistory/, /\bmerge\b/i,
   ]) {
     assert.doesNotMatch(CLIENT, deferred, `${deferred} belongs to a later step`)
   }
-  // The only autosave events this checkpoint dispatches.
+  // Every autosave event this checkpoint dispatches, and no other. All six are
+  // the shared engine's PUBLIC events; none was added to it.
   assert.deepEqual(
     [...new Set((CLIENT.match(/type: '[a-z-]+'/g) ?? []))].sort(),
-    ["type: 'edited'", "type: 'save-failed'", "type: 'save-started'"]
+    [
+      "type: 'edited'", "type: 'flush'", "type: 'reloaded'",
+      "type: 'retry'", "type: 'save-failed'", "type: 'save-started'",
+    ]
   )
+})
+
+// =============================================== PART 3: recovery, runtime
+
+const ID = 'd1e2f3a4-0000-4000-8000-000000000001'
+const OTHER = 'aaaaaaaa-1111-4111-8111-111111111111'
+const ok = (over: Record<string, unknown> = {}) => ({
+  draft: { id: ID, title: 'Server title', essay: 'Server essay.', revision: 9, ...over },
+})
+
+/** A conflicted state, reached the way production reaches it. */
+function conflicted(revision = 4): AutosaveState {
+  let state = reduce(initialState(revision), { type: 'edited', at: T0 })
+  state = reduce(state, { type: 'save-started', at: T0 + 1200 })
+  return reduce(state, saveEventFrom({ status: 409, body: { storedRevision: '9' }, at: T0 + 1300 }))
+}
+
+/** A terminally failed state, reached the way production reaches it. */
+function failedState(revision = 4): AutosaveState {
+  let state = reduce(initialState(revision), { type: 'edited', at: T0 })
+  state = reduce(state, { type: 'save-started', at: T0 + 1200 })
+  return reduce(state, saveEventFrom({ status: 422, body: { error: 'x' }, at: T0 + 1300 }))
+}
+
+test('a conflict freezes saving and typing cannot clear it', () => {
+  let state = conflicted()
+  assert.equal(state.status, 'conflict')
+  for (let i = 0; i < 5; i += 1) {
+    state = reduce(state, { type: 'edited', at: T0 + 2000 + i * 100 })
+    assert.equal(state.status, 'conflict', 'typing must not clear a conflict')
+  }
+  for (const now of [T0 + 1300, T0 + 60_000, T0 + 60_000_000]) {
+    assert.deepEqual(act(state, now), { kind: 'idle' }, 'no PATCH after a conflict')
+  }
+  // A flush cannot force one either -- the engine refuses it in conflict.
+  assert.equal(reduce(state, { type: 'flush', at: T0 + 3000 }).forced, false)
+  assert.deepEqual(act(reduce(state, { type: 'flush', at: T0 + 3000 }), T0 + 4000), { kind: 'idle' })
+})
+
+test('the conflict wording is Statement’s, and never the engine’s sentence', () => {
+  const state = conflicted()
+  assert.equal(state.error, 'This resume was changed somewhere else.')
+  const shown = statementStatus(state, null)
+  assert.equal(shown.text, STATEMENT_STATUS.conflict)
+  assert.equal(shown.frozen, true)
+  assert.doesNotMatch(shown.text, /resume/i)
+  // And nothing the component can render says it either.
+  assert.doesNotMatch(CLIENT, /was changed somewhere else/)
+  assert.doesNotMatch(CLIENT, /save\.error|state\.error/)
+})
+
+test('a reload accepts only a genuinely usable draft', () => {
+  const outcome = reloadOutcomeFrom({ status: 200, body: ok(), expectedId: ID })
+  assert.deepEqual(outcome, {
+    ok: true,
+    draft: { id: ID, title: 'Server title', essay: 'Server essay.', revision: 9 },
+  })
+  // The title goes through the same checkTitle the API validates with.
+  const padded = reloadOutcomeFrom({ status: 200, body: ok({ title: '  Padded  ' }), expectedId: ID })
+  assert.equal(padded.ok && padded.draft.title, 'Padded')
+  // An empty essay is legitimate and must not be mistaken for a bad response.
+  const empty = reloadOutcomeFrom({ status: 200, body: ok({ essay: '' }), expectedId: ID })
+  assert.equal(empty.ok && empty.draft.essay, '')
+})
+
+test('a malformed 200 is REFUSED, so local text is never destroyed by one', () => {
+  for (const [name, body] of [
+    ['no body', null],
+    ['no draft', {}],
+    ['null draft', { draft: null }],
+    ['empty draft', { draft: {} }],
+    ['non-uuid id', ok({ id: 'nope' })],
+    ['missing id', ok({ id: undefined })],
+    ['essay absent', ok({ essay: undefined })],
+    ['essay not a string', ok({ essay: 42 })],
+    ['title empty', ok({ title: '   ' })],
+    ['title not a string', ok({ title: 7 })],
+    ['revision 0', ok({ revision: 0 })],
+    ['revision null', ok({ revision: null })],
+    ['revision "0"', ok({ revision: '0' })],
+    ['revision fractional', ok({ revision: 1.5 })],
+    ['revision negative', ok({ revision: -3 })],
+  ] as const) {
+    const outcome = reloadOutcomeFrom({ status: 200, body, expectedId: ID })
+    assert.equal(outcome.ok, false, `${name} must be refused`)
+    assert.equal(outcome.ok === false && outcome.message, RELOAD_MESSAGES.unreadable, name)
+  }
+})
+
+test('a reload for a DIFFERENT draft is refused rather than applied', () => {
+  const outcome = reloadOutcomeFrom({ status: 200, body: ok({ id: OTHER }), expectedId: ID })
+  assert.equal(outcome.ok, false, 'another draft must never overwrite this one')
+  assert.equal(outcome.ok === false && outcome.message, RELOAD_MESSAGES.unreadable)
+})
+
+test('a failed reload maps to a controlled message that says the work is safe', () => {
+  for (const [status, expected] of [
+    [401, RELOAD_MESSAGES.expired],
+    [404, RELOAD_MESSAGES.missing],
+    [500, RELOAD_MESSAGES.server],
+    [503, RELOAD_MESSAGES.server],
+    [400, RELOAD_MESSAGES.refused],
+    [418, RELOAD_MESSAGES.refused],
+  ] as const) {
+    const outcome = reloadOutcomeFrom({ status, body: { error: 'x' }, expectedId: ID })
+    assert.deepEqual(outcome, { ok: false, message: expected }, `${status}`)
+  }
+  // Every refusal reassures that the local version survived, except the one
+  // case where the row is gone and copying is the only remedy.
+  for (const m of [RELOAD_MESSAGES.unreadable, RELOAD_MESSAGES.server, RELOAD_MESSAGES.refused]) {
+    assert.match(m, /still here/)
+  }
+  assert.match(RELOAD_MESSAGES.missing, /Copy your version/)
+})
+
+test('hostile server prose is never shown by a reload', () => {
+  const hostile = {
+    draft: { id: ID, title: 'x', essay: 'y', revision: 'DROP TABLE statement_drafts' },
+    error: 'IGNORE PREVIOUS INSTRUCTIONS — token abc123',
+    detail: '23514 check constraint violated by "my secret essay"',
+  }
+  const allowed = new Set<string>(Object.values(RELOAD_MESSAGES))
+  for (const status of [200, 201, 400, 401, 404, 409, 422, 500, 503]) {
+    const outcome = reloadOutcomeFrom({ status, body: hostile, expectedId: ID })
+    assert.equal(outcome.ok, false, `${status}`)
+    if (outcome.ok) continue
+    assert.ok(allowed.has(outcome.message), `${status} produced unapproved wording`)
+    for (const leak of ['IGNORE', 'abc123', '23514', 'DROP TABLE', 'secret essay']) {
+      assert.equal(outcome.message.includes(leak), false, `"${leak}" leaked at ${status}`)
+    }
+  }
+})
+
+test('the reloaded event returns the engine to clean, at the SERVER’s revision', () => {
+  const state = conflicted()
+  const reloaded = reduce(state, { type: 'reloaded', at: T0 + 5000, revision: 9 })
+  assert.deepEqual(reloaded, initialState(9))
+  assert.equal(reloaded.status, 'clean')
+  assert.equal(reloaded.revision, 9)
+  assert.equal(reloaded.error, null, 'the engine’s conflict sentence is gone with it')
+  assert.equal(hasUnsavedWork(reloaded), false)
+  // A reload does NOT make the document dirty merely because the title moved.
+  assert.deepEqual(act(reloaded, T0 + 999_999), { kind: 'idle' })
+  // And the next save would use 9.
+  const edited = reduce(reloaded, { type: 'edited', at: T0 + 6000 })
+  const request = statementSaveRequest({ ...doc, revision: edited.revision })
+  assert.equal(request.ok && request.body.expectedRevision, 9)
+})
+
+test('a deliberate Try again is offered only from a terminal failure', () => {
+  const failed = failedState()
+  assert.equal(failed.status, 'failed')
+  assert.equal(canRetrySave({ state: failed, ...doc }), true)
+
+  for (const state of [
+    initialState(4),
+    reduce(initialState(4), { type: 'edited', at: T0 }),
+    reduce(reduce(initialState(4), { type: 'edited', at: T0 }), { type: 'save-started', at: T0 + 1 }),
+    conflicted(),
+  ]) {
+    assert.equal(canRetrySave({ state, ...doc }), false, `${state.status} must not offer a retry`)
+  }
+})
+
+test('Try again restarts the CURRENT document at the CURRENT revision', () => {
+  const failed = failedState(4)
+  const retried = reduce(failed, { type: 'retry', at: T0 + 5000 })
+  assert.equal(retried.status, 'dirty')
+  assert.equal(retried.forced, true)
+  assert.equal(retried.revision, 4, 'a retry must not reset or invent a revision')
+  assert.equal(retried.attempt, 0)
+  assert.equal(retried.error, null)
+  // Forced, so it saves at once rather than waiting out another debounce.
+  assert.deepEqual(act(retried, T0 + 5000), { kind: 'save' })
+  const request = statementSaveRequest({ ...doc, revision: retried.revision })
+  assert.equal(request.ok && request.body.expectedRevision, 4)
+})
+
+test('Try again is refused while the local document is unsaveable', () => {
+  const failed = failedState()
+  const tooLong = 'a'.repeat(MAX_SAVED_CHARS + 1)
+  assert.equal(canRetrySave({ state: failed, title: doc.title, essay: tooLong }), false)
+  assert.equal(canRetrySave({ state: failed, title: '   ', essay: doc.essay }), false)
+  // And even if it were dispatched, the driver would not PATCH.
+  const retried = reduce(failed, { type: 'retry', at: T0 + 5000 })
+  assert.equal(act(retried, T0 + 5000, { essay: tooLong }).kind, 'blocked')
+})
+
+test('nothing retries itself beyond the engine’s own budget', () => {
+  const failed = failedState()
+  for (const now of [T0 + 1300, T0 + 10_000, T0 + 10_000_000]) {
+    assert.deepEqual(act(failed, now), { kind: 'idle' }, 'a failed save waits for the applicant')
+  }
+})
+
+test('settleVerdict answers saved, not saved, or not yet — and never guesses', () => {
+  assert.equal(settleVerdict(initialState(4)), true)
+
+  let state = reduce(initialState(4), { type: 'edited', at: T0 })
+  state = reduce(state, { type: 'save-started', at: T0 + 1200 })
+  state = reduce(state, saveEventFrom({ status: 200, body: { draft: { revision: 5 } }, at: T0 + 1300 }))
+  assert.equal(settleVerdict(state), true, 'a confirmed save is settled')
+
+  // In progress: 'retrying' is still trying, so it is NOT an answer either way.
+  const dirty = reduce(initialState(4), { type: 'edited', at: T0 })
+  const saving = reduce(dirty, { type: 'save-started', at: T0 + 1200 })
+  const retrying = reduce(saving, saveEventFrom({ status: 500, body: null, at: T0 + 1300 }))
+  for (const [name, s2] of [['dirty', dirty], ['saving', saving], ['retrying', retrying]] as const) {
+    assert.equal(settleVerdict(s2), null, `${name} must keep the waiter waiting`)
+  }
+
+  assert.equal(settleVerdict(failedState()), false, 'failed means stay')
+  assert.equal(settleVerdict(conflicted()), false, 'conflict means stay')
+
+  // It is the engine's own definition of unsaved work, not a second one.
+  for (const s2 of [initialState(4), dirty, saving, retrying, failedState(), conflicted()]) {
+    if (settleVerdict(s2) === true) assert.equal(hasUnsavedWork(s2), false)
+    else assert.equal(hasUnsavedWork(s2), true)
+  }
+})
+
+test('a hiding tab’s flush is meaningful only when there is work to flush', () => {
+  // Clean: the engine returns the same state, so nothing is forced.
+  const clean = initialState(4)
+  assert.equal(reduce(clean, { type: 'flush', at: T0 }).forced, false)
+  assert.equal(hasUnsavedWork(clean), false)
+
+  // Dirty: forced, and the driver saves at once instead of waiting 1200 ms.
+  const dirty = reduce(initialState(4), { type: 'edited', at: T0 })
+  const flushed = reduce(dirty, { type: 'flush', at: T0 + 100 })
+  assert.equal(flushed.forced, true)
+  assert.deepEqual(act(flushed, T0 + 100), { kind: 'save' })
+})
+
+test('every recovery and navigation message is one of ours', () => {
+  const all = [
+    ...Object.values(RELOAD_MESSAGES),
+    ...Object.values(COPY_MESSAGES),
+    ...Object.values(NAV_MESSAGES),
+  ]
+  for (const message of all) {
+    const lower = message.toLowerCase()
+    for (const word of [
+      'resume', 'admin', 'internal', 'flag', 'beta', 'forbidden', 'permission',
+      'sql', 'postgres', 'pgrst', 'constraint', 'revision',
+    ]) {
+      assert.equal(lower.includes(word), false, `"${message}" names "${word}"`)
+    }
+  }
+  assert.equal(new Set(all).size, all.length, 'no two notices should be identical by accident')
+})
+
+// =========================================== PART 4: recovery wiring, source
+
+test('the conflict panel offers exactly Copy and Reload, and resolves nothing itself', () => {
+  assert.match(CLIENT, /const conflicted = save\.status === 'conflict'/)
+  assert.match(CLIENT, /This draft changed somewhere else\. Saving is paused\./)
+  assert.match(CLIENT, /Copy my version/)
+  assert.match(CLIENT, /Reload latest version/)
+  // No automatic resolution: reloadLatest is only reachable from its button.
+  const effects = CLIENT.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\)/g) ?? []
+  for (const effect of effects) {
+    assert.doesNotMatch(effect, /reloadLatest|copyMine/, 'recovery must never fire from an effect')
+  }
+})
+
+test('Copy takes the essay ALONE, and changes nothing', () => {
+  const copy = CLIENT.slice(CLIENT.indexOf('const copyMine'), CLIENT.indexOf('const reloadLatest'))
+  assert.match(copy, /clipboard\.writeText\(essay\)/)
+  // Not the title, not the revision, not the status, and nowhere else.
+  assert.doesNotMatch(copy, /title|revision|status|fetch\(/)
+  // It dispatches nothing at all: no save, no reload, no clearing the conflict.
+  assert.doesNotMatch(copy, /setSave|setEssay|reduce\(/)
+  // And it never logs the essay.
+  assert.doesNotMatch(CLIENT, /console\./)
+  assert.match(copy, /setCopied\('failed'\)/, 'clipboard failure must be handled')
+})
+
+test('Reload fetches the document, not just the stored revision', () => {
+  const reload = CLIENT.slice(CLIENT.indexOf('const reloadLatest'), CLIENT.indexOf('const retrySave'))
+  assert.match(reload, /fetch\(draftApiPath\(draft\.id\), \{ method: 'GET'/)
+  assert.match(reload, /reloadOutcomeFrom\(\{/)
+  assert.match(reload, /expectedId: draft\.id/)
+  // A refusal changes nothing: no setEssay, no setTitle, no dispatch.
+  const refusal = reload.slice(reload.indexOf('if (!outcome.ok)'), reload.indexOf('setTitle('))
+  assert.match(refusal, /setNotice\(outcome\.message\)/)
+  assert.match(refusal, /return/)
+  assert.doesNotMatch(refusal, /setEssay|setSave|reduce\(/)
+  // Success replaces all three from the server, then returns to clean.
+  assert.match(reload, /setTitle\(outcome\.draft\.title\)/)
+  assert.match(reload, /setEssay\(outcome\.draft\.essay\)/)
+  assert.match(reload, /type: 'reloaded', at: Date\.now\(\), revision: outcome\.draft\.revision/)
+  // One reload at a time.
+  assert.match(reload, /if \(reloadInFlight\.current\) return/)
+})
+
+test('the failed-save Retry goes through the engine’s own retry event', () => {
+  const retry = CLIENT.slice(CLIENT.indexOf('const retrySave'), CLIENT.indexOf('const leave ='))
+  assert.match(retry, /canRetrySave\(\{ state: save, title, essay \}\)/)
+  assert.match(retry, /type: 'retry', at: Date\.now\(\)/)
+  assert.doesNotMatch(retry, /fetch\(|initialState\(|revision:/)
+  assert.match(CLIENT, /Try again/)
+})
+
+test('beforeunload uses the engine’s hasUnsavedWork, once, via a ref', () => {
+  assert.match(CLIENT, /const saveRef = useRef\(save\)/)
+  assert.match(CLIENT, /saveRef\.current = save/)
+  const listener = CLIENT.slice(CLIENT.indexOf('const onBeforeUnload'), CLIENT.indexOf("window.addEventListener"))
+  assert.match(listener, /if \(!hasUnsavedWork\(saveRef\.current\)\) return/)
+  assert.match(listener, /event\.preventDefault\(\)/)
+  assert.match(listener, /event\.returnValue = ''/)
+  // Registered once and cleaned up.
+  assert.match(CLIENT, /window\.addEventListener\('beforeunload', onBeforeUnload\)\n\s*return \(\) => window\.removeEventListener\('beforeunload', onBeforeUnload\)/)
+})
+
+test('visibilitychange dispatches a flush and never fetches', () => {
+  const vis = CLIENT.slice(CLIENT.indexOf('const onVisibility'), CLIENT.indexOf("document.addEventListener"))
+  assert.match(vis, /document\.visibilityState !== 'hidden'/)
+  assert.match(vis, /hasUnsavedWork\(saveRef\.current\)/)
+  assert.match(vis, /type: 'flush', at: Date\.now\(\)/)
+  assert.doesNotMatch(vis, /fetch\(/, 'the visibility handler must not issue a request')
+  assert.match(CLIENT, /document\.addEventListener\('visibilitychange', onVisibility\)\n\s*return \(\) => document\.removeEventListener\('visibilitychange', onVisibility\)/)
+})
+
+test('guarded navigation waits on a future transition, not on stale state', () => {
+  const nav = CLIENT.slice(CLIENT.indexOf('const goToLibrary'), CLIENT.indexOf('// --- render'))
+  // The waiter is registered BEFORE the flush is dispatched.
+  const waiter = nav.indexOf('const settled = whenSettled()')
+  const flush = nav.indexOf("type: 'flush'")
+  const awaited = nav.indexOf('await settled')
+  assert.ok(waiter !== -1 && flush !== -1 && awaited !== -1)
+  assert.ok(waiter < flush, 'the waiter must exist before the dispatch it waits on')
+  assert.ok(flush < awaited)
+  // And it never re-reads state after dispatching to decide it is safe to go.
+  assert.doesNotMatch(nav.slice(flush), /settleVerdict|hasUnsavedWork/)
+  // Terminal states stay put; only a true verdict navigates.
+  assert.match(nav, /if \(verdict === true\) \{\n\s*leave\(\)/)
+  assert.match(nav, /if \(verdict === false\) \{/)
+  assert.match(nav, /if \(saved\) leave\(\)\n\s*else setNotice\(NAV_MESSAGES\.stayed\)/)
+  // An unsaveable document is not flushed into a waiter that can never resolve.
+  assert.match(nav, /if \(!request\.ok\) \{\n\s*setNotice\(NAV_MESSAGES\.blocked\)/)
+})
+
+test('a modified click is not pretended to be savable', () => {
+  const nav = CLIENT.slice(CLIENT.indexOf('const goToLibrary'), CLIENT.indexOf('// --- render'))
+  assert.match(nav, /event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey \|\| event\.button !== 0/)
+  assert.match(nav, /setNotice\(NAV_MESSAGES\.modified\)/)
+  // It is an anchor, so an unmodified click is interceptable and a clean
+  // document still navigates normally.
+  assert.match(CLIENT, /<a\n\s*href=\{LIBRARY\}\n\s*onClick=\{goToLibrary\}/)
+})
+
+test('nothing can resolve or write into an unmounted editor', () => {
+  assert.match(CLIENT, /const alive = useRef\(true\)/)
+  assert.match(CLIENT, /alive\.current = false/)
+  // Every late continuation checks it.
+  for (const guard of [/if \(!alive\.current\) return/, /if \(alive\.current\) setNotice/]) {
+    assert.match(CLIENT, guard)
+  }
+  // Pending navigation waiters are resolved on unmount rather than left hanging.
+  assert.match(CLIENT, /for \(const resolve of waiting\) resolve\(false\)/)
+  // The autosave timer is cleared.
+  assert.match(CLIENT, /return \(\) => clearTimeout\(timer\)/)
+  // Exactly one registration of each listener, each with a matching removal.
+  for (const name of ['beforeunload', 'visibilitychange']) {
+    assert.equal(CLIENT.split(`addEventListener('${name}'`).length - 1, 1, name)
+    assert.equal(CLIENT.split(`removeEventListener('${name}'`).length - 1, 1, name)
+  }
 })

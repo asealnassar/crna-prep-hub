@@ -1,5 +1,9 @@
-import { nextAction, type AutosaveAction, type AutosaveState } from '../../resume/draft/autosave.ts'
-import { checkDraftUpdate, type DraftRefusal, type DraftUpdateInput } from './validate.ts'
+import {
+  hasUnsavedWork, nextAction, type AutosaveAction, type AutosaveState,
+} from '../../resume/draft/autosave.ts'
+import { checkDraftUpdate, checkTitle, type DraftRefusal, type DraftUpdateInput } from './validate.ts'
+import { isDraftId } from './http.ts'
+import { parseStoredRevision } from './rows.ts'
 import { SAVE_MESSAGES } from './save.ts'
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 
@@ -178,7 +182,147 @@ export function statementDriverAction(input: {
   return action
 }
 
-/** Where this editor's saves go. The path carries the id; the body does not. */
-export function draftSavePath(id: string): string {
+/**
+ * This draft's API path. PATCH saves to it and the conflict reload GETs from
+ * it, which is why the name is not "save": one draft, one address. The path
+ * carries the id, so no payload ever has to.
+ */
+export function draftApiPath(id: string): string {
   return `/api/statement/drafts/${id}`
+}
+
+// ---------------------------------------------------------------- recovery
+
+/**
+ * Whether work has reached the server, definitely has not, or is still going.
+ *
+ * `null` is the important value: 'retrying' is neither a yes nor a no, and a
+ * navigation waiter that treated it as either would leave the page mid-retry or
+ * refuse to leave a page that was about to succeed.
+ *
+ * THIS IS A FUNCTION OF STATE ONLY. The waiter that uses it is resolved by
+ * observing future transitions, never by reading the state that existed before
+ * the dispatch that prompted the wait -- the bug called out in
+ * app/resume-studio/components/studio/StudioClient.tsx's whenSettled().
+ */
+export function settleVerdict(state: AutosaveState): boolean | null {
+  if (!hasUnsavedWork(state)) return true
+  if (state.status === 'failed' || state.status === 'conflict') return false
+  return null
+}
+
+/**
+ * What the applicant is told while recovering. Fixed strings, chosen here.
+ *
+ * EVERY ONE SAYS THE LOCAL VERSION IS STILL THERE, because that is the fact
+ * that matters when a reload has just failed and the screen still holds work
+ * the server has never seen. A message that only said "could not load" would
+ * leave somebody wondering whether their own text had gone with it.
+ */
+export const RELOAD_MESSAGES = {
+  unreadable: 'The latest saved version could not be read. Your version is still here.',
+  expired: 'Your session expired. Sign in again, then reload the latest saved version.',
+  missing: 'This draft no longer exists on the server. Copy your version before you leave.',
+  /** 5xx: the server's problem, so trying again may well work. */
+  server: 'The server could not send the latest saved version. Your version is still here.',
+  /** Anything else: the request was refused, and repeating it may not help. */
+  refused: 'The latest saved version could not be loaded. Your version is still here.',
+} as const
+
+/** Copy outcomes. The clipboard is not guaranteed, so failure has words too. */
+export const COPY_MESSAGES = {
+  copied: 'Copied',
+  failed: 'Could not copy automatically. Select the text in the editor and copy it.',
+} as const
+
+/** Why a guarded navigation did not happen. */
+export const NAV_MESSAGES = {
+  stayed: 'Your work is not saved yet, so you are still here. Resolve the notice above first.',
+  blocked: 'Your work cannot be saved as it stands, so you are still here. Fix the notice above first.',
+  modified:
+    'Opening a copy in another tab would leave unsaved work behind here. Save or resolve this first.',
+} as const
+
+/** A persisted draft, as the reload accepted it. */
+export interface ReloadedDraft {
+  readonly id: string
+  readonly title: string
+  readonly essay: string
+  readonly revision: number
+}
+
+export type ReloadOutcome =
+  | { readonly ok: true; readonly draft: ReloadedDraft }
+  | { readonly ok: false; readonly message: string }
+
+function field(value: unknown, key: string): unknown {
+  if (typeof value !== 'object' || value === null) return undefined
+  return (value as Record<string, unknown>)[key]
+}
+
+/**
+ * The reload response, accepted only if it is genuinely a usable draft.
+ *
+ * A 200 IS NOT ENOUGH. This replaces text the applicant can see and cannot get
+ * back, so every field is checked before anything is handed over: the id must
+ * be a uuid AND the one that was asked for, the title must satisfy the same
+ * checkTitle the API validates with, the essay must be a string, and the
+ * revision must survive parseStoredRevision -- the strict parser, so a null or a
+ * '0' becomes a refusal rather than a fabricated 1.
+ *
+ * THE ID COMPARISON IS THE POINT OF `expectedId`. A proxy, a cache or a
+ * mis-built URL that returned somebody else's draft would otherwise overwrite
+ * this one's essay with it.
+ *
+ * Nothing the server said is read for display; the outcome carries one of the
+ * fixed messages above.
+ */
+export function reloadOutcomeFrom(input: {
+  status: number
+  body: unknown
+  expectedId: string
+}): ReloadOutcome {
+  const { status, body, expectedId } = input
+
+  if (status >= 200 && status < 300) {
+    const draft = field(body, 'draft')
+    const id = field(draft, 'id')
+    const title = field(draft, 'title')
+    const essay = field(draft, 'essay')
+    const revision = parseStoredRevision(field(draft, 'revision'))
+
+    if (!isDraftId(id) || id !== expectedId) return { ok: false, message: RELOAD_MESSAGES.unreadable }
+    if (typeof essay !== 'string') return { ok: false, message: RELOAD_MESSAGES.unreadable }
+    if (revision === null) return { ok: false, message: RELOAD_MESSAGES.unreadable }
+    const checked = checkTitle(title)
+    if (!checked.ok) return { ok: false, message: RELOAD_MESSAGES.unreadable }
+
+    return { ok: true, draft: { id, title: checked.title, essay, revision } }
+  }
+
+  if (status === 401) return { ok: false, message: RELOAD_MESSAGES.expired }
+  if (status === 404) return { ok: false, message: RELOAD_MESSAGES.missing }
+  if (status >= 500) return { ok: false, message: RELOAD_MESSAGES.server }
+  return { ok: false, message: RELOAD_MESSAGES.refused }
+}
+
+/**
+ * Whether a deliberate Try again may fire.
+ *
+ * Only from 'failed' -- the shared engine's `retry` event is a no-op from any
+ * other status, so offering the action elsewhere would be a button that does
+ * nothing. And only while the document is saveable, so a retry cannot walk
+ * straight into the blocked path.
+ */
+export function canRetrySave(input: {
+  state: AutosaveState
+  title: string
+  essay: string
+}): boolean {
+  if (input.state.status !== 'failed') return false
+  return statementSaveRequest({
+    title: input.title,
+    essay: input.essay,
+    revision: input.state.revision,
+  }).ok
 }

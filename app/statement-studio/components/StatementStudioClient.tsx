@@ -1,85 +1,151 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
-import { initialState, reduce, type AutosaveState } from '@/lib/resume/draft/autosave'
+import { useRouter } from 'next/navigation'
+import {
+  hasUnsavedWork,
+  initialState,
+  reduce,
+  type AutosaveState,
+} from '@/lib/resume/draft/autosave'
 import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
 import type { StatementDraft } from '@/lib/statement/draft/rows'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
-  draftSavePath,
+  COPY_MESSAGES,
+  NAV_MESSAGES,
+  RELOAD_MESSAGES,
+  canRetrySave,
+  draftApiPath,
+  reloadOutcomeFrom,
+  settleVerdict,
   statementDriverAction,
   statementSaveRequest,
   statementStatus,
 } from '@/lib/statement/draft/editor'
 
+const LIBRARY = '/statement-studio'
+
 /**
- * The statement editor, and the driver for the shared autosave engine.
+ * The statement editor: autosave, conflict recovery, and leaving safely.
  *
- * THE ENGINE IS lib/resume/draft/autosave.ts, USED IN PLACE. It is imported, not
- * copied and not forked: it decides when to save, it enforces single flight, and
- * it is the only thing that advances the revision. This component owns the
- * clock, the payload and the request -- the three things it deliberately does
- * not know about -- and nothing else.
+ * THE ENGINE IS lib/resume/draft/autosave.ts, USED IN PLACE. Imported, never
+ * copied or forked. Every recovery action here is one of its PUBLIC events --
+ * `retry` for a deliberate Try again, `reloaded` for an explicit reload, `flush`
+ * for a hiding tab and for leaving the page -- so none of this required the
+ * engine to change. It decides when to save and when a retry is allowed; this
+ * owns the clock, the payload and the requests.
  *
- * WHAT IS NOT HERE, on purpose: upload, analysis, version history, schools,
- * prompts, delete, conflict recovery, navigation guards, beforeunload and
- * visibilitychange. Each is its own step. The consequence to know about today is
- * in the note on the library link below.
+ * NOTHING IS RESOLVED AUTOMATICALLY. A conflict means somebody else's work is
+ * newer, and the only correct answer is to ask. The applicant's text stays on
+ * screen and selectable until they choose Reload, and no merge is attempted.
  *
- * THE TITLE IS READ-ONLY IN THIS CHECKPOINT. checkTitle() trims, so an editable
- * title would let the field read "My essay " while the row holds "My essay", and
- * the indicator would say Saved over a visible difference. Reconciling that
- * needs the save snapshot written back into the field, which is its own small
- * piece of work. The title that IS sent came out of the database, so it has
- * already been through the same trim and round-trips unchanged.
+ * THE TITLE IS STILL READ-ONLY, and is now local state only so that a reload can
+ * show the persisted title if it changed elsewhere. There is no title input and
+ * a reload never marks the document dirty.
+ *
+ * Still deferred: title editing, upload, analysis, schools, prompts, version
+ * history, delete.
  */
 export default function StatementStudioClient({ draft }: { draft: StatementDraft }) {
+  const router = useRouter()
+
+  /** Read-only, but stateful: a reload may bring a title changed elsewhere. */
+  const [title, setTitle] = useState(draft.title)
   const [essay, setEssay] = useState(draft.essay)
   /** THE INITIAL REVISION IS THE SERVER'S. Never a literal 1. */
   const [save, setSave] = useState<AutosaveState>(() => initialState(draft.revision))
   const [blocked, setBlocked] = useState<string | null>(null)
   /** Bumped by the wait timer, so the effect re-asks the engine at the due time. */
   const [tick, setTick] = useState(0)
+  /** A recovery or navigation notice. Never anything the server wrote. */
+  const [notice, setNotice] = useState<string | null>(null)
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const [reloading, setReloading] = useState(false)
+  const [leaving, setLeaving] = useState(false)
 
   /**
    * SINGLE FLIGHT, taken synchronously. nextAction() already returns 'idle'
-   * while a save is in flight, but the reducer that sets 'saving' is a state
-   * update and therefore asynchronous; this closes the window between the effect
-   * deciding to save and the state reflecting it.
+   * while a save is in flight, but the reducer that sets 'saving' is an async
+   * state update; this closes the window between deciding and reflecting it.
    */
   const inFlight = useRef(false)
+  const reloadInFlight = useRef(false)
+  /** Set to false on unmount, so no late response writes to a dead component. */
+  const alive = useRef(true)
+  /**
+   * The live autosave state, for listeners that are registered ONCE. Without
+   * this, beforeunload and visibilitychange would have to be torn down and
+   * re-registered on every keystroke.
+   */
+  const saveRef = useRef(save)
+  useEffect(() => {
+    saveRef.current = save
+  }, [save])
+
+  // --- waiting for a save to settle ---------------------------------------
+
+  const settleWaiters = useRef<Array<(saved: boolean) => void>>([])
+
+  /**
+   * Resolves waiters by OBSERVING TRANSITIONS, which is the whole point.
+   * Reading the state synchronously after dispatching a flush would report the
+   * status from before it and wave the applicant off the page with unsaved work
+   * -- the bug the Resume studio's whenSettled() documents.
+   */
+  useEffect(() => {
+    if (settleWaiters.current.length === 0) return
+    const verdict = settleVerdict(save)
+    if (verdict === null) return
+    const waiting = settleWaiters.current
+    settleWaiters.current = []
+    for (const resolve of waiting) resolve(verdict)
+  }, [save])
+
+  const whenSettled = useCallback(
+    () => new Promise<boolean>((resolve) => { settleWaiters.current.push(resolve) }),
+    []
+  )
+
+  /** Unmount: nothing may resolve into a component that is gone. */
+  useEffect(
+    () => () => {
+      alive.current = false
+      const waiting = settleWaiters.current
+      settleWaiters.current = []
+      for (const resolve of waiting) resolve(false)
+    },
+    []
+  )
+
+  // --- saving --------------------------------------------------------------
 
   const startSave = useCallback(
-    async (revision: number, snapshot: string) => {
+    async (revision: number, snapshotTitle: string, snapshot: string) => {
       if (inFlight.current) return
 
-      // The document as it is at THIS instant. Edits arriving after this line
-      // belong to the next save, which is exactly what the engine's
-      // inFlightSince / dirtySince split is for.
-      const request = statementSaveRequest({ title: draft.title, essay: snapshot, revision })
+      const request = statementSaveRequest({ title: snapshotTitle, essay: snapshot, revision })
       if (!request.ok) return
 
       inFlight.current = true
       setSave((state) => reduce(state, { type: 'save-started', at: Date.now() }))
 
       try {
-        const response = await fetch(draftSavePath(draft.id), {
+        const response = await fetch(draftApiPath(draft.id), {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(request.body),
         })
         const body = await response.json().catch(() => null)
-        // THE ONE MAPPING. saveEventFrom decides success, conflict and whether a
-        // failure is retryable; none of that is repeated here.
+        // THE ONE MAPPING. saveEventFrom decides success, conflict, and whether
+        // a failure is retryable; none of that is repeated here.
         setSave((state) =>
           reduce(state, saveEventFrom({ status: response.status, body, at: Date.now() }))
         )
       } catch {
         // The request never arrived, so the write did not happen and trying
-        // again is safe. SAVE_MESSAGES.server is reused rather than a new
-        // sentence invented, because statementStatus() renders only strings this
-        // codebase already chose.
+        // again is safe. An existing message is reused rather than a new one
+        // invented, because statementStatus renders only strings already chosen.
         setSave((state) =>
           reduce(state, {
             type: 'save-failed',
@@ -92,20 +158,14 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
         inFlight.current = false
       }
     },
-    [draft.id, draft.title]
+    [draft.id]
   )
 
   useEffect(() => {
-    const action = statementDriverAction({
-      state: save,
-      now: Date.now(),
-      title: draft.title,
-      essay,
-    })
+    const action = statementDriverAction({ state: save, now: Date.now(), title, essay })
 
     if (action.kind === 'blocked') {
-      // No request and NO TIMER. The work stays on screen, visibly unsaved, and
-      // nothing runs again until the applicant types.
+      // No request and NO TIMER. The work stays on screen, visibly unsaved.
       setBlocked(action.message)
       return
     }
@@ -117,19 +177,203 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
       return () => clearTimeout(timer)
     }
 
-    void startSave(save.revision, essay)
-  }, [save, essay, tick, draft.title, startSave])
+    void startSave(save.revision, title, essay)
+  }, [save, title, essay, tick, startSave])
 
   const onEssayChange = useCallback((value: string) => {
     setEssay(value)
+    setNotice(null)
+    setCopied('idle')
     // Dispatched on EVERY edit, including during a save. The engine restarts the
-    // dirty window while a request is in flight, so a success that lands after
-    // this edit reports 'dirty' rather than 'saved'.
+    // dirty window while a request is in flight, so a success landing after this
+    // reports 'dirty' rather than 'saved'.
     setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
   }, [])
 
+  // --- leaving the tab -----------------------------------------------------
+
+  /**
+   * Registered ONCE and reading the ref, so typing does not churn listeners.
+   * `hasUnsavedWork` is the shared engine's own definition -- there is no second
+   * idea of "dirty" anywhere in this file.
+   */
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedWork(saveRef.current)) return
+      event.preventDefault()
+      // Still required by some browsers to raise the dialog.
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [])
+
+  /**
+   * A hiding tab may never come back, so stop waiting out the debounce. This
+   * dispatches and nothing more: the engine decides whether a flush means
+   * anything (it refuses one during a conflict or an in-flight save), and the
+   * driver effect is what actually issues the request.
+   */
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== 'hidden') return
+      if (!hasUnsavedWork(saveRef.current)) return
+      setSave((state) => reduce(state, { type: 'flush', at: Date.now() }))
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [])
+
+  // --- recovery ------------------------------------------------------------
+
+  /**
+   * The applicant's own text, to the clipboard. The essay ALONE -- no title, no
+   * revision, no status. Nothing is dispatched, nothing is sent anywhere, the
+   * draft is not touched and the conflict is not cleared.
+   */
+  const copyMine = useCallback(async () => {
+    try {
+      const clipboard = navigator.clipboard
+      if (!clipboard || typeof clipboard.writeText !== 'function') throw new Error('unavailable')
+      await clipboard.writeText(essay)
+      if (alive.current) setCopied('done')
+    } catch {
+      // The editor stays readOnly rather than disabled, so the text is still
+      // selectable and a manual copy still works.
+      if (alive.current) setCopied('failed')
+    }
+  }, [essay])
+
+  /**
+   * THE ONLY conflict resolution in this checkpoint, and only when asked for.
+   *
+   * It fetches the document rather than trusting `storedRevision`: that number
+   * says which revision won, not what it says, and adopting it without the text
+   * would leave the editor claiming a revision whose content it has never seen.
+   *
+   * A failure changes nothing at all -- the conflict stands, saving stays
+   * frozen, and the local essay is untouched -- so the applicant can copy their
+   * version and try the reload again.
+   */
+  const reloadLatest = useCallback(async () => {
+    if (reloadInFlight.current) return
+    reloadInFlight.current = true
+    setNotice(null)
+    setReloading(true)
+    try {
+      const response = await fetch(draftApiPath(draft.id), { method: 'GET', cache: 'no-store' })
+      const body = await response.json().catch(() => null)
+      const outcome = reloadOutcomeFrom({
+        status: response.status,
+        body,
+        expectedId: draft.id,
+      })
+      if (!alive.current) return
+      if (!outcome.ok) {
+        setNotice(outcome.message)
+        return
+      }
+      // Only now is the local version replaced.
+      setTitle(outcome.draft.title)
+      setEssay(outcome.draft.essay)
+      setCopied('idle')
+      // `reloaded` returns the engine to a clean state at the SERVER's revision.
+      setSave((state) =>
+        reduce(state, { type: 'reloaded', at: Date.now(), revision: outcome.draft.revision })
+      )
+    } catch {
+      if (alive.current) setNotice(RELOAD_MESSAGES.server)
+    } finally {
+      reloadInFlight.current = false
+      if (alive.current) setReloading(false)
+    }
+  }, [draft.id])
+
+  /**
+   * A deliberate retry of a terminal failure, through the engine's own `retry`
+   * event. It sets `forced`, so the driver saves the CURRENT document at the
+   * CURRENT confirmed revision: no revision is reset or invented and no text is
+   * discarded. Nothing retries by itself beyond the engine's own budget.
+   */
+  const retrySave = useCallback(() => {
+    if (!canRetrySave({ state: save, title, essay })) return
+    setNotice(null)
+    setSave((state) => reduce(state, { type: 'retry', at: Date.now() }))
+  }, [save, title, essay])
+
+  // --- leaving the page ----------------------------------------------------
+
+  const leave = useCallback(() => router.push(LIBRARY), [router])
+
+  /**
+   * Back to the library, without losing the debounce window.
+   *
+   * The verdict is taken BEFORE anything is dispatched only to decide whether a
+   * wait is needed at all. The wait itself is a waiter resolved by a future
+   * transition, never by re-reading state after the flush.
+   *
+   * A document that cannot be saved is not flushed: the flush would set `forced`
+   * and the driver would refuse it, and the waiter would never resolve. The
+   * applicant stays, with the blocked notice already on screen.
+   */
+  const goToLibrary = useCallback(
+    async (event: React.MouseEvent<HTMLAnchorElement>) => {
+      // A modified click is the browser opening its own tab, and this component
+      // cannot save on its way out of that. Rather than pretend, it is refused
+      // while there is unsaved work and allowed when there is none.
+      const modified =
+        event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0
+      if (modified) {
+        if (hasUnsavedWork(saveRef.current)) {
+          event.preventDefault()
+          setNotice(NAV_MESSAGES.modified)
+        }
+        return
+      }
+
+      event.preventDefault()
+      if (leaving) return
+
+      const verdict = settleVerdict(saveRef.current)
+      if (verdict === true) {
+        leave()
+        return
+      }
+      if (verdict === false) {
+        // failed or conflict: the applicant has to resolve it first.
+        setNotice(NAV_MESSAGES.stayed)
+        return
+      }
+
+      const request = statementSaveRequest({
+        title,
+        essay,
+        revision: saveRef.current.revision,
+      })
+      if (!request.ok) {
+        setNotice(NAV_MESSAGES.blocked)
+        return
+      }
+
+      setLeaving(true)
+      // The waiter is registered BEFORE the dispatch, so a save that settles
+      // immediately cannot resolve before anything is listening.
+      const settled = whenSettled()
+      setSave((state) => reduce(state, { type: 'flush', at: Date.now() }))
+      const saved = await settled
+      if (!alive.current) return
+      setLeaving(false)
+      if (saved) leave()
+      else setNotice(NAV_MESSAGES.stayed)
+    },
+    [leaving, title, essay, whenSettled, leave]
+  )
+
+  // --- render --------------------------------------------------------------
+
   const status = statementStatus(save, blocked)
-  const characters = essay.length
+  const conflicted = save.status === 'conflict'
+  const canRetry = canRetrySave({ state: save, title, essay })
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -137,21 +381,17 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
         Internal preview. Upload and “Analyze this Draft” are not wired up yet.
       </p>
 
-      {/*
-        NO SAVE-BEFORE-NAVIGATION GUARD YET. A soft navigation away from here
-        does not fire beforeunload and unmounting cancels a pending save, so
-        edits made in the last debounce window can be lost by clicking this.
-        That guard is the next step and is deliberately absent today.
-      */}
-      <Link
-        href="/statement-studio"
+      <a
+        href={LIBRARY}
+        onClick={goToLibrary}
         className="text-sm font-medium text-blue-700 hover:underline"
       >
-        ← All drafts
-      </Link>
+        {leaving ? 'Saving before leaving…' : '← All drafts'}
+      </a>
 
       <div className="mt-4 flex items-start justify-between gap-4">
-        <h1 className="min-w-0 text-2xl font-bold text-slate-900">{draft.title}</h1>
+        {/* Rendered, never edited. Local state only so a reload can update it. */}
+        <h1 className="min-w-0 text-2xl font-bold text-slate-900">{title}</h1>
         <p
           role="status"
           aria-live="polite"
@@ -166,30 +406,87 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
       </div>
 
       <p className="mt-1 text-xs text-slate-500">
-        Revision {save.revision} · {characters.toLocaleString('en-US')} of{' '}
+        Revision {save.revision} · {essay.length.toLocaleString('en-US')} of{' '}
         {MAX_SAVED_CHARS.toLocaleString('en-US')} characters
       </p>
 
+      {conflicted && (
+        <div className="mt-4 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
+          <p className="text-sm font-semibold text-red-900">
+            This draft changed somewhere else. Saving is paused.
+          </p>
+          <p className="mt-1 text-sm text-red-800">
+            Your version is still here and nothing has been overwritten. Copy it
+            first if you want to keep it, then load the latest saved version —
+            loading will replace what is on screen.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void copyMine()}
+              className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-900 transition hover:bg-red-100"
+            >
+              Copy my version
+            </button>
+            <button
+              type="button"
+              onClick={() => void reloadLatest()}
+              disabled={reloading}
+              className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {reloading ? 'Loading…' : 'Reload latest version'}
+            </button>
+            {copied === 'done' && (
+              <span className="text-xs font-medium text-red-900">{COPY_MESSAGES.copied}</span>
+            )}
+            {copied === 'failed' && (
+              <span className="text-xs text-red-900">{COPY_MESSAGES.failed}</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {canRetry && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
+          <p className="text-sm text-red-900">
+            The last save did not go through. Your text is still here.
+          </p>
+          <button
+            type="button"
+            onClick={retrySave}
+            className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {notice !== null && (
+        <p
+          role="alert"
+          className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          {notice}
+        </p>
+      )}
+
       {/*
-        NO maxLength. Truncating what somebody pasted would be a worse answer
-        than refusing to save it and saying so.
+        readOnly, NOT disabled, when frozen. A disabled textarea is not
+        selectable in most browsers, and the whole point of a frozen conflict is
+        that the applicant can still read and copy what they wrote.
+
+        No maxLength: truncating a pasted statement would be a worse answer than
+        refusing to save it and saying so.
       */}
       <textarea
         value={essay}
         onChange={(event) => onEssayChange(event.target.value)}
-        disabled={status.frozen}
+        readOnly={status.frozen}
         spellCheck
         aria-label="Personal statement"
         placeholder="Write your personal statement here."
-        className="mt-4 min-h-[28rem] w-full resize-y whitespace-pre-wrap rounded-xl border border-gray-300 bg-white px-4 py-4 text-sm leading-relaxed text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
+        className="mt-4 min-h-[28rem] w-full resize-y whitespace-pre-wrap rounded-xl border border-gray-300 bg-white px-4 py-4 text-sm leading-relaxed text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 read-only:bg-gray-50"
       />
-
-      {status.frozen && (
-        <p className="mt-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
-          Saving is paused. Your text is still here, but nothing is being written
-          until this is resolved.
-        </p>
-      )}
     </main>
   )
 }

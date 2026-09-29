@@ -367,7 +367,12 @@ test('the draft is rendered as escaped text, whitespace preserved', () => {
     assert.doesNotMatch(source, /dangerouslySetInnerHTML/, `${name} must never set raw HTML`)
   }
   assert.match(PAGE, /<StatementStudioClient draft=\{draft\} \/>/)
-  assert.match(editor, /\{draft\.title\}/)
+  // The title renders from local state, seeded from the prop, so a conflict
+  // reload can show a title changed elsewhere. It is still interpolated, which
+  // is what makes it escaped; there is no title input.
+  assert.match(editor, /useState\(draft\.title\)/)
+  assert.match(editor, /<h1[^>]*>\s*\{title\}/)
+  assert.doesNotMatch(editor, /<input/)
   assert.match(editor, /value=\{essay\}/)
   assert.match(editor, /whitespace-pre-wrap/)
 })
