@@ -29,9 +29,21 @@ module.exports = withPWA({
   // land in route.js.nft.json without this. Forcing it in here, the same way
   // lesson content is forced in, is what actually gets it into the deployed
   // function.
+  //
+  // /api/statement/extract is a different case again. Turbopack DOES trace the
+  // statement PDF worker -- it emits it as assets/worker.<hash>.mjs and rewrites
+  // the URL -- but it copies it as an ASSET rather than parsing it as a module,
+  // so the tracer never sees the `await import('pdfjs-dist/legacy/build/pdf.js')`
+  // the worker makes at runtime. Those files have to be named for this route, or
+  // the worker starts and then fails to load the parser.
   outputFileTracingIncludes: {
     '/lessons/[slug]': ['./content/lessons/**'],
     '/api/resume-v2/export/pdf': ['./node_modules/@sparticuz/chromium/bin/**'],
+    '/api/statement/extract': [
+      './node_modules/pdfjs-dist/package.json',
+      './node_modules/pdfjs-dist/legacy/build/pdf.js',
+      './node_modules/pdfjs-dist/legacy/build/pdf.worker.js',
+    ],
   },
   turbopack: {},  // Add this to silence the warning
   images: {
