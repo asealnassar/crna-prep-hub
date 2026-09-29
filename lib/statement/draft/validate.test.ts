@@ -2,8 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   MAX_TITLE_CHARS, MIN_TITLE_CHARS,
+  MAX_EXPECTED_REVISION,
   checkDraftCreate, checkDraftUpdate, checkEssay, checkExpectedRevision, checkTitle,
 } from './validate.ts'
+// Imported ONLY to assert the deliberate asymmetry between the two ceilings.
+import { parseStoredRevision } from './rows.ts'
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 import { MAX_STATEMENT_CHARS } from '../limits.ts'
 
@@ -30,6 +33,7 @@ test('draft: the approved limits are exactly the approved values', () => {
   assert.equal(MAX_SAVED_CHARS, 20_000)
   assert.equal(MIN_TITLE_CHARS, 1)
   assert.equal(MAX_TITLE_CHARS, 200)
+  assert.equal(MAX_EXPECTED_REVISION, Number.MAX_SAFE_INTEGER - 1)
 })
 
 // ------------------------------------------------------------------- the title
@@ -192,7 +196,9 @@ test('revision: 1 is allowed -- it is where every row starts', () => {
 })
 
 test('revision: any positive integer is allowed', () => {
-  for (const value of [1, 2, 7, 1_000, 9_007_199_254_740_991]) {
+  // The top of the range is MAX_EXPECTED_REVISION, not MAX_SAFE_INTEGER: see the
+  // increment invariant below.
+  for (const value of [1, 2, 7, 1_000, MAX_EXPECTED_REVISION]) {
     const result = checkExpectedRevision(value)
     assert.equal(result.ok, true, String(value))
     if (result.ok) assert.equal(result.revision, value)
@@ -242,12 +248,61 @@ test('revision: a value past MAX_SAFE_INTEGER is refused, because bigint would n
   // The column is bigint. A number this large cannot round-trip through JSON
   // intact, and a compare-and-swap on a value that silently changed is worse
   // than a refusal.
-  for (const value of [Number.MAX_SAFE_INTEGER + 1, 2 ** 60]) {
+  for (const value of [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1, 2 ** 60]) {
     const result = checkExpectedRevision(value)
     assert.equal(result.ok, false, String(value))
     if (result.ok) continue
     assert.equal(result.code, 'invalid-revision')
   }
+})
+
+// ------------------------------------- the increment invariant, in both halves
+
+test('revision: MAX_SAFE_INTEGER - 1 is accepted -- incrementing it stays safe', () => {
+  const result = checkExpectedRevision(Number.MAX_SAFE_INTEGER - 1)
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.revision, Number.MAX_SAFE_INTEGER - 1)
+  // The whole reason it is allowed: the value the repository will write.
+  assert.ok(Number.isSafeInteger(result.revision + 1))
+  assert.equal(result.revision + 1, Number.MAX_SAFE_INTEGER)
+})
+
+test('revision: MAX_SAFE_INTEGER is REFUSED as an expected revision', () => {
+  // It is a perfectly good integer. It is not a usable expected revision,
+  // because expectedRevision + 1 is no longer exact -- the repository would
+  // write a revision it could not read back.
+  assert.ok(Number.isSafeInteger(Number.MAX_SAFE_INTEGER))
+  assert.equal(Number.isSafeInteger(Number.MAX_SAFE_INTEGER + 1), false)
+
+  const result = checkExpectedRevision(Number.MAX_SAFE_INTEGER)
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.code, 'invalid-revision')
+})
+
+test('revision: a STORED revision of MAX_SAFE_INTEGER is still accepted by the parser', () => {
+  // THE ASYMMETRY IS DELIBERATE, and this is where both halves are visible at
+  // once. A value already in the column can be READ exactly; it just cannot be
+  // incremented again. So a draft that somehow reached that revision stays
+  // readable and listable, and only a further edit is refused.
+  assert.equal(parseStoredRevision(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER)
+  assert.equal(parseStoredRevision('9007199254740991'), Number.MAX_SAFE_INTEGER)
+  // And the validator refuses the same number, on purpose.
+  assert.equal(checkExpectedRevision(Number.MAX_SAFE_INTEGER).ok, false)
+  // One apart, and each side is the stricter one for its own reason.
+  assert.equal(MAX_EXPECTED_REVISION + 1, Number.MAX_SAFE_INTEGER)
+})
+
+test('update: the largest valid expected revision passes, one more does not', () => {
+  const at = checkDraftUpdate({ title: 't', essay: 'e', expectedRevision: MAX_EXPECTED_REVISION })
+  assert.equal(at.ok, true)
+  if (at.ok) assert.equal(at.input.expectedRevision, MAX_EXPECTED_REVISION)
+
+  const over = checkDraftUpdate({ title: 't', essay: 'e', expectedRevision: Number.MAX_SAFE_INTEGER })
+  assert.equal(over.ok, false)
+  if (over.ok) return
+  assert.equal(over.code, 'invalid-revision')
 })
 
 test('revision: a non-number is refused', () => {
@@ -389,7 +444,7 @@ test('update: revision 1 succeeds -- the value a freshly created row holds', () 
 test('update: a bad revision is refused', () => {
   for (const expectedRevision of [
     0, -1, 1.5, '1', NaN, Infinity, -Infinity, null, undefined, {},
-    Number.MAX_SAFE_INTEGER + 1,
+    Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1,
   ]) {
     const result = checkDraftUpdate({ title: 'Draft one', essay: 'Body.', expectedRevision })
     assert.equal(result.ok, false, String(expectedRevision))

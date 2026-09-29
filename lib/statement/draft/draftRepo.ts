@@ -1,0 +1,334 @@
+/**
+ * The only module that reads or writes statement_drafts rows.
+ *
+ * Deliberately thin, in the same shape as lib/resume/repo/resumeRepo.ts: every
+ * decision that can be made without a database -- what may be persisted, what a
+ * stored row means -- lives in validate.ts and rows.ts beside it and is tested
+ * there. What remains here is the wiring.
+ *
+ * THE CLIENT IS SUPPLIED BY THE CALLER, never constructed here, so a route can
+ * pass a request-scoped client carrying the user's JWT and RLS stays in force.
+ * Nothing in this file creates a service-role client, and nothing needs one:
+ * every statement below is a query the signed-in applicant is entitled to make
+ * about their own rows.
+ *
+ * RLS IS THE SECURITY BOUNDARY, not the filters. Another user's row is not
+ * hidden by a `.eq('user_id', ...)` this code could forget -- it is invisible to
+ * the query, which is why a row belonging to somebody else and a row that does
+ * not exist both come back as 'not-found'. There is deliberately no
+ * 'forbidden' outcome: telling a caller that a draft exists but is not theirs
+ * would confirm the id, which is information they have no claim to.
+ *
+ * updated_at IS THIS MODULE'S RESPONSIBILITY. The table has no touch trigger, on
+ * purpose, because updated_at is the 400-day inactivity clock and a trigger
+ * would advance it on writes the retention policy does not count as activity.
+ * So exactly one function sets it -- updateDraft, on the one statement that
+ * persists an edit -- and create leaves it to the column default. Nothing else
+ * here writes it: readDraft, listDrafts and deleteDraft issue no UPDATE at all.
+ *
+ * AND NO CALLER CAN SUPPLY IT. updateDraft takes no timestamp and
+ * DraftUpdateInput carries none, so the value written is always one this module
+ * generated during the attempt. A route that could pass its own could set the
+ * retention clock to anything -- including a date far in the future, which would
+ * make a draft effectively immortal, or one in the past, which would age it out
+ * early.
+ *
+ * NOT YET WIRED TO ANYTHING. The route is the next layer.
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { DraftCreateInput, DraftUpdateInput } from './validate.ts'
+import { draftFromRow, draftSummaryFromRow } from './rows.ts'
+import type {
+  StatementDraft, StatementDraftRow, StatementDraftSummary, StatementDraftSummaryRow,
+} from './rows.ts'
+
+const DRAFTS = 'statement_drafts'
+
+/** Columns this module reads. Named explicitly so a schema addition cannot
+ *  silently start arriving, and so no column is selected that is not used. */
+const DRAFT_COLUMNS = 'id, user_id, title, essay, revision, created_at, updated_at'
+
+/**
+ * Columns the LIST projection asks for. No `essay`, and no `user_id`.
+ *
+ * The library screen needs titles and timestamps; pulling the essays would move
+ * up to 20,000 characters per draft for nothing, and an unlimited draft count
+ * makes that unbounded. `user_id` is the WHERE clause below, not a column any
+ * caller reads.
+ */
+const SUMMARY_COLUMNS = 'id, title, revision, created_at, updated_at'
+
+/**
+ * Why a repository call did not produce a value.
+ *
+ * 'conflict' and 'not-found' are ANSWERS -- the database did its job and the
+ * answer was no. The '*-failed' reasons are the database or the network having
+ * failed, which is a different thing and must never be reported as a conflict:
+ * an autosave that treats a dropped connection as "someone else saved" freezes
+ * on a conflict that never happened.
+ *
+ * 'data-integrity' is a third category again: the query succeeded and returned a
+ * row this application cannot interpret.
+ */
+export type DraftRepoRefusal =
+  | 'not-found'
+  | 'conflict'
+  | 'data-integrity'
+  | 'create-failed'
+  | 'read-failed'
+  | 'list-failed'
+  | 'update-failed'
+  | 'delete-failed'
+
+/**
+ * Same shape as lib/resume/repo/resumeRepo.ts's RepoResult, declared here rather
+ * than imported: statement code does not depend on resume code, and a shared
+ * result type would be the first thread of exactly that coupling.
+ */
+export type DraftRepoResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false
+      readonly reason: DraftRepoRefusal
+      readonly detail: string
+      /** Set only on 'conflict': the revision the database actually holds, so a
+       *  caller can resync without a second round trip that could race with yet
+       *  another writer. */
+      readonly storedRevision?: number
+    }
+
+/**
+ * A database error, reduced to something safe to log.
+ *
+ * CODE AND MESSAGE ONLY. A PostgREST error's `details` and `hint` can echo the
+ * row that failed, and for a statement draft that row is somebody's essay. The
+ * same rule as resumeRepo's failure() and for a stronger reason.
+ */
+function failure(reason: DraftRepoRefusal, error: unknown): DraftRepoResult<never> {
+  const err = error as { code?: string; message?: string } | null
+  return { ok: false, reason, detail: `${err?.code ?? ''} ${err?.message ?? ''}`.trim() }
+}
+
+/** The row came back but could not be read. Fixed words: never the row. */
+function integrity(where: string): DraftRepoResult<never> {
+  return { ok: false, reason: 'data-integrity', detail: `unusable stored row (${where})` }
+}
+
+const notFound: DraftRepoResult<never> = {
+  ok: false, reason: 'not-found', detail: '',
+}
+
+/**
+ * Creates a draft and returns it as stored.
+ *
+ * ONLY THREE COLUMNS ARE SENT. `id`, `revision`, `created_at` and `updated_at`
+ * are the database's to choose -- gen_random_uuid(), 1, now(), now() -- and
+ * sending any of them would either duplicate a default or let a client set a
+ * value it has no business setting. A client-supplied revision in particular
+ * would break the compare-and-swap before the first edit.
+ *
+ * `user_id` IS sent, because the column is NOT NULL and there is no default. RLS
+ * still has the last word: its insert policy refuses any row whose user_id is
+ * not the caller's, so this value cannot be used to create a draft for someone
+ * else.
+ *
+ * The title and essay arrive already normalised from checkDraftCreate(); this
+ * function revalidates nothing.
+ */
+export async function createDraft(
+  db: SupabaseClient,
+  userId: string,
+  input: DraftCreateInput,
+): Promise<DraftRepoResult<StatementDraft>> {
+  const { data, error } = await db
+    .from(DRAFTS)
+    .insert({ user_id: userId, title: input.title, essay: input.essay })
+    .select(DRAFT_COLUMNS)
+    .maybeSingle()
+  if (error) return failure('create-failed', error)
+  if (!data) return failure('create-failed', { code: 'NO_ROW', message: 'insert returned no row' })
+
+  const draft = draftFromRow(data as unknown as StatementDraftRow)
+  // A fresh row must read back as revision 1. If it does not parse, the column
+  // default or the bigint transport has changed and a CAS built on it would be
+  // unsound -- so say so rather than hand back a guess.
+  if (!draft) return integrity('create')
+  return { ok: true, value: draft }
+}
+
+/**
+ * Reads one draft by id. Issues no write, so updated_at is untouched.
+ *
+ * No `.eq('user_id', ...)`: the row is either visible to this caller or it is
+ * not, and RLS decides. maybeSingle() then returns null for both "invisible" and
+ * "absent", which is exactly the indistinguishability that is wanted.
+ */
+export async function readDraft(
+  db: SupabaseClient,
+  draftId: string,
+): Promise<DraftRepoResult<StatementDraft>> {
+  const { data, error } = await db
+    .from(DRAFTS)
+    .select(DRAFT_COLUMNS)
+    .eq('id', draftId)
+    .maybeSingle()
+  if (error) return failure('read-failed', error)
+  if (!data) return notFound
+
+  const draft = draftFromRow(data as unknown as StatementDraftRow)
+  if (!draft) return integrity('read')
+  return { ok: true, value: draft }
+}
+
+/**
+ * Lists the caller's drafts, newest edit first. METADATA ONLY, and no write.
+ *
+ * NO ESSAY BODIES. The full text of one draft comes from readDraft(); this
+ * returns StatementDraftSummary, a distinct type rather than a StatementDraft
+ * with a field missing, so nothing downstream can mistake a library entry for a
+ * loaded draft.
+ *
+ * The explicit user_id filter is kept alongside RLS, matching listResumes(), and
+ * together with the ORDER BY it is what statement_drafts_user_updated_idx
+ * (user_id, updated_at DESC) was created to serve.
+ *
+ * NO LIMIT. Drafts are unlimited for every tier and pagination is a separate
+ * decision; dropping the essay is what makes an unbounded count affordable in
+ * the meantime.
+ *
+ * ONE MALFORMED ROW FAILS THE WHOLE LIST. Returning the other nine would mean
+ * silently hiding a draft the applicant wrote, which is worse than an error
+ * page: they would conclude it was lost.
+ */
+export async function listDrafts(
+  db: SupabaseClient,
+  userId: string,
+): Promise<DraftRepoResult<StatementDraftSummary[]>> {
+  const { data, error } = await db
+    .from(DRAFTS)
+    .select(SUMMARY_COLUMNS)
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false })
+  if (error) return failure('list-failed', error)
+
+  const summaries: StatementDraftSummary[] = []
+  for (const row of (data ?? []) as unknown as StatementDraftSummaryRow[]) {
+    const summary = draftSummaryFromRow(row)
+    if (!summary) return integrity('list')
+    summaries.push(summary)
+  }
+  return { ok: true, value: summaries }
+}
+
+/**
+ * Saves an edit, or refuses. COMPARE AND SWAP, in one conditional statement.
+ *
+ * THE SEQUENCE, and it is fixed:
+ *
+ *   1. ONE update, conditional on `id = draftId AND revision = expectedRevision`.
+ *      The condition IS the concurrency control -- there is no read-then-write
+ *      window for another writer to land in, because the comparison and the write
+ *      are the same statement.
+ *   2. One row back  -> success. Its revision is expectedRevision + 1.
+ *   3. Zero rows back -> ONE follow-up read by id, and only then:
+ *        row present -> 'conflict', carrying the revision actually stored;
+ *        row absent  -> 'not-found'.
+ *
+ * WHY THE FOLLOW-UP READ IS NEEDED AT ALL. A conditional update that matches
+ * nothing cannot say why it matched nothing: the id may not exist, the row may
+ * belong to someone else and be invisible, or the revision may have moved. Only
+ * a second look distinguishes them, and it happens exactly once.
+ *
+ * WHAT THIS NEVER DOES. It does not retry. It does not overwrite on conflict. It
+ * does not resolve anything automatically. A stale save performs NO write at all
+ * -- the condition fails, so the UPDATE touches no row, and updated_at does not
+ * move. That matters beyond concurrency: updated_at is the retention clock, so a
+ * refused save must not look like activity.
+ *
+ * `created_at`, `user_id` and `id` are not in the payload and never will be.
+ *
+ * THE TIMESTAMP IS NOT A PARAMETER. It is generated here, once, and there is no
+ * way for a caller to supply one -- see the header. Tests therefore assert its
+ * shape and that it was produced during the call, not a literal value.
+ */
+export async function updateDraft(
+  db: SupabaseClient,
+  draftId: string,
+  input: DraftUpdateInput,
+): Promise<DraftRepoResult<StatementDraft>> {
+  // ONCE per attempt, before the statement is built, and reused nowhere else.
+  // The row records the instant this save was made, not whenever the database
+  // got round to it.
+  const savedAt = new Date().toISOString()
+
+  const { data, error } = await db
+    .from(DRAFTS)
+    .update({
+      title: input.title,
+      essay: input.essay,
+      revision: input.expectedRevision + 1,
+      updated_at: savedAt,
+    })
+    .eq('id', draftId)
+    .eq('revision', input.expectedRevision)
+    .select(DRAFT_COLUMNS)
+    .maybeSingle()
+  if (error) return failure('update-failed', error)
+
+  if (data) {
+    const draft = draftFromRow(data as unknown as StatementDraftRow)
+    if (!draft) return integrity('update')
+    return { ok: true, value: draft }
+  }
+
+  // Zero rows matched. One read decides which of the two answers it is.
+  const { data: current, error: readError } = await db
+    .from(DRAFTS)
+    .select(DRAFT_COLUMNS)
+    .eq('id', draftId)
+    .maybeSingle()
+  // A FAILED FOLLOW-UP READ IS NOT A CONFLICT. Reporting one would tell the
+  // caller their work is stale on the evidence of a dropped connection.
+  if (readError) return failure('read-failed', readError)
+  if (!current) return notFound
+
+  const stored = draftFromRow(current as unknown as StatementDraftRow)
+  // AND AN UNPARSEABLE REVISION IS NOT CONFLICT-AT-1. Without this, a corrupt
+  // stored value would become a conflict against a revision nobody ever wrote,
+  // and the client would resync onto a fiction.
+  if (!stored) return integrity('update-conflict-read')
+  return {
+    ok: false,
+    reason: 'conflict',
+    detail: `stored revision ${stored.revision}`,
+    storedRevision: stored.revision,
+  }
+}
+
+/**
+ * Deletes one draft by id. Explicit user deletion only -- no soft delete, no
+ * retention sweep, and no write to updated_at.
+ *
+ * `.select('id')` is what makes "nothing was deleted" observable: without it
+ * PostgREST returns no representation and a delete that matched nothing is
+ * indistinguishable from one that matched. An invisible row and an absent row
+ * both land on 'not-found', for the same reason readDraft does.
+ */
+export async function deleteDraft(
+  db: SupabaseClient,
+  draftId: string,
+): Promise<DraftRepoResult<{ readonly id: string }>> {
+  const { data, error } = await db
+    .from(DRAFTS)
+    .delete()
+    .eq('id', draftId)
+    .select('id')
+    .maybeSingle()
+  if (error) return failure('delete-failed', error)
+  if (!data) return notFound
+
+  const id = (data as { id?: unknown }).id
+  if (typeof id !== 'string' || id.length === 0) return integrity('delete')
+  return { ok: true, value: { id } }
+}

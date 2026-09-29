@@ -82,6 +82,30 @@ import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 export const MIN_TITLE_CHARS = 1
 export const MAX_TITLE_CHARS = 200
 
+/**
+ * The largest revision a caller may claim to have read: one below the largest
+ * a JS number can hold exactly.
+ *
+ * WHY ONE BELOW, AND WHY HERE. An expected revision exists for exactly one
+ * purpose -- to be compared and then incremented by the save. So the real rule
+ * is not "is this a revision" but "does this revision survive being incremented",
+ * and at Number.MAX_SAFE_INTEGER it does not: the repository would compute
+ * expectedRevision + 1, which is no longer a safe integer, write it, and then
+ * fail to read its own result back, because parseStoredRevision() in rows.ts
+ * refuses anything past MAX_SAFE_INTEGER. The write would land and the response
+ * would be a data-integrity error.
+ *
+ * THE ASYMMETRY WITH THE STORED PARSER IS DELIBERATE. parseStoredRevision still
+ * accepts MAX_SAFE_INTEGER, because a value already in the column can be READ
+ * exactly -- it just cannot be incremented again. A draft that somehow reached
+ * that revision stays readable and listable; only a further edit is refused,
+ * which is the honest answer rather than a silent overflow.
+ *
+ * Reaching this would take about nine quadrillion saves. The bound is not there
+ * because it is likely; it is there so the impossible state is impossible.
+ */
+export const MAX_EXPECTED_REVISION = Number.MAX_SAFE_INTEGER - 1
+
 // ---------------------------------------------------------------------------
 // Refusals. Fixed words, safe to log and safe for a route to branch on. Built
 // up per field rather than Extract<>ed down from one union, so each function's
@@ -213,11 +237,21 @@ export function checkEssay(value: unknown): EssayCheck {
  * string, which is why lib/resume/repo/resumeRepo.ts coerces with
  * `Number(row.revision)`. Coercing what the DATABASE returns is the repository's
  * business; this function guards what a CALLER sends.
+ *
+ * AND IT MUST SURVIVE BEING INCREMENTED. The upper bound is
+ * MAX_EXPECTED_REVISION, one below MAX_SAFE_INTEGER -- see that constant for why
+ * the ceiling here is deliberately stricter than the one parseStoredRevision()
+ * applies to a value it merely reads. Refusing here means the impossible update
+ * never reaches the database at all: no statement is issued, so nothing is
+ * written that could not then be read back.
  */
 export function checkExpectedRevision(value: unknown): RevisionCheck {
   if (typeof value !== 'number') return { ok: false, code: 'invalid-revision' }
   if (!Number.isSafeInteger(value)) return { ok: false, code: 'invalid-revision' }
   if (value < 1) return { ok: false, code: 'invalid-revision' }
+  // expectedRevision + 1 must still be a safe integer, or the repository would
+  // write a revision it could not read back.
+  if (value > MAX_EXPECTED_REVISION) return { ok: false, code: 'invalid-revision' }
   return { ok: true, revision: value }
 }
 
