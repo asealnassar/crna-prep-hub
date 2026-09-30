@@ -138,10 +138,16 @@ alter table public.statement_prompts
   add constraint statement_prompts_text_length
   check (char_length(btrim(prompt_text)) >= 1 and char_length(prompt_text) <= 5000);
 
--- NULL or a real count. `is null or` rather than a bare range, because a bare
--- range on a nullable column evaluates to NULL for a NULL value, and a CHECK
--- that evaluates to NULL PASSES -- so the bare form would silently permit
--- nothing while appearing to constrain something.
+-- NULL or a real count.
+--
+-- NOT because a bare range would be wrong. A PostgreSQL CHECK rejects a row
+-- only when its expression evaluates to FALSE; TRUE and NULL both satisfy it.
+-- `check (stated_max_words between 1 and 5000)` would therefore already permit
+-- NULL, because the comparison is itself NULL whenever the column is NULL.
+--
+-- The explicit `is null or` is retained for clarity: it states in the
+-- constraint text that NULL is a permitted value rather than an oversight, and
+-- it matches the form statement_prompts_cycle_format uses below.
 alter table public.statement_prompts
   drop constraint if exists statement_prompts_max_words_range;
 alter table public.statement_prompts

@@ -180,7 +180,7 @@ checks as (
                      where c.conrelid = (select oid from tbl)
                        and c.conname = 'statement_prompts_max_words_range') ilike '%is null%'
               then 'PASS'
-              else 'FAIL -- without an explicit NULL branch the CHECK evaluates NULL and PASSES' end
+              else 'FAIL -- expected the canonical explicit IS NULL OR form, required for clarity (a CHECK rejects only FALSE, so NULL already passes)' end
 
   union all
   select 323, 'application_cycle accepts only YYYY or YYYY-YYYY, anchored',
