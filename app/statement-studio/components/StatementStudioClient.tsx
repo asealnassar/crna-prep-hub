@@ -12,6 +12,10 @@ import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
 import { MAX_TITLE_CHARS } from '@/lib/statement/draft/validate'
 import type { DraftPromptSnapshot, StatementDraft } from '@/lib/statement/draft/rows'
 import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
+import {
+  PICKER_MESSAGES, promptForRequest, samePendingPrompt, savedPromptFromResponse,
+} from '@/lib/statement/draft/picker'
+import type { PendingPrompt } from '@/lib/statement/draft/picker'
 import PromptPicker from './PromptPicker'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
@@ -132,6 +136,26 @@ export default function StatementStudioClient({
    * is all-null together and a chosen prompt is all-present together, so storing
    * them separately would make a half-replaced snapshot representable.
    */
+  /**
+   * A PROMPT THE APPLICANT HAS CHOSEN BUT THE SERVER HAS NOT CONFIRMED.
+   *
+   * A REF, NOT STATE, because startSave is a useCallback that would close over
+   * a stale value: the instruction has to be the one that is true at the moment
+   * the request is built, exactly as essayRef serves the upload path.
+   *
+   * THREE LAYERS, NOT TWO. `null` here means nothing is pending; a PendingPrompt
+   * whose `promptId` is null means CLEAR the stored prompt. Collapsing those
+   * would make every keystroke wipe the applicant's prompt.
+   *
+   * RETIRED ONLY BY A SUCCESS THAT STILL MATCHES IT, by token -- see startSave.
+   * Every failure leaves it alone, so the engine's own next save re-sends it.
+   *
+   * NOTHING SETS IT IN THIS CHECKPOINT. The picker action is J2b; the mechanism
+   * is built and tested first, with the button still disabled, so the lifecycle
+   * is settled before any applicant can reach it.
+   */
+  const pendingPrompt = useRef<PendingPrompt | null>(null)
+
   const [prompt, setPrompt] = useState<DraftPromptSnapshot>(() => ({
     schoolId: draft.schoolId,
     promptId: draft.promptId,
@@ -226,6 +250,7 @@ export default function StatementStudioClient({
       alive.current = false
       snapshotRef.current = null
       uploadRef.current = null
+      pendingPrompt.current = null
       const waiting = settleWaiters.current
       settleWaiters.current = []
       for (const resolve of waiting) resolve(false)
@@ -239,9 +264,21 @@ export default function StatementStudioClient({
     async (revision: number, rawTitle: string, rawEssay: string) => {
       if (inFlight.current) return
 
+      // CAPTURED ONCE, SYNCHRONOUSLY, before anything can await. `captured` is
+      // this request's instruction and stays in its closure; the ref may move
+      // on while the request is in the air, and that is the whole point.
+      const captured = pendingPrompt.current
+
       // The snapshot is taken HERE, from the values this save is about, and is
       // never recomputed from React state afterwards.
-      const attempt = saveAttemptFor({ title: rawTitle, essay: rawEssay, revision })
+      const attempt = saveAttemptFor({
+        title: rawTitle,
+        essay: rawEssay,
+        revision,
+        // undefined when nothing is pending, so the body stays the three keys
+        // it has always been. null means clear; a uuid means select.
+        prompt: promptForRequest(captured),
+      })
       if (!attempt.ok) return
       const snapshot = attempt.snapshot
 
@@ -269,6 +306,24 @@ export default function StatementStudioClient({
           // The functional form reads the LIVE title at commit time, which is
           // what makes "has anyone typed since?" answerable at all.
           setTitle((current) => titleAfterSave({ snapshot, currentTitle: current }) ?? current)
+
+          // THE PROMPT COMES BACK FROM THE SERVER, NOT FROM WHAT WE SENT. The
+          // response carries the canonical four fields, parsed by the same
+          // strict rules a database row gets. A body that does not carry a
+          // usable snapshot changes nothing and retires nothing: claiming a
+          // selection was saved on the strength of an unreadable reply is the
+          // false success this guards against.
+          const saved = savedPromptFromResponse(body)
+          if (saved !== null) {
+            setPrompt(saved)
+            // RETIRED ONLY IF IT IS STILL THE SAME SELECTION, by token. If a
+            // newer one arrived during the request, the ref has moved and this
+            // comparison fails -- so the newer instruction stays pending and
+            // the engine's own dirty window schedules its save.
+            if (samePendingPrompt(pendingPrompt.current, captured)) {
+              pendingPrompt.current = null
+            }
+          }
         }
         setSave((state) => reduce(state, event))
       } catch {
@@ -521,6 +576,15 @@ export default function StatementStudioClient({
       // draft that was just loaded.
       snapshotRef.current = null
       uploadRef.current = null
+
+      // AND THE PENDING PROMPT GOES WITH IT. The reload adopts the server's
+      // draft entirely -- that is what resolves the conflict -- so a selection
+      // that never reached the server is gone, and the applicant is told rather
+      // than left to discover it. Retiring the ref also means an in-flight
+      // response cannot resurrect or retire anything afterwards: its `captured`
+      // token no longer matches, and snapshotRef above is already null.
+      const discarded = pendingPrompt.current !== null
+      pendingPrompt.current = null
       setTitle(outcome.draft.title)
       setEssay(outcome.draft.essay)
       essayRef.current = outcome.draft.essay
@@ -537,7 +601,13 @@ export default function StatementStudioClient({
       setCopied('idle')
       setImportNotice(null)
       setImportError(null)
+      // ONLY WHEN SOMETHING WAS ACTUALLY PENDING. A reload with no selection in
+      // flight has nothing to report, and a notice that always appears is a
+      // notice nobody reads.
+      if (discarded) setNotice(PICKER_MESSAGES.selectionDiscarded)
       // `reloaded` returns the engine to a clean state at the SERVER's revision.
+      // NO SAVE IS STARTED HERE: the discarded selection is not re-applied, so
+      // the reloaded draft is exactly the server's.
       setSave((state) =>
         reduce(state, { type: 'reloaded', at: Date.now(), revision: outcome.draft.revision })
       )

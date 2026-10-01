@@ -19,6 +19,8 @@
  */
 
 import type { SchoolOption } from './schoolPicker.ts'
+import { draftPromptFrom } from './rows.ts'
+import type { DraftPromptSnapshot } from './rows.ts'
 
 /** The endpoint, named once. Checkpoint G built it; this only addresses it. */
 export const PROMPTS_ENDPOINT = '/api/statement/prompts'
@@ -69,6 +71,16 @@ export const PICKER_MESSAGES = {
   failed: 'Those prompts could not be loaded. Try that school again.',
   /** The applicant is not signed in any more. */
   expired: 'Your session has expired. Sign in again to browse prompts.',
+  /**
+   * A conflict reload threw away a prompt choice that had not been saved.
+   *
+   * APPROVED WORDING, and it is shown ONLY when something was actually pending.
+   * A reload adopts the server's draft entirely -- that is what resolves the
+   * conflict -- so a selection that never reached the server is gone, and
+   * saying nothing would be the silent erasure this notice exists to prevent.
+   */
+  selectionDiscarded:
+    'Your unsaved prompt selection was not kept. Choose it again if you still want to use it.',
 } as const
 
 /** What a stated maximum reads as, including when a school states none. */
@@ -306,4 +318,125 @@ export function hasSavedPrompt(input: {
   readonly promptText: string | null
 }): boolean {
   return typeof input.promptId === 'string' && typeof input.promptText === 'string'
+}
+
+// ===========================================================================
+// THE PENDING SELECTION
+//
+// A prompt the applicant has CHOSEN but which has not reached the server yet.
+// It is not the draft's snapshot and it is not a preview: it is an instruction
+// in flight, and it has to survive every way a save can fail.
+// ===========================================================================
+
+/**
+ * One pending instruction, with an identity of its own.
+ *
+ * THE TOKEN IS THE POINT. A → B → A gives three selections whose uuids are
+ * two values, so comparing ids could not tell the first A from the third. A
+ * response for the first A would then retire the third, and the applicant's
+ * standing choice would vanish with no error anywhere. The token makes the
+ * three distinguishable: 1, 2, 3.
+ *
+ * MONOTONIC, NOT RANDOM, so a test can state exactly what it expects and a
+ * reader can see at a glance which of two selections came later.
+ *
+ * `promptId: null` IS AN INSTRUCTION, NOT AN ABSENCE. It means "clear the
+ * prompt". "Nothing pending" is the absence of a PendingPrompt altogether --
+ * null in place of the whole object -- which is why these are two layers rather
+ * than one nullable id.
+ */
+export interface PendingPrompt {
+  readonly token: number
+  readonly promptId: string | null
+}
+
+/**
+ * The next selection after whatever is pending now.
+ *
+ * DERIVED FROM THE PREVIOUS ONE rather than from a module-level counter, so
+ * this stays pure and two editors on one page cannot share a sequence.
+ */
+export function nextPendingPrompt(
+  previous: PendingPrompt | null,
+  promptId: string | null,
+): PendingPrompt {
+  return { token: (previous === null ? 0 : previous.token) + 1, promptId }
+}
+
+/**
+ * Whether two pending selections are THE SAME selection.
+ *
+ * BY TOKEN, never by promptId. This is the comparison that decides whether a
+ * response may retire what is pending, and it is the whole defence against an
+ * older response clearing a newer choice.
+ */
+export function samePendingPrompt(
+  a: PendingPrompt | null,
+  b: PendingPrompt | null,
+): boolean {
+  if (a === null || b === null) return false
+  return a.token === b.token
+}
+
+/**
+ * What to pass to statementSaveRequest's optional `prompt`.
+ *
+ * THREE STATES, AND THE FIRST ONE IS WHY THIS FUNCTION EXISTS: nothing pending
+ * must become `undefined`, not null. `undefined` omits the key and leaves the
+ * stored prompt alone; null CLEARS it. Collapsing them would make every
+ * ordinary keystroke wipe the applicant's prompt.
+ */
+export function promptForRequest(pending: PendingPrompt | null): string | null | undefined {
+  if (pending === null) return undefined
+  return pending.promptId
+}
+
+/**
+ * The canonical snapshot from a save or reload response, or null when the body
+ * does not carry a usable one.
+ *
+ * THE SAME STRICT PARSER rows.ts applies to a database row -- called, not
+ * repeated -- so the editor cannot disagree with the repository about what a
+ * coherent snapshot is. A prompt_id with no wording, a non-uuid school, a
+ * word limit out of range: all refused, and refused as a WHOLE, because a
+ * half-snapshot is not a snapshot.
+ *
+ * NULL MEANS "DO NOT ACT". The caller must neither update the display nor
+ * retire a pending selection on a null: claiming a selection was saved on the
+ * strength of a body this code could not read is exactly the false success this
+ * guards against.
+ */
+export function savedPromptFromResponse(body: unknown): DraftPromptSnapshot | null {
+  if (typeof body !== 'object' || body === null) return null
+  const draft = (body as { draft?: unknown }).draft
+  if (typeof draft !== 'object' || draft === null) return null
+  const fields = draft as Record<string, unknown>
+
+  const snapshot = draftPromptFrom({
+    schoolId: fields.schoolId,
+    promptId: fields.promptId,
+    promptText: fields.promptText,
+    statedMaxWords: fields.statedMaxWords,
+  })
+  return snapshot ?? null
+}
+
+/**
+ * Whether choosing this prompt is worth a write.
+ *
+ * NO, when the draft already answers it and nothing else is pending: a second
+ * identical save would consume a revision and move the retention clock to
+ * record a change that is not one.
+ *
+ * YES, when something IS pending, even for the same id -- because the pending
+ * instruction may be a CLEAR, and "the draft already answers this" says nothing
+ * about an instruction that has not landed.
+ */
+export function needsPromptWrite(input: {
+  readonly chosenId: string | null
+  readonly savedPromptId: string | null
+  readonly pending: PendingPrompt | null
+}): boolean {
+  if (input.pending !== null) return true
+  return input.chosenId !== input.savedPromptId
 }

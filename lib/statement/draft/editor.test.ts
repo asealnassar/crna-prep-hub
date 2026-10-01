@@ -556,8 +556,15 @@ test('THE PICKER IS HANDED THE SNAPSHOT AND NO WAY TO CHANGE IT', () => {
   ]) {
     assert.doesNotMatch(CLIENT, forbidden, 'no writer may reach the picker')
   }
-  // setPrompt is still called in exactly ONE place: the conflict reload.
-  assert.equal((CLIENT.match(/setPrompt\(/g) ?? []).length, 1)
+  // setPrompt is called in exactly TWO places, and BOTH take the server's
+  // snapshot: the conflict reload, and the successful-save reconciliation. The
+  // picker reaches neither.
+  assert.equal((CLIENT.match(/setPrompt\(/g) ?? []).length, 2)
+  assert.match(CLIENT, /setPrompt\(\{\n\s*schoolId: outcome\.draft\.schoolId/)
+  assert.match(CLIENT, /setPrompt\(saved\)/)
+  // Neither is ever handed a browser-authored value.
+  assert.doesNotMatch(CLIENT, /setPrompt\(preview/)
+  assert.doesNotMatch(CLIENT, /setPrompt\(choice/)
 })
 
 test('PROMPT METADATA IS CARRIED BUT NEVER SENT', () => {
@@ -658,8 +665,10 @@ test('THE SHARED RESUME AUTOSAVE ENGINE IS UNTOUCHED', () => {
 test('the carried prompt is ONE piece of state, replaced wholesale', () => {
   // Four separate useStates would make a half-replaced snapshot representable.
   assert.match(CLIENT, /const \[prompt, setPrompt\] = useState<DraftPromptSnapshot>/)
-  // Set in exactly two places: the initial seed and the reload.
-  assert.equal((CLIENT.match(/setPrompt\(/g) ?? []).length, 1, 'only the reload replaces it')
+  // Replaced in exactly two places, both from a SERVER response: the conflict
+  // reload, and the successful-save reconciliation.
+  assert.equal((CLIENT.match(/setPrompt\(/g) ?? []).length, 2)
+  assert.match(CLIENT, /const saved = savedPromptFromResponse\(body\)/)
   // And the reload sets it beside the essay and the revision, not separately.
   const reload = CLIENT.slice(
     CLIENT.indexOf('const reloadLatest'),
@@ -905,19 +914,122 @@ test('prompt: SAVE_BLOCKED_MESSAGES extends BLOCKED_MESSAGES without changing it
   assert.equal(new Set(messages).size, messages.length)
 })
 
-test('prompt: THE EDITOR STILL SUPPLIES NO PROMPT -- the picker is not wired', () => {
-  // Ordinary typing goes through statementDriverAction, which calls the builder
-  // with three fields. Until the editor passes a pending selection, every
-  // autosave body is the original three keys.
-  assert.doesNotMatch(CLIENT, /prompt:/)
-  assert.doesNotMatch(CLIENT, /saveAttemptFor\(\{[^}]*prompt/)
-  assert.doesNotMatch(CLIENT, /pendingPrompt/)
+test('prompt: THE PENDING SELECTION IS PLUMBED BUT NOTHING CAN SET IT', () => {
+  // Retargeted from "the editor supplies no prompt": the lifecycle exists now.
+  // The narrower invariant is that no APPLICANT action can reach it -- the
+  // picker has no callback and its button is still disabled -- so every save is
+  // still the original three keys.
+  assert.match(CLIENT, /const pendingPrompt = useRef<PendingPrompt \| null>\(null\)/)
+  assert.match(CLIENT, /prompt: promptForRequest\(captured\)/)
+
+  // THE REF IS ONLY EVER CLEARED, never set to a selection. Four sites: the
+  // capture (a read), the success retirement, the reload discard, and unmount.
+  const writes = CLIENT.match(/pendingPrompt\.current = [^\n]+/g) ?? []
+  assert.deepEqual([...new Set(writes)], ['pendingPrompt.current = null'],
+    'nothing in this checkpoint may assign a selection')
+  assert.doesNotMatch(CLIENT, /pendingPrompt\.current = nextPendingPrompt/)
+  assert.doesNotMatch(CLIENT, /onUsePrompt/)
+
   // And the disabled button is still disabled.
   const PICKER = readFileSync(
     path('../../../app/statement-studio/components/PromptPicker.tsx'), 'utf8'
   )
   assert.match(PICKER, /disabled\n\s*title="Attaching a prompt to a draft is not available yet\."/)
   assert.equal(PICKER.includes("method: 'PATCH'"), false)
+  assert.equal(PICKER.includes('onUsePrompt'), false)
+})
+
+test('lifecycle: the SAVE SITE captures the pending selection exactly once', () => {
+  // Synchronously, before anything can await, and the captured value stays in
+  // the request's closure -- the ref may move on while it is in the air.
+  const start = CLIENT.slice(CLIENT.indexOf('const startSave'), CLIENT.indexOf('useEffect(() => {\n    const action'))
+  assert.ok(start.length > 0, 'startSave was located')
+
+  assert.equal((start.match(/const captured = pendingPrompt\.current/g) ?? []).length, 1)
+  // Captured BEFORE the attempt is built, and the attempt is built before the
+  // fetch -- so nothing awaited can change what this request sends.
+  assert.ok(start.indexOf('const captured') < start.indexOf('saveAttemptFor({'))
+  assert.ok(start.indexOf('saveAttemptFor({') < start.indexOf('await fetch('))
+  assert.match(start, /prompt: promptForRequest\(captured\)/)
+  // And the ref is not re-read after the await.
+  const afterFetch = start.slice(start.indexOf('await fetch('))
+  assert.equal(afterFetch.includes('pendingPrompt.current = pendingPrompt'), false)
+})
+
+test('lifecycle: RETIREMENT IS GUARDED BY IDENTITY AND BY A USABLE SNAPSHOT', () => {
+  const start = CLIENT.slice(CLIENT.indexOf('const startSave'), CLIENT.indexOf('useEffect(() => {\n    const action'))
+
+  // Only on save-succeeded, only for this snapshot, only when the server's
+  // snapshot parsed, and only when the pending selection is still the same one.
+  assert.match(start, /event\.type === 'save-succeeded' && snapshotRef\.current === snapshot/)
+  assert.match(start, /const saved = savedPromptFromResponse\(body\)/)
+  assert.match(start, /if \(saved !== null\) \{/)
+  assert.match(start, /if \(samePendingPrompt\(pendingPrompt\.current, captured\)\) \{/)
+
+  // THE ORDER MATTERS: the snapshot must be read before the retirement, so a
+  // malformed body retires nothing.
+  assert.ok(start.indexOf('const saved = savedPromptFromResponse') < start.indexOf('samePendingPrompt('))
+  // And the display is only ever set from the server's snapshot.
+  assert.match(start, /setPrompt\(saved\)/)
+})
+
+test('lifecycle: NO FAILURE PATH TOUCHES THE PENDING SELECTION', () => {
+  const start = CLIENT.slice(CLIENT.indexOf('const startSave'), CLIENT.indexOf('useEffect(() => {\n    const action'))
+
+  // The catch block and the finally block retire the SNAPSHOT, never the
+  // pending prompt -- so a network error, a 409, a 401, a 400 and a 500 all
+  // leave the selection standing for the engine's next save.
+  const tail = start.slice(start.indexOf('} catch {'))
+  assert.ok(tail.length > 0, 'the catch/finally was located')
+  assert.equal(tail.includes('pendingPrompt'), false, 'failures must not clear it')
+  assert.match(tail, /if \(snapshotRef\.current === snapshot\) snapshotRef\.current = null/)
+  // No new retry machinery was added.
+  assert.equal((CLIENT.match(/setTimeout\(/g) ?? []).length, 1, 'only the driver’s wait timer')
+  assert.equal((CLIENT.match(/type: 'retry'/g) ?? []).length, 1, 'only the manual retry')
+})
+
+test('lifecycle: THE CONFLICT RELOAD DISCARDS IT, AND SAYS SO', () => {
+  const reload = CLIENT.slice(CLIENT.indexOf('const reloadLatest'), CLIENT.indexOf('const retrySave'))
+
+  // Recorded before it is cleared, so the notice can be conditional.
+  assert.match(reload, /const discarded = pendingPrompt\.current !== null/)
+  assert.match(reload, /pendingPrompt\.current = null/)
+  assert.ok(reload.indexOf('const discarded') < reload.indexOf('pendingPrompt.current = null'))
+
+  // ONLY WHEN SOMETHING WAS PENDING.
+  assert.match(reload, /if \(discarded\) setNotice\(PICKER_MESSAGES\.selectionDiscarded\)/)
+  // The server's snapshot still replaces the display, as before.
+  assert.match(reload, /setPrompt\(\{\n\s*schoolId: outcome\.draft\.schoolId/)
+  // AND NO SAVE IS STARTED: the discarded selection is not re-applied.
+  assert.equal(reload.includes('startSave('), false)
+  assert.equal(reload.includes("type: 'edited'"), false)
+  assert.match(reload, /type: 'reloaded'/)
+})
+
+test('lifecycle: an in-flight response cannot act after a reload', () => {
+  const reload = CLIENT.slice(CLIENT.indexOf('const reloadLatest'), CLIENT.indexOf('const retrySave'))
+  // Both guards are disarmed by the reload: the snapshot identity (so no title
+  // or prompt is written) and the pending identity (so nothing is retired).
+  assert.match(reload, /snapshotRef\.current = null/)
+  assert.match(reload, /pendingPrompt\.current = null/)
+  // Unmount does the same.
+  assert.match(CLIENT, /alive\.current = false\n\s*snapshotRef\.current = null\n\s*uploadRef\.current = null\n\s*pendingPrompt\.current = null/)
+})
+
+test('lifecycle: STILL ONE PATCH, ONE BODY, ONE ENGINE', () => {
+  // No second persistence request and no second save path.
+  assert.equal((CLIENT.match(/method: 'PATCH'/g) ?? []).length, 1)
+  assert.equal((CLIENT.match(/JSON\.stringify\(/g) ?? []).length, 1)
+  assert.equal(CLIENT.split('body: JSON.stringify(attempt.body)').length - 1, 1)
+  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
+  // And the engine is used through its public events only -- the same six.
+  assert.deepEqual(
+    [...new Set((CLIENT.match(/type: '[a-z-]+'/g) ?? []))].sort(),
+    [
+      "type: 'edited'", "type: 'flush'", "type: 'reloaded'",
+      "type: 'retry'", "type: 'save-failed'", "type: 'save-started'",
+    ]
+  )
 })
 
 // =============================================== PART 3: recovery, runtime
@@ -1685,7 +1797,18 @@ test('a conflict preserves the local title, and no stale snapshot may alter it',
   // A snapshot from the save that conflicted exists, but the component only
   // reconciles on save-succeeded, and the reload retires it outright.
   const reload = CLIENT.slice(CLIENT.indexOf('const reloadLatest'), CLIENT.indexOf('const retrySave'))
-  assert.match(reload, /snapshotRef\.current = null\n\s*uploadRef\.current = null\n\s*setTitle\(outcome\.draft\.title\)/)
+  // ORDERING, not adjacency: both refs are retired BEFORE the local version is
+  // replaced. The pending prompt is now retired between them, so the lines are
+  // no longer consecutive -- but the guarantee is the order, not the spacing.
+  for (const retired of [
+    'snapshotRef.current = null', 'uploadRef.current = null', 'pendingPrompt.current = null',
+  ]) {
+    assert.ok(reload.includes(retired), `${retired} must happen in the reload`)
+    assert.ok(
+      reload.indexOf(retired) < reload.indexOf('setTitle(outcome.draft.title)'),
+      `${retired} must come before the local version is replaced`
+    )
+  }
   // Identity, not a flag: a response holding a retired snapshot cannot match.
   assert.match(CLIENT, /snapshotRef\.current === snapshot/)
   assert.match(CLIENT, /if \(snapshotRef\.current === snapshot\) snapshotRef\.current = null/)

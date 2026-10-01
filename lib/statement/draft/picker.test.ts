@@ -4,11 +4,17 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   PICKER_MESSAGES, PROMPTS_ENDPOINT, directoryNotice, hasSavedPrompt, matchingSchools,
-  mayApplyPrompts, previewIsSaved, promptListFrom, promptsPath, schoolLabel, wordLimitLabel,
+  mayApplyPrompts, needsPromptWrite, nextPendingPrompt, previewIsSaved, promptForRequest,
+  promptListFrom, promptsPath, samePendingPrompt, savedPromptFromResponse, schoolLabel,
+  wordLimitLabel,
 } from './picker.ts'
+import type { PendingPrompt } from './picker.ts'
+// Imported ONLY to build the three request bodies this lifecycle produces.
+import { statementSaveRequest } from './editor.ts'
 import type { SchoolOption } from './schoolPicker.ts'
 // Imported ONLY to assert the response parser and the ROW parser agree.
 import { promptOptionFromRow } from './promptRepo.ts'
+import { draftPromptFrom } from './rows.ts'
 // Imported ONLY to assert the technical storage ceiling is a different number
 // from anything this picker displays.
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
@@ -368,6 +374,277 @@ test('saved: A STORED PROMPT ABSENT FROM THE CATALOG STAYS VISIBLE', () => {
     assert.equal(hasSavedPrompt({ promptId: P1, promptText: WORDING }), true)
     assert.equal(previewIsSaved({ previewId: P2, savedPromptId: P1 }), false)
   }
+})
+
+// ===================================================== the pending selection
+
+const SCHOOL_A = 'aaaaaaaa-0000-4000-8000-000000000001'
+const DOC = { title: 'My essay', essay: 'Essay content', revision: 4 }
+
+/** The body a save would send for a given pending selection. */
+const bodyFor = (pending: PendingPrompt | null) => {
+  const request = statementSaveRequest({ ...DOC, prompt: promptForRequest(pending) })
+  assert.equal(request.ok, true)
+  return request.ok ? (request.body as Record<string, unknown>) : null
+}
+
+/** A save response carrying a canonical snapshot. */
+const savedBody = (over: Record<string, unknown> = {}) => ({
+  draft: {
+    id: 'd1e2f3a4-0000-4000-8000-000000000001',
+    title: 'My essay', essay: 'Essay content', revision: 5,
+    createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
+    schoolId: SCHOOL_A, promptId: P1, promptText: WORDING, statedMaxWords: 500,
+    ...over,
+  },
+})
+
+test('pending: TOKENS MAKE A -> B -> A THREE DISTINGUISHABLE SELECTIONS', () => {
+  // The whole reason a token exists. Comparing uuids could not tell the first A
+  // from the third, so a response for the first would retire the third and the
+  // applicant's standing choice would vanish with no error anywhere.
+  const first = nextPendingPrompt(null, P1)
+  const second = nextPendingPrompt(first, P2)
+  const third = nextPendingPrompt(second, P1)
+
+  assert.deepEqual([first.token, second.token, third.token], [1, 2, 3])
+  assert.equal(first.promptId, P1)
+  assert.equal(third.promptId, P1, 'the same uuid as the first')
+  assert.notEqual(first.token, third.token, 'but NOT the same selection')
+  assert.equal(samePendingPrompt(first, third), false)
+  assert.equal(new Set([first.token, second.token, third.token]).size, 3)
+})
+
+test('pending: a clear is a selection too, with its own token', () => {
+  const select = nextPendingPrompt(null, P1)
+  const clear = nextPendingPrompt(select, null)
+  assert.equal(clear.token, 2)
+  assert.equal(clear.promptId, null)
+  assert.equal(samePendingPrompt(select, clear), false)
+})
+
+test('pending: identity is BY TOKEN, and nothing matches nothing', () => {
+  const a = nextPendingPrompt(null, P1)
+  assert.equal(samePendingPrompt(a, a), true)
+  assert.equal(samePendingPrompt(a, { token: a.token, promptId: P2 }), true,
+    'the token is the identity, not the id it carries')
+  assert.equal(samePendingPrompt(a, null), false)
+  assert.equal(samePendingPrompt(null, a), false)
+  assert.equal(samePendingPrompt(null, null), false, 'no pending selection is not a match')
+})
+
+// --------------------------------------------------- what the request carries
+
+test('request: NOTHING PENDING produces the original three keys', () => {
+  const body = bodyFor(null)
+  assert.deepEqual(Object.keys(body as object), ['title', 'essay', 'expectedRevision'])
+  assert.equal('promptId' in (body as object), false)
+  assert.equal(promptForRequest(null), undefined)
+})
+
+test('request: a PENDING UUID puts that id in the same PATCH body', () => {
+  const body = bodyFor(nextPendingPrompt(null, P1))
+  assert.equal((body as Record<string, unknown>).promptId, P1)
+  assert.deepEqual(Object.keys(body as object).sort(),
+    ['essay', 'expectedRevision', 'promptId', 'title'])
+  assert.equal(promptForRequest(nextPendingPrompt(null, P1)), P1)
+})
+
+test('request: a PENDING CLEAR puts promptId: null in the same PATCH body', () => {
+  const body = bodyFor(nextPendingPrompt(null, null))
+  assert.equal((body as Record<string, unknown>).promptId, null)
+  assert.equal('promptId' in (body as object), true)
+  assert.equal(promptForRequest(nextPendingPrompt(null, null)), null)
+  // AND IT IS NOT THE SAME AS NOTHING PENDING. Collapsing these would make
+  // every keystroke wipe the applicant's prompt.
+  assert.notEqual(promptForRequest(nextPendingPrompt(null, null)), promptForRequest(null))
+})
+
+// ----------------------------------------------- the response reconciliation
+
+test('response: the SAVED SNAPSHOT COMES FROM THE SERVER, not from what we sent', () => {
+  // The server resolved the school, the wording and the limit; the browser sent
+  // only an id. So the display must take the server's four fields.
+  const saved = savedPromptFromResponse(savedBody())
+  assert.notEqual(saved, null)
+  assert.deepEqual(saved, {
+    schoolId: SCHOOL_A, promptId: P1, promptText: WORDING, statedMaxWords: 500,
+  })
+})
+
+test('response: a GENERIC server snapshot comes back as four nulls', () => {
+  const saved = savedPromptFromResponse(savedBody({
+    schoolId: null, promptId: null, promptText: null, statedMaxWords: null,
+  }))
+  assert.deepEqual(saved, {
+    schoolId: null, promptId: null, promptText: null, statedMaxWords: null,
+  })
+})
+
+test('response: A MALFORMED SNAPSHOT RETURNS NULL -- never a false success', () => {
+  // The caller must then neither update the display nor retire the pending
+  // selection. Claiming a selection was saved on the strength of a body this
+  // code could not read is the false success this guards against.
+  const broken: unknown[] = [
+    null, undefined, 'draft', 42, [], {}, { draft: null }, { draft: 'x' }, { draft: 42 },
+    savedBody({ promptId: undefined }),
+    savedBody({ schoolId: undefined }),
+    savedBody({ promptText: undefined }),
+    savedBody({ statedMaxWords: undefined }),
+    savedBody({ promptId: 'not-a-uuid' }),
+    savedBody({ schoolId: 'not-a-uuid' }),
+    savedBody({ promptText: '   ' }),
+    savedBody({ promptText: null }),             // partial: an id with no wording
+    savedBody({ schoolId: null }),               // partial: wording with no school
+    savedBody({ statedMaxWords: 0 }),
+    savedBody({ statedMaxWords: 5001 }),
+    savedBody({ statedMaxWords: '500' }),
+  ]
+  for (const body of broken) {
+    assert.equal(savedPromptFromResponse(body), null, JSON.stringify(body) ?? String(body))
+  }
+})
+
+test('response: the strict parser is ROWS.TS’s, not a second opinion', () => {
+  // savedPromptFromResponse calls draftPromptFrom rather than repeating it, so
+  // the editor cannot disagree with the repository about a coherent snapshot.
+  const cases: Record<string, unknown>[] = [
+    {},
+    { statedMaxWords: null },
+    { schoolId: null, promptId: null, promptText: null, statedMaxWords: null },
+    { promptText: null }, { schoolId: null }, { statedMaxWords: 5001 },
+    { promptText: 'a'.repeat(5001) },
+  ]
+  for (const over of cases) {
+    const viaResponse = savedPromptFromResponse(savedBody(over)) !== null
+    const row = { schoolId: SCHOOL_A, promptId: P1, promptText: WORDING, statedMaxWords: 500, ...over }
+    const viaRows = draftPromptFrom(row) !== undefined
+    assert.equal(viaResponse, viaRows, `disagreed about ${JSON.stringify(over)}`)
+  }
+})
+
+// ------------------------------------------------------------- the races
+
+test('race: A SUCCEEDS WITH NO NEWER CHOICE -> A is retired', () => {
+  // The simple case. `current` models the component's ref.
+  let current: PendingPrompt | null = nextPendingPrompt(null, P1)
+  const captured = current                       // startSave captures it
+
+  // …the response arrives, carrying a usable snapshot.
+  assert.notEqual(savedPromptFromResponse(savedBody()), null)
+  assert.equal(samePendingPrompt(current, captured), true)
+  if (samePendingPrompt(current, captured)) current = null
+  assert.equal(current, null, 'nothing is left pending')
+})
+
+test('race: A STARTS, B ARRIVES, A SUCCEEDS -> B REMAINS PENDING', () => {
+  // The required scenario.
+  let current: PendingPrompt | null = nextPendingPrompt(null, P1)   // choose A
+  const captured = current                                          // A's PATCH leaves
+  current = nextPendingPrompt(current, P2)                           // choose B mid-flight
+
+  // A's response lands, with the server's snapshot for A.
+  const saved = savedPromptFromResponse(savedBody({ promptId: P1 }))
+  assert.notEqual(saved, null, 'the display takes the server’s answer for A')
+  assert.equal(saved?.promptId, P1)
+
+  // B MUST SURVIVE.
+  assert.equal(samePendingPrompt(current, captured), false, 'the tokens differ')
+  if (samePendingPrompt(current, captured)) current = null
+  assert.notEqual(current, null)
+  assert.equal(current?.promptId, P2)
+  assert.equal(current?.token, 2)
+  // And the next save sends B, in the same three-plus-one body shape.
+  assert.equal((bodyFor(current) as Record<string, unknown>).promptId, P2)
+})
+
+test('race: A -> B -> A, and the FIRST A’s response must not retire the FINAL A', () => {
+  // The case uuid comparison cannot solve.
+  let current: PendingPrompt | null = nextPendingPrompt(null, P1)   // A
+  const capturedFirstA = current                                    // A's PATCH leaves
+  current = nextPendingPrompt(current, P2)                           // B
+  current = nextPendingPrompt(current, P1)                           // A again
+
+  // Same uuid as the captured one…
+  assert.equal(current?.promptId, capturedFirstA.promptId)
+  // …but NOT the same selection.
+  assert.equal(samePendingPrompt(current, capturedFirstA), false)
+  if (samePendingPrompt(current, capturedFirstA)) current = null
+  assert.notEqual(current, null, 'the final A survives')
+  assert.equal(current?.token, 3)
+})
+
+test('race: A MALFORMED SUCCESS RETIRES NOTHING', () => {
+  let current: PendingPrompt | null = nextPendingPrompt(null, P1)
+  const captured = current
+
+  const saved = savedPromptFromResponse(savedBody({ promptText: null }))
+  assert.equal(saved, null)
+  // The component's guard is `if (saved !== null)`, so neither the display nor
+  // the retirement happens. The selection stays pending.
+  if (saved !== null && samePendingPrompt(current, captured)) current = null
+  assert.notEqual(current, null, 'the selection is NOT claimed as saved')
+  assert.equal(current?.promptId, P1)
+})
+
+test('race: EVERY FAILURE LEAVES THE SELECTION PENDING', () => {
+  // Network throw, 400, 401, 409, 422, 500, and a 2xx whose revision is
+  // unreadable. None of them produces a usable snapshot, so none retires.
+  for (const body of [
+    null, { error: 'nope' }, { draft: {} }, { draft: null },
+  ]) {
+    let current: PendingPrompt | null = nextPendingPrompt(null, P1)
+    const captured = current
+    const saved = savedPromptFromResponse(body)
+    assert.equal(saved, null)
+    if (saved !== null && samePendingPrompt(current, captured)) current = null
+    assert.notEqual(current, null, JSON.stringify(body) ?? 'throw')
+  }
+})
+
+test('race: a MANUAL RETRY sends the CURRENT selection, not a captured one', () => {
+  // retrySave dispatches `retry`, which makes the driver save again -- and
+  // startSave re-reads the ref, so the newest instruction goes out.
+  let current: PendingPrompt | null = nextPendingPrompt(null, P1)
+  const capturedByTheFailedSave = current
+  current = nextPendingPrompt(current, P2)      // chosen after the failure
+
+  assert.equal((bodyFor(current) as Record<string, unknown>).promptId, P2)
+  assert.notEqual((bodyFor(current) as Record<string, unknown>).promptId,
+    capturedByTheFailedSave.promptId)
+})
+
+// ------------------------------------------------- the no-redundant-write rule
+
+test('write: choosing the ALREADY SAVED prompt with nothing pending is not a write', () => {
+  // A second identical save would consume a revision and move the retention
+  // clock to record a change that is not one.
+  assert.equal(needsPromptWrite({ chosenId: P1, savedPromptId: P1, pending: null }), false)
+  assert.equal(needsPromptWrite({ chosenId: P2, savedPromptId: P1, pending: null }), true)
+  // A generic draft: choosing anything is a change; clearing nothing is not.
+  assert.equal(needsPromptWrite({ chosenId: P1, savedPromptId: null, pending: null }), true)
+  assert.equal(needsPromptWrite({ chosenId: null, savedPromptId: null, pending: null }), false)
+  // Clearing a saved prompt IS a change.
+  assert.equal(needsPromptWrite({ chosenId: null, savedPromptId: P1, pending: null }), true)
+})
+
+test('write: anything PENDING means a write, even for the saved id', () => {
+  // The pending instruction may be a CLEAR, and "the draft already answers
+  // this" says nothing about an instruction that has not landed.
+  const pendingClear = nextPendingPrompt(null, null)
+  assert.equal(needsPromptWrite({ chosenId: P1, savedPromptId: P1, pending: pendingClear }), true)
+})
+
+// ----------------------------------------------- the conflict-reload notice
+
+test('reload: the approved discard notice is exact', () => {
+  assert.equal(
+    PICKER_MESSAGES.selectionDiscarded,
+    'Your unsaved prompt selection was not kept. Choose it again if you still want to use it.'
+  )
+  // Distinct from every other notice, so it is its own state.
+  const messages = Object.values(PICKER_MESSAGES)
+  assert.equal(new Set(messages).size, messages.length)
 })
 
 // ====================================================== the components' source
