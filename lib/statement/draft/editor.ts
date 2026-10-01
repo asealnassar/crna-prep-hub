@@ -3,7 +3,8 @@ import {
 } from '../../resume/draft/autosave.ts'
 import { checkDraftUpdate, checkTitle, type DraftRefusal, type DraftUpdateInput } from './validate.ts'
 import { isDraftId } from './http.ts'
-import { parseStoredRevision } from './rows.ts'
+import { draftPromptFrom, parseStoredRevision } from './rows.ts'
+import type { DraftPromptSnapshot } from './rows.ts'
 import { SAVE_MESSAGES } from './save.ts'
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 
@@ -330,8 +331,17 @@ export const NAV_MESSAGES = {
     'Opening a copy in another tab would leave unsaved work behind here. Save or resolve this first.',
 } as const
 
-/** A persisted draft, as the reload accepted it. */
-export interface ReloadedDraft {
+/**
+ * A persisted draft, as the reload accepted it.
+ *
+ * THE PROMPT SNAPSHOT IS PART OF IT, and that is the whole point of widening
+ * this type: a reload replaces what the editor is holding, so if it did not
+ * carry the four prompt fields the editor would keep the LOSING revision's
+ * prompt beside the winning revision's essay. The four come from
+ * DraftPromptSnapshot, which is the same type rows.ts produces from a database
+ * row -- one shape, one set of rules, both directions.
+ */
+export interface ReloadedDraft extends DraftPromptSnapshot {
   readonly id: string
   readonly title: string
   readonly essay: string
@@ -384,7 +394,36 @@ export function reloadOutcomeFrom(input: {
     const checked = checkTitle(title)
     if (!checked.ok) return { ok: false, message: RELOAD_MESSAGES.unreadable }
 
-    return { ok: true, draft: { id, title: checked.title, essay, revision } }
+    // THE PROMPT SNAPSHOT, by the same rules rows.ts applies to a stored row --
+    // the rules are not repeated here, they are called.
+    //
+    // AN ABSENT FIELD IS NOT A NULL ONE. draftPromptFrom() refuses undefined, so
+    // a response that omits the four -- a stale deployment, a cached body, a
+    // proxy that rewrote it -- is unreadable rather than silently generic.
+    // Treating absence as "no prompt" would make a reload quietly discard the
+    // applicant's prompt selection, which is exactly the loss this parser
+    // exists to prevent.
+    const prompt = draftPromptFrom({
+      schoolId: field(draft, 'schoolId'),
+      promptId: field(draft, 'promptId'),
+      promptText: field(draft, 'promptText'),
+      statedMaxWords: field(draft, 'statedMaxWords'),
+    })
+    if (prompt === undefined) return { ok: false, message: RELOAD_MESSAGES.unreadable }
+
+    return {
+      ok: true,
+      draft: {
+        id,
+        title: checked.title,
+        essay,
+        revision,
+        schoolId: prompt.schoolId,
+        promptId: prompt.promptId,
+        promptText: prompt.promptText,
+        statedMaxWords: prompt.statedMaxWords,
+      },
+    }
   }
 
   if (status === 401) return { ok: false, message: RELOAD_MESSAGES.expired }

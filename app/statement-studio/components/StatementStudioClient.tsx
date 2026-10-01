@@ -10,7 +10,7 @@ import {
 } from '@/lib/resume/draft/autosave'
 import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
 import { MAX_TITLE_CHARS } from '@/lib/statement/draft/validate'
-import type { StatementDraft } from '@/lib/statement/draft/rows'
+import type { DraftPromptSnapshot, StatementDraft } from '@/lib/statement/draft/rows'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
   ACCEPT_ATTRIBUTE,
@@ -71,8 +71,16 @@ const LIBRARY = '/statement-studio'
  * simply sits there, complete and visibly unsaved, issuing no requests at all.
  * An import never touches the title.
  *
- * Still deferred: analysis, schools, prompts, version history, delete,
- * drag-and-drop, upload history.
+ * THE PROMPT SNAPSHOT IS CARRIED, NOT CHOSEN. The four fields the server read
+ * arrive on the draft, are held in one piece of state, and are replaced wholesale
+ * by a successful reload -- which is what stops a conflict recovery keeping the
+ * losing revision's prompt beside the winning revision's essay. Nothing here
+ * chooses a prompt: there is no picker, no catalog request, and no save sends
+ * one. An ordinary autosave still sends exactly title, essay and
+ * expectedRevision.
+ *
+ * Still deferred: analysis, the school/prompt PICKER and its catalog request,
+ * version history, delete, drag-and-drop, upload history.
  */
 export default function StatementStudioClient({ draft }: { draft: StatementDraft }) {
   const router = useRouter()
@@ -80,6 +88,28 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
   /** Read-only, but stateful: a reload may bring a title changed elsewhere. */
   const [title, setTitle] = useState(draft.title)
   const [essay, setEssay] = useState(draft.essay)
+  /**
+   * WHICH PROMPT THIS DRAFT ANSWERS, as the server read it. Stateful for one
+   * reason only at this checkpoint: a conflict reload must be able to replace it.
+   *
+   * NOTHING IN THE UI SETS IT AND NOTHING YET READS IT. There is no picker, no
+   * catalog fetch, and no save sends it -- the four values arrive on the
+   * server-rendered draft, are held here, and are replaced wholesale by a
+   * successful reload. They are NOT derived from anything: not from the essay,
+   * not from a school list, not from a previous selection. The picker
+   * checkpoint is what will finally read them; until then this state exists so
+   * that a conflict reload has somewhere correct to put the server's prompt.
+   *
+   * ONE PIECE OF STATE, NOT FOUR, because the four are one fact. A generic draft
+   * is all-null together and a chosen prompt is all-present together, so storing
+   * them separately would make a half-replaced snapshot representable.
+   */
+  const [prompt, setPrompt] = useState<DraftPromptSnapshot>(() => ({
+    schoolId: draft.schoolId,
+    promptId: draft.promptId,
+    promptText: draft.promptText,
+    statedMaxWords: draft.statedMaxWords,
+  }))
   /** THE INITIAL REVISION IS THE SERVER'S. Never a literal 1. */
   const [save, setSave] = useState<AutosaveState>(() => initialState(draft.revision))
   const [blocked, setBlocked] = useState<string | null>(null)
@@ -466,6 +496,16 @@ export default function StatementStudioClient({ draft }: { draft: StatementDraft
       setTitle(outcome.draft.title)
       setEssay(outcome.draft.essay)
       essayRef.current = outcome.draft.essay
+      // REPLACED WHOLESALE, in the same step as the essay and the revision.
+      // Not merged, not kept when the server's is null: whatever the losing
+      // revision held locally is gone, because the draft on screen is now the
+      // server's draft and its prompt is the server's prompt.
+      setPrompt({
+        schoolId: outcome.draft.schoolId,
+        promptId: outcome.draft.promptId,
+        promptText: outcome.draft.promptText,
+        statedMaxWords: outcome.draft.statedMaxWords,
+      })
       setCopied('idle')
       setImportNotice(null)
       setImportError(null)

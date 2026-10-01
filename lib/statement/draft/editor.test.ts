@@ -12,6 +12,9 @@ import {
 } from '../../resume/draft/autosave.ts'
 import { SAVE_MESSAGES, saveEventFrom } from './save.ts'
 import { MAX_TITLE_CHARS, checkTitle } from './validate.ts'
+// Imported ONLY to assert the reload parser and the row parser are the SAME
+// rules, not two copies that could drift.
+import { draftPromptFrom } from './rows.ts'
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 import {
   BLOCKED_MESSAGES,
@@ -474,10 +477,14 @@ test('none of the deferred features crept in', () => {
     // are expected now; upload.test.ts owns their invariants. These remain out
     // of scope.
     /\/api\/analyze-statement/, /recordStatementAttempt/,
-    /schoolId/, /promptId/,
     /method: 'DELETE'/,
     /versionHistory/, /\bmerge\b/i,
     /onDrop/, /onDragOver/, /dataTransfer/,
+    // THE PICKER IS STILL DEFERRED. The editor now CARRIES prompt metadata --
+    // see the test below -- but it cannot choose any: no catalog endpoint, no
+    // school list, no control of any kind.
+    /\/api\/statement\/prompts/, /\bschools\b/, /<select/, /<option/,
+    /setSchool/, /listPrompts/, /readActivePrompt/, /promptSelectionOf/,
   ]) {
     assert.doesNotMatch(CLIENT, deferred, `${deferred} belongs to a later step`)
   }
@@ -492,12 +499,141 @@ test('none of the deferred features crept in', () => {
   )
 })
 
+test('PROMPT METADATA IS CARRIED BUT NEVER SENT', () => {
+  // The precise invariant that replaces the old blanket "no promptId anywhere".
+  // The editor legitimately knows the four fields now -- it has to, or a reload
+  // would drop them -- and the line that matters is narrower: nothing prompt
+  // shaped may enter a REQUEST.
+
+  // 1. Every use of promptId flows SERVER -> STATE, and never the other way.
+  const promptIdUses = [...new Set(CLIENT.match(/[\w.]*promptId[\w.]*/g) ?? [])].sort()
+  assert.deepEqual(promptIdUses, [
+    'draft.promptId',           // seeded from the server-rendered draft
+    'outcome.draft.promptId',   // replaced by a successful reload
+    'promptId',                 // the property name in those two objects
+  ].sort())
+
+  // 2. The same for the other three, which are never read back at all yet.
+  for (const field of ['schoolId', 'promptText', 'statedMaxWords']) {
+    const uses = [...new Set(CLIENT.match(new RegExp(`[\\w.]*${field}[\\w.]*`, 'g')) ?? [])].sort()
+    assert.deepEqual(uses, [field, `draft.${field}`, `outcome.draft.${field}`].sort(), field)
+  }
+
+  // 3. THE SAVE BODY IS THE VALIDATOR'S OBJECT AND NOTHING ELSE. One PATCH, one
+  // body expression, built by nothing in this file -- so there is no place for a
+  // fourth field to be merged in.
+  assert.equal(CLIENT.split('body: JSON.stringify(attempt.body)').length - 1, 1)
+  assert.equal((CLIENT.match(/JSON\.stringify\(/g) ?? []).length, 1, 'exactly one JSON body')
+  assert.doesNotMatch(CLIENT, /\.\.\.attempt\.body/, 'the body is never spread and extended')
+
+  // 4. And no snake_case column name appears anywhere: the client speaks the
+  // API's language, never the database's.
+  for (const column of ['school_id', 'prompt_id', 'prompt_text', 'stated_max_words']) {
+    assert.equal(CLIENT.includes(column), false, `${column} is a column, not a field`)
+  }
+})
+
+test('INITIAL STATE takes all four fields from the server-rendered draft', () => {
+  // The component cannot be imported -- next/navigation is unresolvable under
+  // node --test -- so the seed is asserted on the source. Each field must come
+  // from `draft`, which is the prop the server page passes, and from nothing
+  // else: not a default, not a literal, not a previous selection.
+  const seed = CLIENT.slice(
+    CLIENT.indexOf('const [prompt, setPrompt]'),
+    CLIENT.indexOf('const [save, setSave]'),
+  )
+  assert.ok(seed.length > 0, 'the seed was located')
+  for (const field of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
+    assert.ok(seed.includes(`${field}: draft.${field},`), `${field} must come from the draft`)
+  }
+  // A GENERIC draft therefore seeds four nulls and a CHOSEN one seeds four
+  // values, because StatementDraft carries exactly what the row held -- there
+  // is no branch here that could treat one case differently from the other.
+  assert.doesNotMatch(seed, /\?\?/, 'no fallback may stand in for a null')
+  assert.doesNotMatch(seed, /\|\|/, 'no truthiness test may stand in for a null')
+  assert.doesNotMatch(seed, /null/, 'the nulls come from the draft, not from here')
+})
+
+test('ORDINARY AUTOSAVE still sends exactly title, essay and expectedRevision', () => {
+  // The body the 1.2-second autosave sends, built by the committed validator.
+  const request = statementSaveRequest({ title: 'A title', essay: 'Some words.', revision: 7 })
+  assert.equal(request.ok, true)
+  if (!request.ok) return
+  assert.deepEqual(Object.keys(request.body), ['title', 'essay', 'expectedRevision'])
+
+  // And no prompt field can be in it, however the document is shaped.
+  const wire = JSON.stringify(request.body)
+  for (const forbidden of [
+    'promptId', 'schoolId', 'promptText', 'statedMaxWords',
+    'prompt_id', 'school_id', 'prompt_text', 'stated_max_words',
+  ]) {
+    assert.equal(wire.includes(forbidden), false, `${forbidden} must never be sent`)
+  }
+
+  // Including when the draft being saved HAS a prompt: the save request is
+  // built from the title, the essay and the revision only -- it is not handed
+  // the snapshot at all, so there is nothing for it to leak.
+  assert.equal(statementSaveRequest.length, 1, 'one argument: the document')
+})
+
+test('THE SHARED RESUME AUTOSAVE ENGINE IS UNTOUCHED', () => {
+  // Statement has never forked it and must not start now. The engine is
+  // imported and run for real by PART 1 of this file; what is asserted here is
+  // that it knows nothing about prompts.
+  const engine = readFileSync(
+    fileURLToPath(new URL('../../resume/draft/autosave.ts', import.meta.url)), 'utf8',
+  )
+  for (const foreign of [
+    'prompt', 'school', 'statedMaxWords', 'statement_prompts', 'DraftPromptSnapshot',
+  ]) {
+    assert.equal(engine.includes(foreign), false, `the engine must not know ${foreign}`)
+  }
+  // And the events this editor dispatches are still only the engine's own.
+  for (const event of ['edited', 'flush', 'save-started', 'save-failed', 'retry', 'reloaded']) {
+    assert.ok(engine.includes(`'${event}'`), `${event} is the engine's own event`)
+  }
+})
+
+test('the carried prompt is ONE piece of state, replaced wholesale', () => {
+  // Four separate useStates would make a half-replaced snapshot representable.
+  assert.match(CLIENT, /const \[prompt, setPrompt\] = useState<DraftPromptSnapshot>/)
+  // Set in exactly two places: the initial seed and the reload.
+  assert.equal((CLIENT.match(/setPrompt\(/g) ?? []).length, 1, 'only the reload replaces it')
+  // And the reload sets it beside the essay and the revision, not separately.
+  const reload = CLIENT.slice(
+    CLIENT.indexOf('const reloadLatest'),
+    CLIENT.indexOf('const retrySave'),
+  )
+  assert.ok(reload.length > 0, 'the reload handler was located')
+  assert.match(reload, /setEssay\(outcome\.draft\.essay\)/)
+  assert.match(reload, /setPrompt\(\{/)
+  assert.match(reload, /type: 'reloaded'/)
+})
+
 // =============================================== PART 3: recovery, runtime
 
 const ID = 'd1e2f3a4-0000-4000-8000-000000000001'
 const OTHER = 'aaaaaaaa-1111-4111-8111-111111111111'
+const SCHOOL = 'bbbbbbbb-2222-4222-8222-222222222222'
+const PROMPT = 'c0ffee00-3333-4333-8333-333333333333'
+const WORDING = 'Why have you chosen nurse anaesthesia?'
+
+/**
+ * A reload body. GENERIC BY DEFAULT -- four explicit nulls -- because that is
+ * what every draft looks like today, and because leaving the four off would
+ * make these fixtures exercise the absent-field path by accident.
+ */
 const ok = (over: Record<string, unknown> = {}) => ({
-  draft: { id: ID, title: 'Server title', essay: 'Server essay.', revision: 9, ...over },
+  draft: {
+    id: ID, title: 'Server title', essay: 'Server essay.', revision: 9,
+    schoolId: null, promptId: null, promptText: null, statedMaxWords: null,
+    ...over,
+  },
+})
+
+/** The same body with a prompt chosen. */
+const okChosen = (over: Record<string, unknown> = {}) => ok({
+  schoolId: SCHOOL, promptId: PROMPT, promptText: WORDING, statedMaxWords: 500, ...over,
 })
 
 /** A conflicted state, reached the way production reaches it. */
@@ -545,7 +681,10 @@ test('a reload accepts only a genuinely usable draft', () => {
   const outcome = reloadOutcomeFrom({ status: 200, body: ok(), expectedId: ID })
   assert.deepEqual(outcome, {
     ok: true,
-    draft: { id: ID, title: 'Server title', essay: 'Server essay.', revision: 9 },
+    draft: {
+      id: ID, title: 'Server title', essay: 'Server essay.', revision: 9,
+      schoolId: null, promptId: null, promptText: null, statedMaxWords: null,
+    },
   })
   // The title goes through the same checkTitle the API validates with.
   const padded = reloadOutcomeFrom({ status: 200, body: ok({ title: '  Padded  ' }), expectedId: ID })
@@ -553,6 +692,159 @@ test('a reload accepts only a genuinely usable draft', () => {
   // An empty essay is legitimate and must not be mistaken for a bad response.
   const empty = reloadOutcomeFrom({ status: 200, body: ok({ essay: '' }), expectedId: ID })
   assert.equal(empty.ok && empty.draft.essay, '')
+})
+
+test('reload: a CHOSEN prompt comes back with all four exact values', () => {
+  const outcome = reloadOutcomeFrom({ status: 200, body: okChosen(), expectedId: ID })
+  assert.equal(outcome.ok, true)
+  if (!outcome.ok) return
+  assert.equal(outcome.draft.schoolId, SCHOOL)
+  assert.equal(outcome.draft.promptId, PROMPT)
+  assert.equal(outcome.draft.promptText, WORDING)
+  assert.equal(outcome.draft.statedMaxWords, 500)
+})
+
+test('reload: a GENERIC draft comes back as four explicit nulls', () => {
+  const outcome = reloadOutcomeFrom({ status: 200, body: ok(), expectedId: ID })
+  assert.equal(outcome.ok, true)
+  if (!outcome.ok) return
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords'] as const) {
+    assert.equal(key in outcome.draft, true, `${key} must be present`)
+    assert.equal(outcome.draft[key], null, `${key} must be null`)
+  }
+})
+
+test('reload: statedMaxWords null SURVIVES on a chosen prompt', () => {
+  // A school stating no word limit is a real snapshot, not a defective one.
+  const outcome = reloadOutcomeFrom({
+    status: 200, body: okChosen({ statedMaxWords: null }), expectedId: ID,
+  })
+  assert.equal(outcome.ok, true)
+  if (!outcome.ok) return
+  assert.equal(outcome.draft.promptId, PROMPT)
+  assert.equal(outcome.draft.statedMaxWords, null)
+  assert.equal('statedMaxWords' in outcome.draft, true)
+})
+
+test('reload: MISSING prompt properties are REFUSED, not read as null', () => {
+  // A response that omits the four is a stale deployment or a rewritten body.
+  // Reading it as "no prompt" would make a reload silently discard the
+  // applicant's selection -- the exact loss this parser prevents.
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords'] as const) {
+    const body = okChosen()
+    delete (body.draft as Record<string, unknown>)[key]
+    const outcome = reloadOutcomeFrom({ status: 200, body, expectedId: ID })
+    assert.equal(outcome.ok, false, `a body missing ${key} must be refused`)
+    assert.equal(outcome.ok === false && outcome.message, RELOAD_MESSAGES.unreadable)
+
+    // Explicit undefined is the same answer, since it is indistinguishable.
+    const explicit = reloadOutcomeFrom({
+      status: 200, body: okChosen({ [key]: undefined }), expectedId: ID,
+    })
+    assert.equal(explicit.ok, false, `an undefined ${key} must be refused`)
+  }
+  // A pre-prompt response -- the four simply absent -- is refused too.
+  const stale = { draft: { id: ID, title: 'T', essay: 'E', revision: 9 } }
+  assert.equal(reloadOutcomeFrom({ status: 200, body: stale, expectedId: ID }).ok, false)
+})
+
+test('reload: PARTIAL or malformed prompt metadata is REFUSED', () => {
+  const broken: Record<string, unknown>[] = [
+    { schoolId: SCHOOL },                                   // school alone
+    { promptId: PROMPT },                                   // id alone
+    { promptText: WORDING },                                // wording alone
+    { statedMaxWords: 500 },                                // a limit alone
+    { schoolId: SCHOOL, promptId: PROMPT },                 // no wording
+    { schoolId: null, promptId: PROMPT, promptText: WORDING, statedMaxWords: 500 },
+    { schoolId: SCHOOL, promptId: null, promptText: WORDING, statedMaxWords: 500 },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: null, statedMaxWords: 500 },
+    { schoolId: 'not-a-uuid', promptId: PROMPT, promptText: WORDING, statedMaxWords: 1 },
+    { schoolId: SCHOOL, promptId: 'not-a-uuid', promptText: WORDING, statedMaxWords: 1 },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: '   ', statedMaxWords: 1 },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: WORDING, statedMaxWords: 0 },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: WORDING, statedMaxWords: 5001 },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: WORDING, statedMaxWords: '500' },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: 'a'.repeat(5001), statedMaxWords: 1 },
+  ]
+  for (const over of broken) {
+    const outcome = reloadOutcomeFrom({ status: 200, body: ok(over), expectedId: ID })
+    assert.equal(outcome.ok, false, JSON.stringify(over))
+    assert.equal(outcome.ok === false && outcome.message, RELOAD_MESSAGES.unreadable)
+  }
+})
+
+test('reload: the SAME RULES as a database row, not a second interpretation', () => {
+  // reloadOutcomeFrom calls rows.ts's parser rather than repeating it. This is
+  // what would fail if a copy were introduced and then drifted.
+  const cases: Record<string, unknown>[] = [
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: WORDING, statedMaxWords: 500 },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: WORDING, statedMaxWords: null },
+    { schoolId: null, promptId: null, promptText: null, statedMaxWords: null },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: WORDING, statedMaxWords: 5001 },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: '  ', statedMaxWords: 1 },
+    { schoolId: SCHOOL, promptId: PROMPT, promptText: '\u{1f642}'.repeat(3000), statedMaxWords: 1 },
+  ]
+  for (const over of cases) {
+    const viaReload = reloadOutcomeFrom({ status: 200, body: ok(over), expectedId: ID }).ok
+    const viaRows = draftPromptFrom(over as never) !== undefined
+    assert.equal(viaReload, viaRows, `disagreed about ${JSON.stringify(over)}`)
+  }
+})
+
+test('reload: THE CONFLICT RELOAD REPLACES THE PROMPT, in every direction', () => {
+  // The four transitions a conflict can produce. In each, what the reload hands
+  // back is the SERVER's prompt, never a merge with what was held locally.
+  const OTHER_SCHOOL = 'dddddddd-4444-4444-8444-444444444444'
+  const OTHER_PROMPT = 'eeeeeeee-5555-4555-8555-555555555555'
+
+  // selected -> a DIFFERENT selected prompt
+  const moved = reloadOutcomeFrom({
+    status: 200,
+    body: okChosen({
+      schoolId: OTHER_SCHOOL, promptId: OTHER_PROMPT,
+      promptText: 'Describe a time you advocated for a patient.', statedMaxWords: 750,
+    }),
+    expectedId: ID,
+  })
+  assert.equal(moved.ok, true)
+  if (!moved.ok) return
+  assert.deepEqual(
+    [moved.draft.schoolId, moved.draft.promptId, moved.draft.promptText, moved.draft.statedMaxWords],
+    [OTHER_SCHOOL, OTHER_PROMPT, 'Describe a time you advocated for a patient.', 750],
+  )
+  // Nothing of the losing revision's prompt is left.
+  assert.notEqual(moved.draft.promptId, PROMPT)
+  assert.equal(JSON.stringify(moved.draft).includes(WORDING), false)
+
+  // selected -> GENERIC: all four cleared.
+  const cleared = reloadOutcomeFrom({ status: 200, body: ok(), expectedId: ID })
+  assert.equal(cleared.ok, true)
+  if (!cleared.ok) return
+  assert.deepEqual(
+    [cleared.draft.schoolId, cleared.draft.promptId, cleared.draft.promptText,
+      cleared.draft.statedMaxWords],
+    [null, null, null, null],
+  )
+
+  // generic -> SELECTED: all four installed.
+  const installed = reloadOutcomeFrom({ status: 200, body: okChosen(), expectedId: ID })
+  assert.equal(installed.ok, true)
+  if (!installed.ok) return
+  assert.deepEqual(
+    [installed.draft.schoolId, installed.draft.promptId, installed.draft.promptText,
+      installed.draft.statedMaxWords],
+    [SCHOOL, PROMPT, WORDING, 500],
+  )
+
+  // statedMaxWords: number -> null, and null -> number.
+  const toNull = reloadOutcomeFrom({
+    status: 200, body: okChosen({ statedMaxWords: null }), expectedId: ID,
+  })
+  assert.equal(toNull.ok && toNull.draft.statedMaxWords, null)
+  const toNumber = reloadOutcomeFrom({
+    status: 200, body: okChosen({ statedMaxWords: 250 }), expectedId: ID,
+  })
+  assert.equal(toNumber.ok && toNumber.draft.statedMaxWords, 250)
 })
 
 test('a malformed 200 is REFUSED, so local text is never destroyed by one', () => {
@@ -1094,7 +1386,7 @@ test('a conflict preserves the local title, and no stale snapshot may alter it',
 test('a reload replaces the title from the validated server draft', () => {
   const outcome = reloadOutcomeFrom({
     status: 200,
-    body: { draft: { id: ID, title: '  Server title  ', essay: 'Server essay.', revision: 9 } },
+    body: ok({ title: '  Server title  ' }),
     expectedId: ID,
   })
   assert.equal(outcome.ok, true)

@@ -495,8 +495,23 @@ test('the file input is a plain input, reset every time, and keeps no bytes', ()
 
 test('nothing logs the document, and no analysis was wired in', () => {
   assert.doesNotMatch(CLIENT, /console\./)
-  for (const forbidden of [/analyze-statement/, /\/api\/statement\/analy/, /recordStatementAttempt/, /schoolId/, /promptId/]) {
+  for (const forbidden of [
+    /analyze-statement/, /\/api\/statement\/analy/, /recordStatementAttempt/,
+    // The PICKER is still deferred -- the editor now carries prompt metadata,
+    // which editor.test.ts owns the invariants for, but it cannot choose any.
+    /\/api\/statement\/prompts/, /<select/, /setSchool/,
+  ]) {
     assert.doesNotMatch(CLIENT, forbidden, `${forbidden} belongs to a later step`)
+  }
+  // AND AN UPLOAD NEVER TOUCHES THE PROMPT. Importing a document replaces the
+  // essay; the question it answers is not the document's to change.
+  const importHandler = CLIENT.slice(
+    CLIENT.indexOf('const onFileChosen'),
+    CLIENT.indexOf('const copyMine'),
+  )
+  assert.ok(importHandler.length > 0, 'the import handler was located')
+  for (const field of ['promptId', 'schoolId', 'promptText', 'statedMaxWords', 'setPrompt']) {
+    assert.equal(importHandler.includes(field), false, `an upload must not touch ${field}`)
   }
 })
 

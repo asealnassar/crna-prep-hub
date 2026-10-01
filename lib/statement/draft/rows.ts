@@ -189,7 +189,7 @@ function parseStatedMaxWords(value: unknown): number | null | undefined {
 }
 
 /** The four snapshot fields of a draft, parsed. */
-interface DraftPromptSnapshot {
+export interface DraftPromptSnapshot {
   readonly schoolId: string | null
   readonly promptId: string | null
   readonly promptText: string | null
@@ -202,7 +202,12 @@ const NO_PROMPT: DraftPromptSnapshot = {
 }
 
 /**
- * The four columns as a snapshot, or undefined when the row is incoherent.
+ * The four prompt fields as a snapshot, or undefined when they are incoherent.
+ *
+ * KEY-AGNOSTIC, AND EXPORTED, so that the one place these rules live can serve
+ * both spellings: the snake_case columns a row arrives with, and the camelCase
+ * properties this application's own API hands back. parseDraftPrompt() below
+ * translates the former; the editor's reload parser passes the latter.
  *
  * THREE OUTCOMES, and the middle one is the common case:
  *
@@ -230,9 +235,13 @@ const NO_PROMPT: DraftPromptSnapshot = {
  * NOTHING IS TRIMMED, REPAIRED OR INFERRED. The wording is returned exactly as
  * stored, and an out-of-range word limit is a refusal rather than a clamp.
  */
-function parseDraftPrompt(row: StatementDraftRow): DraftPromptSnapshot | undefined {
-  const { school_id: school, prompt_id: prompt, prompt_text: text } = row
-  const words = row.stated_max_words
+export function draftPromptFrom(fields: {
+  readonly schoolId: unknown
+  readonly promptId: unknown
+  readonly promptText: unknown
+  readonly statedMaxWords: unknown
+}): DraftPromptSnapshot | undefined {
+  const { schoolId: school, promptId: prompt, promptText: text, statedMaxWords: words } = fields
 
   if (school === undefined || prompt === undefined || text === undefined || words === undefined) {
     return undefined
@@ -250,6 +259,23 @@ function parseDraftPrompt(row: StatementDraftRow): DraftPromptSnapshot | undefin
   if (statedMaxWords === undefined) return undefined
 
   return { schoolId: school, promptId: prompt, promptText: text, statedMaxWords }
+}
+
+/**
+ * The same four values, under the COLUMN names PostgREST uses.
+ *
+ * A key translation and nothing else: the rules live in draftPromptFrom above,
+ * so a row read from the database and a draft read back from this application's
+ * own API are judged by one implementation. There is no second interpretation of
+ * the schema to drift.
+ */
+function parseDraftPrompt(row: StatementDraftRow): DraftPromptSnapshot | undefined {
+  return draftPromptFrom({
+    schoolId: row.school_id,
+    promptId: row.prompt_id,
+    promptText: row.prompt_text,
+    statedMaxWords: row.stated_max_words,
+  })
 }
 
 /**
