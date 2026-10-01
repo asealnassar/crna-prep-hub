@@ -38,6 +38,10 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { DraftCreateInput, DraftUpdateInput } from './validate.ts'
+// TYPE ONLY, and that matters: the snapshot's SHAPE is shared with the module
+// that resolves one, but no code from it is imported and none runs here. This
+// module never resolves a prompt -- see PromptWrite below.
+import type { StatementPromptSnapshot } from './promptRepo.ts'
 import { draftFromRow, draftSummaryFromRow } from './rows.ts'
 import type {
   StatementDraft, StatementDraftRow, StatementDraftSummary, StatementDraftSummaryRow,
@@ -50,10 +54,10 @@ const DRAFTS = 'statement_drafts'
  * cannot silently start arriving, and so no column is selected that is not
  * used.
  *
- * THE FOUR PROMPT COLUMNS ARE READ BUT NEVER WRITTEN at this checkpoint. They
- * widen what create, read and update hand BACK -- a successful save now returns
- * the snapshot it did not touch -- while the insert and update payloads below
- * are unchanged.
+ * THE FOUR PROMPT COLUMNS ARE READ BY ALL THREE STATEMENTS, and written by
+ * exactly one: updateDraft, and only when a caller supplies an already-resolved
+ * snapshot. createDraft still sends three columns, so every new draft is
+ * generic. SUMMARY_COLUMNS is deliberately not widened with them: see below.
  */
 const DRAFT_COLUMNS =
   'id, user_id, title, essay, revision, created_at, updated_at, '
@@ -74,6 +78,36 @@ const DRAFT_COLUMNS =
  * and never the wording. This projection stays exactly five columns.
  */
 const SUMMARY_COLUMNS = 'id, title, revision, created_at, updated_at'
+
+/**
+ * WHAT A CALLER MAY SAY ABOUT THE STORED PROMPT. Three states, and the third
+ * one is the absence of the value entirely:
+ *
+ *   undefined / omitted   say nothing. All four stored columns keep whatever
+ *                         they hold, and the UPDATE payload names none of them.
+ *   null                  clear. All four become NULL and the draft is generic
+ *                         again.
+ *   a snapshot            set. All four are written from it.
+ *
+ * WHY THIS IS NOT A promptId. A repository that took an id would have to resolve
+ * it, which means reading statement_prompts, which means this module deciding
+ * what a prompt IS -- and the canonical school, wording and word limit are the
+ * one thing a browser must never be able to choose. By the time a snapshot
+ * reaches here it has already come out of the catalog, through
+ * promptRepo.readActivePrompt, under the caller's own RLS. Nothing in this file
+ * resolves anything, and nothing in this file reads statement_prompts.
+ *
+ * WHY undefined AND null MUST STAY DIFFERENT. Autosave sends the whole document
+ * every 1.2 seconds. If an omitted snapshot meant "clear", every keystroke would
+ * wipe the applicant's prompt; if an explicit null meant "leave it", a prompt
+ * could never be removed. validate.ts draws the same distinction for the
+ * request side, and for the same reason.
+ *
+ * THE SHAPE IS StatementPromptSnapshot, imported as a type only. A caller
+ * constructing one by hand is constructing something the catalog never
+ * returned, which is why the resolver and not this type is the trust boundary.
+ */
+export type PromptWrite = StatementPromptSnapshot | null
 
 /**
  * Why a repository call did not produce a value.
@@ -129,6 +163,26 @@ function failure(reason: DraftRepoRefusal, error: unknown): DraftRepoResult<neve
 /** The row came back but could not be read. Fixed words: never the row. */
 function integrity(where: string): DraftRepoResult<never> {
   return { ok: false, reason: 'data-integrity', detail: `unusable stored row (${where})` }
+}
+
+/**
+ * An argument this module was handed cannot be used. Fixed words: never the
+ * value.
+ *
+ * THE SAME REASON A BAD ROW GETS, deliberately: 'data-integrity' already means
+ * "the data this application is working with cannot be interpreted", it is
+ * already in DraftRepoRefusal, statusForRepo() already maps it to 500 through
+ * its default branch, and isServerFault() already makes it a logged server
+ * fault. So nothing about the refusal union, the status table or any route
+ * changes -- a caller that was already handling 'data-integrity' handles this.
+ *
+ * ONLY THE `detail` DIFFERS from integrity(), because this is not a stored row
+ * and saying so would send an operator looking in the wrong place. `detail` is
+ * logged at most and never reaches a client: routes build every 5xx from
+ * SERVER_ERROR_BODY, and the statement routes do not log `detail` at all.
+ */
+function badArgument(what: string): DraftRepoResult<never> {
+  return { ok: false, reason: 'data-integrity', detail: `unusable argument (${what})` }
 }
 
 const notFound: DraftRepoResult<never> = {
@@ -238,6 +292,72 @@ export async function listDrafts(
 }
 
 /**
+ * Whether a value is STRUCTURALLY a snapshot. A lightweight shape check.
+ *
+ * It does NOT revalidate the snapshot's CONTENT -- no uuid format, no 5,000
+ * character ceiling, no 1..5000 word range. Those belong to the resolver that
+ * produced the value and to the CHECKs on the columns; repeating them here
+ * would be a second opinion about what a prompt IS, which is exactly what this
+ * module must not have. promptRepo.ts remains the authority on canonical
+ * validity.
+ *
+ * `statedMaxWords` may be null, because a school stating no limit is a real
+ * snapshot and not a defective one.
+ */
+function isSnapshot(value: unknown): value is StatementPromptSnapshot {
+  if (typeof value !== 'object' || value === null) return false
+  const fields = value as Record<string, unknown>
+  return typeof fields.schoolId === 'string'
+    && typeof fields.promptId === 'string'
+    && typeof fields.promptText === 'string'
+    && (fields.statedMaxWords === null || typeof fields.statedMaxWords === 'number')
+}
+
+/**
+ * Whether a fourth argument is one of the THREE valid runtime states.
+ *
+ * THERE IS NO FOURTH STATE. undefined, null and a snapshot are the whole
+ * contract, and anything else is an internal programming or data error rather
+ * than a condition to absorb. The type system is the first gate; this is what
+ * happens when a value gets past it.
+ */
+function isPromptWrite(value: unknown): value is PromptWrite | undefined {
+  return value === undefined || value === null || isSnapshot(value)
+}
+
+/**
+ * The prompt columns an UPDATE should carry, or NO KEYS AT ALL.
+ *
+ * THREE BRANCHES, ONE PER VALID STATE. Validity is already settled by
+ * isPromptWrite() before any statement is built, so there is no fallback branch
+ * here and a malformed value never reaches this function.
+ *
+ * SPREADING {} ADDS NOTHING, which is the whole mechanism: on the omitted state
+ * the payload is byte-for-byte the four keys it has always been, so an ordinary
+ * autosave cannot touch a stored prompt even by accident. A test asserts the
+ * exact key set for all three states.
+ *
+ * `stated_max_words` IS PRESENT AND NULL for a prompt that states no limit --
+ * not omitted. A school with no word limit must CLEAR a limit a previous prompt
+ * left behind, and an omitted key would leave the old number in place beside
+ * the new question.
+ */
+function promptColumns(prompt: PromptWrite | undefined): Record<string, unknown> {
+  if (prompt === undefined) return {}
+  // An explicit clear. Checked before the snapshot branch because null is not
+  // a snapshot, and after undefined because the two mean opposite things.
+  if (prompt === null) {
+    return { school_id: null, prompt_id: null, prompt_text: null, stated_max_words: null }
+  }
+  return {
+    school_id: prompt.schoolId,
+    prompt_id: prompt.promptId,
+    prompt_text: prompt.promptText,
+    stated_max_words: prompt.statedMaxWords,
+  }
+}
+
+/**
  * Saves an edit, or refuses. COMPARE AND SWAP, in one conditional statement.
  *
  * THE SEQUENCE, and it is fixed:
@@ -264,6 +384,19 @@ export async function listDrafts(
  *
  * `created_at`, `user_id` and `id` are not in the payload and never will be.
  *
+ * THE PROMPT TRAVELS IN THE SAME STATEMENT, when a caller supplies one. That is
+ * not an optimisation, it is the correctness requirement: a prompt change and
+ * the document it belongs to must consume ONE revision, under ONE compare and
+ * swap. Two statements would leave a window in which a draft held a new
+ * prompt_id beside the old prompt_text, and `updated_at` would move twice for
+ * one save. So choosing a prompt costs a revision exactly as typing does, and a
+ * caller who lost the race loses the prompt change with the rest of the save --
+ * no write happens at all.
+ *
+ * AND THE SNAPSHOT IS NOT RESOLVED HERE. The fourth parameter is already
+ * canonical; see PromptWrite. updateDraft issues one statement against
+ * statement_drafts and never reads statement_prompts.
+ *
  * THE TIMESTAMP IS NOT A PARAMETER. It is generated here, once, and there is no
  * way for a caller to supply one -- see the header. Tests therefore assert its
  * shape and that it was produced during the call, not a literal value.
@@ -272,7 +405,17 @@ export async function updateDraft(
   db: SupabaseClient,
   draftId: string,
   input: DraftUpdateInput,
+  prompt?: PromptWrite,
 ): Promise<DraftRepoResult<StatementDraft>> {
+  // BEFORE ANYTHING ELSE, and that ordering is the point. A fourth argument
+  // that is none of the three valid states is an internal error, so this
+  // refuses before a timestamp is taken, before a statement is built and before
+  // the database is touched: no row is read, no revision is consumed, and
+  // updated_at -- the retention clock -- does not move. The alternative,
+  // treating a malformed value as "unchanged", would turn a bug into a silent
+  // no-op that looks exactly like a successful save.
+  if (!isPromptWrite(prompt)) return badArgument('prompt')
+
   // ONCE per attempt, before the statement is built, and reused nowhere else.
   // The row records the instant this save was made, not whenever the database
   // got round to it.
@@ -285,6 +428,7 @@ export async function updateDraft(
       essay: input.essay,
       revision: input.expectedRevision + 1,
       updated_at: savedAt,
+      ...promptColumns(prompt),
     })
     .eq('id', draftId)
     .eq('revision', input.expectedRevision)

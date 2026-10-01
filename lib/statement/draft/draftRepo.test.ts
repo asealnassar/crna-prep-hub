@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   createDraft, deleteDraft, listDrafts, readDraft, updateDraft,
 } from './draftRepo.ts'
+import type { PromptWrite } from './draftRepo.ts'
 import type { StatementDraftRow, StatementDraftSummaryRow } from './rows.ts'
 // Imported to prove the validator stops the impossible update BEFORE this layer.
 import { MAX_EXPECTED_REVISION, checkDraftUpdate } from './validate.ts'
@@ -316,6 +317,222 @@ test('CAS: the predicate, the increment and the follow-up read are UNCHANGED', a
   assert.equal(JSON.stringify(result).includes(PROMPT), false)
 })
 
+// ============================================ writing the prompt snapshot
+
+/** The four SET keys an ordinary save has always carried. */
+const DOCUMENT_KEYS = ['essay', 'revision', 'title', 'updated_at']
+/** The four a prompt change adds to them, and nothing else. */
+const PROMPT_KEYS = ['prompt_id', 'prompt_text', 'school_id', 'stated_max_words']
+
+/** An already-resolved canonical snapshot, as promptRepo would have returned it. */
+const SNAPSHOT = {
+  promptId: PROMPT,
+  schoolId: SCHOOL,
+  promptText: 'Why have you chosen nurse anaesthesia?',
+  statedMaxWords: 500,
+} as const
+
+const doc = { title: 'Draft one', essay: 'Body.', expectedRevision: 4 }
+
+/** The SET payload of the one UPDATE this call issued. */
+async function setPayload(
+  prompt: PromptWrite | undefined,
+  reply = ok(row({ revision: 5 })),
+): Promise<{ payload: Record<string, unknown>; log: Call[] }> {
+  const { db, log } = fakeDb([reply])
+  await (prompt === undefined
+    ? updateDraft(db, ID, doc)
+    : updateDraft(db, ID, doc, prompt))
+  return { payload: calls(log, 'update')[0][1] as Record<string, unknown>, log }
+}
+
+test('write: NO prompt change leaves the SET payload exactly as it was', async () => {
+  const { payload } = await setPayload(undefined)
+  assert.deepEqual(Object.keys(payload).sort(), DOCUMENT_KEYS)
+  for (const forbidden of PROMPT_KEYS) {
+    assert.equal(forbidden in payload, false, `an ordinary save must not write ${forbidden}`)
+  }
+  // Not merely absent from the keys -- absent from the serialised payload.
+  assert.equal(JSON.stringify(payload).includes('prompt'), false)
+  assert.equal(JSON.stringify(payload).includes('school'), false)
+})
+
+test('write: a RESOLVED SNAPSHOT adds exactly the four prompt columns', async () => {
+  const { payload } = await setPayload(SNAPSHOT)
+  assert.deepEqual(Object.keys(payload).sort(), [...DOCUMENT_KEYS, ...PROMPT_KEYS].sort())
+  assert.equal(Object.keys(payload).length, 8)
+  assert.equal(payload.school_id, SCHOOL)
+  assert.equal(payload.prompt_id, PROMPT)
+  assert.equal(payload.prompt_text, 'Why have you chosen nurse anaesthesia?')
+  assert.equal(payload.stated_max_words, 500)
+  // And the document half is untouched by the prompt half.
+  assert.equal(payload.title, 'Draft one')
+  assert.equal(payload.essay, 'Body.')
+  assert.equal(payload.revision, 5)
+})
+
+test('write: statedMaxWords null writes stated_max_words NULL, present not omitted', async () => {
+  // A school stating no limit must CLEAR a limit the previous prompt left, so
+  // the key has to be there carrying null rather than left out.
+  const { payload } = await setPayload({ ...SNAPSHOT, statedMaxWords: null })
+  assert.equal('stated_max_words' in payload, true)
+  assert.equal(payload.stated_max_words, null)
+  assert.equal(payload.prompt_id, PROMPT)
+  assert.deepEqual(Object.keys(payload).sort(), [...DOCUMENT_KEYS, ...PROMPT_KEYS].sort())
+})
+
+test('write: an EXPLICIT CLEAR writes all four columns as NULL', async () => {
+  const { payload } = await setPayload(null)
+  assert.deepEqual(Object.keys(payload).sort(), [...DOCUMENT_KEYS, ...PROMPT_KEYS].sort())
+  for (const column of PROMPT_KEYS) {
+    assert.equal(column in payload, true, `${column} must be written`)
+    assert.equal(payload[column], null, `${column} must be NULL`)
+  }
+})
+
+test('write: undefined and null are DIFFERENT instructions', async () => {
+  // The distinction the whole three-state input exists for. An autosave that
+  // omits the prompt must not wipe it; an explicit clear must not be ignored.
+  const omitted = (await setPayload(undefined)).payload
+  const cleared = (await setPayload(null)).payload
+  assert.equal('prompt_id' in omitted, false)
+  assert.equal('prompt_id' in cleared, true)
+  assert.notDeepEqual(Object.keys(omitted).sort(), Object.keys(cleared).sort())
+})
+
+test('write: NO prompt change PRESERVES a stored snapshot', async () => {
+  // The row comes back carrying the prompt the save did not touch.
+  const { db, log } = fakeDb([ok(withPrompt({ revision: 5 }))])
+  const result = await updateDraft(db, ID, doc)
+
+  const payload = calls(log, 'update')[0][1] as Record<string, unknown>
+  assert.deepEqual(Object.keys(payload).sort(), DOCUMENT_KEYS)
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.value.promptId, PROMPT)
+  assert.equal(result.value.schoolId, SCHOOL)
+  assert.equal(result.value.promptText, 'Why have you chosen nurse anaesthesia?')
+  assert.equal(result.value.statedMaxWords, 500)
+})
+
+test('write: ONE conditional UPDATE, whatever the prompt state', async () => {
+  for (const prompt of [undefined, null, SNAPSHOT] as const) {
+    const { log } = await setPayload(prompt)
+    assert.equal(calls(log, 'update').length, 1, 'exactly one update')
+    assert.equal(froms(log), 1, 'exactly one statement')
+    assert.equal(calls(log, 'insert').length, 0)
+    assert.equal(calls(log, 'upsert').length, 0)
+    assert.equal(calls(log, 'delete').length, 0)
+    assert.equal(calls(log, 'rpc').length, 0, 'no RPC')
+    // The predicate is unchanged: id AND the expected revision.
+    assert.deepEqual(calls(log, 'eq'), [['eq', 'id', ID], ['eq', 'revision', 4]])
+  }
+})
+
+test('write: a snapshot change consumes EXACTLY ONE revision', async () => {
+  const { payload } = await setPayload(SNAPSHOT)
+  assert.equal(payload.revision, 5, 'expectedRevision + 1, not + 2')
+})
+
+test('write: a CLEAR consumes exactly one revision', async () => {
+  const { payload } = await setPayload(null)
+  assert.equal(payload.revision, 5)
+})
+
+test('write: the repository still owns updated_at, with or without a prompt', async () => {
+  const before = Date.now()
+  for (const prompt of [undefined, null, SNAPSHOT] as const) {
+    const { payload } = await setPayload(prompt)
+    const written = payload.updated_at as string
+    assert.match(written, ISO)
+    const at = Date.parse(written)
+    assert.ok(at >= before && at <= Date.now(), 'generated during the call')
+  }
+  // And no caller can supply one: updateDraft takes no timestamp parameter.
+  assert.equal(updateDraft.length <= 4, true)
+})
+
+test('write: a STALE revision with a prompt change writes NOTHING and conflicts', async () => {
+  // Zero rows matched, then the existing single follow-up read.
+  const { db, log } = fakeDb([ok(null), ok(withPrompt({ revision: 9 }))])
+  const result = await updateDraft(db, ID, doc, SNAPSHOT)
+
+  // The statement was issued and matched nothing, so no column moved -- the
+  // prompt change is lost with the rest of the save, which is correct.
+  assert.equal(calls(log, 'update').length, 1)
+  assert.equal(froms(log), 2, 'the update plus exactly one follow-up read')
+  assert.deepEqual(calls(log, 'eq').slice(0, 2), [['eq', 'id', ID], ['eq', 'revision', 4]])
+
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, 'conflict')
+  assert.equal(result.storedRevision, 9)
+  // The winner's prompt is not disclosed to the loser.
+  assert.equal(JSON.stringify(result).includes('anaesthesia'), false)
+  assert.equal(JSON.stringify(result).includes(PROMPT), false)
+})
+
+test('write: a missing row with a prompt change is not-found, not a conflict', async () => {
+  const { db, log } = fakeDb([ok(null), ok(null)])
+  const result = await updateDraft(db, ID, doc, SNAPSHOT)
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, 'not-found')
+  assert.equal(froms(log), 2)
+})
+
+test('write: a failed follow-up read with a prompt change is NOT a conflict', async () => {
+  const { db } = fakeDb([ok(null), boom])
+  const result = await updateDraft(db, ID, doc, SNAPSHOT)
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, 'read-failed')
+  assert.notEqual(result.reason, 'conflict')
+})
+
+test('write: createDraft is UNCHANGED -- three columns, no prompt metadata', async () => {
+  const { db, log } = fakeDb([ok(row())])
+  await createDraft(db, USER, { title: 'Draft one', essay: 'Opening line.' })
+
+  const payload = calls(log, 'insert')[0][1] as Record<string, unknown>
+  assert.deepEqual(payload, { user_id: USER, title: 'Draft one', essay: 'Opening line.' })
+  for (const forbidden of [...PROMPT_KEYS, 'revision', 'id', 'created_at', 'updated_at']) {
+    assert.equal(forbidden in payload, false, `insert must not carry ${forbidden}`)
+  }
+  // createDraft takes no prompt parameter at all: a draft is born generic.
+  assert.equal(createDraft.length, 3)
+})
+
+test('write: THIS MODULE NEVER RESOLVES A PROMPT', async () => {
+  // Read the SOURCE with commentary removed: the comments discuss
+  // statement_prompts and readActivePrompt deliberately, and a naive substring
+  // check would match the prose rather than the code.
+  const raw = await import('node:fs/promises')
+    .then((fs) => fs.readFile(new URL('./draftRepo.ts', import.meta.url), 'utf8'))
+  const code = raw
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').filter((line) => !line.trim().startsWith('//')).join('\n')
+
+  // Guard: the stripping removed commentary and nothing else.
+  assert.equal(code.includes('export async function updateDraft'), true, 'code survived')
+  assert.equal(code.includes('THE PROMPT TRAVELS IN THE SAME STATEMENT'), false, 'prose removed')
+
+  assert.equal(code.includes('statement_prompts'), false, 'no query against the catalog')
+  assert.equal(code.includes('readActivePrompt'), false, 'the resolver is never called')
+  assert.equal(code.includes('promptSnapshotFromRow'), false)
+  assert.equal(code.includes('checkPromptSelection'), false)
+  assert.equal(code.includes('promptSelectionOf'), false)
+  // The only table this module names, and it names it once.
+  assert.equal(code.includes("const DRAFTS = 'statement_drafts'"), true)
+  assert.equal((code.match(/\.from\(/g) ?? []).length, 6, 'one from() per statement')
+  // The snapshot's TYPE is imported; no value from that module is. Every
+  // reference to it sits on an `import type` line, so the runtime erases it and
+  // nothing in promptRepo.ts is loaded, let alone called.
+  const promptRepoLines = code.split('\n').filter((line) => line.includes("'./promptRepo.ts'"))
+  assert.equal(promptRepoLines.length, 1, 'exactly one reference to that module')
+  assert.match(promptRepoLines[0], /^import type \{ StatementPromptSnapshot \} from/)
+})
+
 // ===================================================================== get
 
 test('get: a row is returned normalised, scoped by id, and nothing is written', async () => {
@@ -533,9 +750,14 @@ test('CAS: exactly ONE timestamp value is used in the attempt', async () => {
 })
 
 test('CAS: no caller can supply the persisted timestamp', async () => {
-  // The signature takes three arguments. A fourth is not read, and a timestamp
-  // smuggled through DraftUpdateInput is not read either -- the payload carries
-  // the generated value, not the attacker's.
+  // A timestamp smuggled through DraftUpdateInput is not read -- the payload
+  // carries the generated value, not the caller's.
+  //
+  // THE FOURTH ARGUMENT NOW MEANS SOMETHING: it is the resolved prompt. It is
+  // still not a timestamp, and a value that is neither a snapshot nor null
+  // writes no prompt column at all -- not four `undefined` ones, which
+  // JSON.stringify would drop and make "write nothing" an accident instead of a
+  // decision. isSnapshot() in draftRepo.ts is the guard.
   const hostile = {
     title: 't', essay: 'e', expectedRevision: 1,
     updated_at: '2099-01-01T00:00:00.000Z',
@@ -543,15 +765,114 @@ test('CAS: no caller can supply the persisted timestamp', async () => {
     savedAt: '2099-01-01T00:00:00.000Z',
   }
   const { db, log } = fakeDb([ok(row({ revision: 2 }))])
-  await (updateDraft as unknown as (
-    db: SupabaseClient, id: string, input: unknown, extra?: unknown,
-  ) => Promise<unknown>)(db, ID, hostile, '2099-01-01T00:00:00.000Z')
+  await updateDraft(db, ID, hostile)
 
   const payload = calls(log, 'update')[0][1] as Record<string, unknown>
   assert.deepEqual(Object.keys(payload).sort(), ['essay', 'revision', 'title', 'updated_at'])
   assert.equal((payload.updated_at as string).startsWith('2099'), false,
     'a supplied timestamp must never reach the row')
   assert.match(payload.updated_at as string, ISO)
+  assert.equal(JSON.stringify(payload).includes('2099'), false)
+
+  // AND A TIMESTAMP PASSED AS THE FOURTH ARGUMENT REACHES NOTHING AT ALL. It is
+  // not a prompt, so the call refuses before a statement exists -- which is a
+  // stronger guarantee than the old "a fourth argument is not read": there is
+  // no row to reach, because no row was touched.
+  const { db: db2, log: log2 } = fakeDb([ok(row({ revision: 2 }))])
+  const refused = await (updateDraft as unknown as (
+    db: SupabaseClient, id: string, input: unknown, extra?: unknown,
+  ) => Promise<{ ok: boolean; reason?: string }>)(
+    db2, ID, hostile, '2099-01-01T00:00:00.000Z',
+  )
+  assert.equal(refused.ok, false)
+  assert.equal(refused.reason, 'data-integrity')
+  assert.equal(froms(log2), 0, 'no statement was issued')
+  assert.equal(JSON.stringify(log2).includes('2099'), false)
+})
+
+/** Every runtime value that is NOT one of the three valid states. */
+const BOGUS: readonly unknown[] = [
+  'a string', '', 42, 0, true, false, [], [SNAPSHOT], NaN,
+  {},                                                          // nothing at all
+  { schoolId: SCHOOL },                                        // partial
+  { schoolId: SCHOOL, promptId: PROMPT },                      // still partial
+  { schoolId: SCHOOL, promptId: PROMPT, promptText: 'q' },     // no word limit key
+  { schoolId: SCHOOL, promptId: PROMPT, promptText: 'q', statedMaxWords: '500' },
+  { schoolId: 1, promptId: 2, promptText: 3, statedMaxWords: 4 },
+  { school_id: SCHOOL, prompt_id: PROMPT, prompt_text: 'q', stated_max_words: 1 },
+  { ...SNAPSHOT, promptText: null },                           // wording cannot be null
+  { ...SNAPSHOT, statedMaxWords: undefined },                  // absent is not null
+]
+
+test('write: a MALFORMED fourth argument is a data-integrity refusal', async () => {
+  // There is no fourth state. A value the types should have stopped is an
+  // internal error, NOT something to absorb as "unchanged" -- a silent no-op
+  // would look exactly like a successful save.
+  for (const bogus of BOGUS) {
+    const { db } = fakeDb([ok(row({ revision: 5 }))])
+    const result = await updateDraft(db, ID, doc, bogus as never)
+
+    assert.equal(result.ok, false, JSON.stringify(bogus))
+    if (result.ok) return
+    // The EXISTING reason, so the refusal union and the status table are
+    // untouched and every caller already handles it.
+    assert.equal(result.reason, 'data-integrity', JSON.stringify(bogus))
+    assert.equal(result.detail, 'unusable argument (prompt)')
+    // Never an echo of the value.
+    assert.equal(result.detail.includes(SCHOOL), false)
+    assert.equal(result.detail.includes(PROMPT), false)
+    assert.equal('storedRevision' in result, false)
+  }
+})
+
+test('write: a malformed fourth argument executes ZERO database statements', async () => {
+  for (const bogus of BOGUS) {
+    const { db, log } = fakeDb([ok(row({ revision: 5 }))])
+    await updateDraft(db, ID, doc, bogus as never)
+
+    assert.equal(froms(log), 0, `a statement was issued for ${JSON.stringify(bogus)}`)
+    assert.equal(log.length, 0, 'the client was not touched at all')
+    assert.ok(wroteNothing(log))
+    assert.equal(calls(log, 'select').length, 0, 'not even a read')
+  }
+})
+
+test('write: a malformed fourth argument consumes no revision and moves no clock', async () => {
+  // No statement means no compare-and-swap, so the stored revision cannot have
+  // advanced -- and updated_at, the 400-day retention clock, cannot have moved.
+  const { db, log } = fakeDb([ok(row({ revision: 5 }))])
+  const result = await updateDraft(db, ID, doc, 'not a snapshot' as never)
+
+  assert.equal(result.ok, false)
+  assert.equal(calls(log, 'update').length, 0, 'no UPDATE, so no revision bump')
+  assert.equal(JSON.stringify(log).includes('revision'), false)
+  assert.equal(JSON.stringify(log).includes('updated_at'), false)
+  // And the queued reply was never consumed, which is what proves nothing ran.
+  const { db: db2, log: log2 } = fakeDb([ok(row({ revision: 5 }))])
+  await updateDraft(db2, ID, doc, undefined)
+  assert.equal(froms(log2), 1, 'the same fixture DOES issue a statement when valid')
+})
+
+test('write: THE THREE VALID STATES still behave exactly as before', async () => {
+  // The correction must not have moved the contract itself.
+  const omitted = (await setPayload(undefined)).payload
+  assert.deepEqual(Object.keys(omitted).sort(), DOCUMENT_KEYS)
+
+  const cleared = (await setPayload(null)).payload
+  assert.deepEqual(Object.keys(cleared).sort(), [...DOCUMENT_KEYS, ...PROMPT_KEYS].sort())
+  for (const column of PROMPT_KEYS) assert.equal(cleared[column], null)
+
+  const selected = (await setPayload(SNAPSHOT)).payload
+  assert.deepEqual(Object.keys(selected).sort(), [...DOCUMENT_KEYS, ...PROMPT_KEYS].sort())
+  assert.equal(selected.school_id, SCHOOL)
+  assert.equal(selected.prompt_id, PROMPT)
+  assert.equal(selected.prompt_text, 'Why have you chosen nurse anaesthesia?')
+  assert.equal(selected.stated_max_words, 500)
+
+  // A snapshot with no stated limit is VALID, not malformed.
+  const noLimit = (await setPayload({ ...SNAPSHOT, statedMaxWords: null })).payload
+  assert.equal('stated_max_words' in noLimit, true)
+  assert.equal(noLimit.stated_max_words, null)
 })
 
 // ------------------------------------------- the increment safety invariant
