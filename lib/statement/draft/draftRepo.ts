@@ -45,9 +45,19 @@ import type {
 
 const DRAFTS = 'statement_drafts'
 
-/** Columns this module reads. Named explicitly so a schema addition cannot
- *  silently start arriving, and so no column is selected that is not used. */
-const DRAFT_COLUMNS = 'id, user_id, title, essay, revision, created_at, updated_at'
+/**
+ * Columns this module reads: ALL ELEVEN, named explicitly so a schema addition
+ * cannot silently start arriving, and so no column is selected that is not
+ * used.
+ *
+ * THE FOUR PROMPT COLUMNS ARE READ BUT NEVER WRITTEN at this checkpoint. They
+ * widen what create, read and update hand BACK -- a successful save now returns
+ * the snapshot it did not touch -- while the insert and update payloads below
+ * are unchanged.
+ */
+const DRAFT_COLUMNS =
+  'id, user_id, title, essay, revision, created_at, updated_at, '
+  + 'school_id, prompt_id, prompt_text, stated_max_words'
 
 /**
  * Columns the LIST projection asks for. No `essay`, and no `user_id`.
@@ -56,6 +66,12 @@ const DRAFT_COLUMNS = 'id, user_id, title, essay, revision, created_at, updated_
  * up to 20,000 characters per draft for nothing, and an unlimited draft count
  * makes that unbounded. `user_id` is the WHERE clause below, not a column any
  * caller reads.
+ *
+ * AND NOT prompt_text EITHER, deliberately, for the same arithmetic: it is up
+ * to 5,000 characters per row, on an unbounded list, for a screen that shows
+ * titles. Whether the library should say which prompt a draft answers is a
+ * separate decision; if it ever should, the answer is an id or a short label
+ * and never the wording. This projection stays exactly five columns.
  */
 const SUMMARY_COLUMNS = 'id, title, revision, created_at, updated_at'
 

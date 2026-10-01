@@ -58,6 +58,10 @@ function fakeDb(replies: Reply[]): { db: SupabaseClient; log: Call[] } {
   return { db: client as unknown as SupabaseClient, log }
 }
 
+const SCHOOL = 'aaaaaaaa-0000-4000-8000-000000000003'
+const PROMPT = 'c0ffee00-0000-4000-8000-000000000004'
+
+/** A GENERIC draft by default: all four prompt columns NULL. */
 const row = (over: Partial<StatementDraftRow> = {}): StatementDraftRow => ({
   id: ID,
   user_id: USER,
@@ -66,6 +70,19 @@ const row = (over: Partial<StatementDraftRow> = {}): StatementDraftRow => ({
   revision: 1,
   created_at: '2026-09-28T12:00:00.000Z',
   updated_at: '2026-09-28T12:00:00.000Z',
+  school_id: null,
+  prompt_id: null,
+  prompt_text: null,
+  stated_max_words: null,
+  ...over,
+})
+
+/** The same row with a prompt snapshot stored on it. */
+const withPrompt = (over: Partial<StatementDraftRow> = {}): StatementDraftRow => row({
+  school_id: SCHOOL,
+  prompt_id: PROMPT,
+  prompt_text: 'Why have you chosen nurse anaesthesia?',
+  stated_max_words: 500,
   ...over,
 })
 
@@ -144,6 +161,159 @@ test('create: a database error stays a create failure and leaks no row content',
   assert.equal(result.reason, 'create-failed')
   assert.equal(result.detail, '23514 violates check')
   assert.equal(result.detail.includes('applicant'), false, 'details must never be carried')
+})
+
+// ============================================ the projections, and the writes
+
+const ALL_ELEVEN = [
+  'id', 'user_id', 'title', 'essay', 'revision', 'created_at', 'updated_at',
+  'school_id', 'prompt_id', 'prompt_text', 'stated_max_words',
+]
+
+test('projection: the full read names ALL ELEVEN columns, and never *', async () => {
+  const { db, log } = fakeDb([ok(row())])
+  await readDraft(db, ID)
+
+  const selected = calls(log, 'select')[0][1] as string
+  assert.equal(
+    selected,
+    'id, user_id, title, essay, revision, created_at, updated_at, '
+    + 'school_id, prompt_id, prompt_text, stated_max_words',
+  )
+  assert.deepEqual(selected.split(', '), ALL_ELEVEN)
+  assert.equal(selected.split(', ').length, 11)
+  assert.equal(selected.includes('*'), false, `a wildcard projection: ${selected}`)
+})
+
+test('projection: create and update ask for the same eleven columns', async () => {
+  // All three statements hand a full draft back, so all three need the whole row.
+  const reads: string[] = []
+  for (const run of [
+    async () => {
+      const { db, log } = fakeDb([ok(row())])
+      await createDraft(db, USER, { title: 't', essay: '' })
+      return log
+    },
+    async () => {
+      const { db, log } = fakeDb([ok(row({ revision: 2 }))])
+      await updateDraft(db, ID, { title: 't', essay: '', expectedRevision: 1 })
+      return log
+    },
+  ]) {
+    const log = await run()
+    reads.push(calls(log, 'select')[0][1] as string)
+  }
+  assert.equal(new Set(reads).size, 1, 'create and update must not drift apart')
+  assert.deepEqual(reads[0].split(', '), ALL_ELEVEN)
+})
+
+test('projection: SUMMARY_COLUMNS is UNCHANGED -- the library gains nothing', async () => {
+  const { db, log } = fakeDb([ok([summaryRow()])])
+  await listDrafts(db, USER)
+
+  const selected = calls(log, 'select')[0][1] as string
+  // Byte-for-byte what it was before the prompt columns existed.
+  assert.equal(selected, 'id, title, revision, created_at, updated_at')
+  assert.equal(selected.split(', ').length, 5)
+  for (const absent of ['essay', 'user_id', 'school_id', 'prompt_id', 'prompt_text', 'stated_max_words']) {
+    assert.equal(selected.includes(absent), false, `the library must not load ${absent}`)
+  }
+})
+
+test('write: the INSERT payload gained NO prompt column', async () => {
+  const { db, log } = fakeDb([ok(row())])
+  await createDraft(db, USER, { title: 'Draft one', essay: 'Opening line.' })
+
+  const payload = calls(log, 'insert')[0][1] as Record<string, unknown>
+  // Exactly what it was before this checkpoint.
+  assert.deepEqual(Object.keys(payload).sort(), ['essay', 'title', 'user_id'])
+  for (const forbidden of ['school_id', 'prompt_id', 'prompt_text', 'stated_max_words']) {
+    assert.equal(forbidden in payload, false, `insert must not carry ${forbidden}`)
+  }
+  assert.equal(JSON.stringify(payload).includes('prompt'), false)
+})
+
+test('write: the UPDATE payload gained NO prompt column', async () => {
+  const { db, log } = fakeDb([ok(row({ revision: 2 }))])
+  await updateDraft(db, ID, { title: 'Draft one', essay: 'Body.', expectedRevision: 1 })
+
+  const payload = calls(log, 'update')[0][1] as Record<string, unknown>
+  assert.deepEqual(Object.keys(payload).sort(), ['essay', 'revision', 'title', 'updated_at'])
+  for (const forbidden of ['school_id', 'prompt_id', 'prompt_text', 'stated_max_words']) {
+    assert.equal(forbidden in payload, false, `update must not carry ${forbidden}`)
+  }
+  assert.equal(JSON.stringify(payload).includes('prompt'), false)
+})
+
+test('write: saving a draft that HAS a prompt still writes only the four fields', async () => {
+  // The snapshot comes back in the response and is left exactly where it was.
+  const { db, log } = fakeDb([ok(withPrompt({ revision: 2 }))])
+  const result = await updateDraft(db, ID, { title: 't', essay: 'e', expectedRevision: 1 })
+
+  const payload = calls(log, 'update')[0][1] as Record<string, unknown>
+  assert.deepEqual(Object.keys(payload).sort(), ['essay', 'revision', 'title', 'updated_at'])
+  // And the untouched snapshot is what the caller gets back.
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.value.promptId, PROMPT)
+  assert.equal(result.value.schoolId, SCHOOL)
+  assert.equal(result.value.statedMaxWords, 500)
+})
+
+test('read: a stored snapshot reaches the caller; a generic draft reads as nulls', async () => {
+  const { db: db1 } = fakeDb([ok(withPrompt())])
+  const chosen = await readDraft(db1, ID)
+  assert.equal(chosen.ok, true)
+  if (!chosen.ok) return
+  assert.equal(chosen.value.promptText, 'Why have you chosen nurse anaesthesia?')
+
+  const { db: db2 } = fakeDb([ok(row())])
+  const generic = await readDraft(db2, ID)
+  assert.equal(generic.ok, true)
+  if (!generic.ok) return
+  assert.deepEqual(
+    [generic.value.schoolId, generic.value.promptId, generic.value.promptText, generic.value.statedMaxWords],
+    [null, null, null, null],
+  )
+})
+
+test('read: an INCOHERENT stored snapshot is a data-integrity failure', async () => {
+  // A prompt_id with no wording is not a draft this application can use.
+  for (const broken of [
+    withPrompt({ prompt_text: null }),
+    withPrompt({ school_id: null }),
+    withPrompt({ prompt_id: 'not-a-uuid' }),
+    withPrompt({ stated_max_words: 9999 }),
+    row({ stated_max_words: 500 }),
+  ]) {
+    const { db } = fakeDb([ok(broken)])
+    const result = await readDraft(db, ID)
+    assert.equal(result.ok, false, JSON.stringify(broken))
+    if (result.ok) continue
+    assert.equal(result.reason, 'data-integrity')
+    assert.equal(result.detail, 'unusable stored row (read)')
+  }
+})
+
+test('CAS: the predicate, the increment and the follow-up read are UNCHANGED', async () => {
+  // Widening the projection must not have touched the concurrency control.
+  const { db, log } = fakeDb([ok(null), ok(withPrompt({ revision: 9 }))])
+  const result = await updateDraft(db, ID, { title: 't', essay: 'e', expectedRevision: 4 })
+
+  // One conditional update on id AND revision...
+  assert.deepEqual(calls(log, 'eq').slice(0, 2), [['eq', 'id', ID], ['eq', 'revision', 4]])
+  // ...bumping by exactly one...
+  assert.equal((calls(log, 'update')[0][1] as Record<string, unknown>).revision, 5)
+  // ...then exactly one follow-up read, and exactly two statements in all.
+  assert.equal(froms(log), 2)
+  assert.equal(calls(log, 'update').length, 1)
+  // ...reporting the stored revision, and no part of the stored snapshot.
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, 'conflict')
+  assert.equal(result.storedRevision, 9)
+  assert.equal(JSON.stringify(result).includes('anaesthesia'), false)
+  assert.equal(JSON.stringify(result).includes(PROMPT), false)
 })
 
 // ===================================================================== get

@@ -102,6 +102,15 @@ const OTHER_ID = 'aaaaaaaa-1111-4111-8111-111111111111'
 const USER = 'u1e2f3a4-0000-4000-8000-000000000002'
 const FAKE_USER = { userId: USER, email: 'applicant@example.test', tier: 'free', isUltimate: false }
 
+const SCHOOL = 'aaaaaaaa-0000-4000-8000-000000000003'
+const PROMPT = 'c0ffee00-0000-4000-8000-000000000004'
+
+/**
+ * A GENERIC draft by default: the four prompt columns are explicit nulls, which
+ * is what draftFromRow produces for every draft created today. They must be
+ * stated rather than left off -- omitting them would let JSON.stringify drop
+ * them and make the response assertions below pass without testing anything.
+ */
 const draft = (over: Record<string, unknown> = {}) => ({
   id: ID,
   userId: USER,
@@ -110,6 +119,10 @@ const draft = (over: Record<string, unknown> = {}) => ({
   revision: 1,
   createdAt: '2026-09-29T12:00:00.000Z',
   updatedAt: '2026-09-29T12:00:00.000Z',
+  schoolId: null,
+  promptId: null,
+  promptText: null,
+  statedMaxWords: null,
   ...over,
 })
 
@@ -617,10 +630,129 @@ test('POST: 201 carries the full draft and never the userId', async () => {
   assert.equal(res.status, 201)
 
   const { draft: returned } = await res.json()
-  assert.deepEqual(Object.keys(returned).sort(),
-    ['createdAt', 'essay', 'id', 'revision', 'title', 'updatedAt'])
+  // TEN fields now: the read model exposes the four prompt snapshot columns.
+  assert.deepEqual(Object.keys(returned).sort(), [
+    'createdAt', 'essay', 'id', 'promptId', 'promptText', 'revision',
+    'schoolId', 'statedMaxWords', 'title', 'updatedAt',
+  ])
   assert.equal('userId' in returned, false)
   assert.equal(returned.revision, 1)
+})
+
+test('POST: a new draft is GENERIC -- four explicit nulls over the wire', async () => {
+  repoReplies.createDraft = { ok: true, value: draft() }
+  const res = await (await collection(true)).POST(jsonRequest('POST', { title: 'Draft one', essay: '' }))
+  const { draft: returned } = await res.json()
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
+    assert.equal(key in returned, true, `${key} must survive JSON`)
+    assert.equal(returned[key], null, `${key} must be null, not absent`)
+  }
+})
+
+test('GET one: a GENERIC draft serialises all four fields as explicit null', async () => {
+  // Present and null over the wire, never omitted. Four absent keys would be
+  // indistinguishable from a server too old to send them, so a client could not
+  // tell "this draft has no prompt" from "this response does not say".
+  repoReplies.readDraft = { ok: true, value: draft() }
+  const res = await (await item(true)).GET(jsonRequest('GET'), ctx(ID))
+  assert.equal(res.status, 200)
+
+  // Read from the SERIALISED body: JSON.stringify drops undefined values, so a
+  // field that was merely absent on the object would vanish silently here.
+  const { draft: returned } = await res.json()
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
+    assert.equal(key in returned, true, `${key} must survive serialisation`)
+    assert.equal(returned[key], null, `${key} must be null, not absent`)
+  }
+  assert.deepEqual(Object.keys(returned).sort(), [
+    'createdAt', 'essay', 'id', 'promptId', 'promptText', 'revision',
+    'schoolId', 'statedMaxWords', 'title', 'updatedAt',
+  ])
+  assert.equal('userId' in returned, false)
+  assert.equal(JSON.stringify(returned).includes(USER), false)
+})
+
+test('PATCH: a draft that HAS prompt metadata returns the snapshot unchanged', async () => {
+  // This checkpoint writes none of the four columns, so a save hands back the
+  // snapshot it did not touch. That is what makes a reload after an autosave
+  // preserve the prompt selection rather than appear to clear it.
+  const saved = draft({
+    revision: 2,
+    schoolId: SCHOOL, promptId: PROMPT,
+    promptText: 'Why have you chosen nurse anaesthesia?', statedMaxWords: 500,
+  })
+  repoReplies.updateDraft = { ok: true, value: saved }
+
+  const res = await (await item(true)).PATCH(
+    jsonRequest('PATCH', { title: 'Draft one', essay: 'Body.', expectedRevision: 1 }),
+    ctx(ID),
+  )
+  assert.equal(res.status, 200)
+
+  const { draft: returned } = await res.json()
+  assert.equal(returned.schoolId, SCHOOL)
+  assert.equal(returned.promptId, PROMPT)
+  assert.equal(returned.promptText, 'Why have you chosen nurse anaesthesia?')
+  assert.equal(returned.statedMaxWords, 500)
+  assert.equal(returned.revision, 2)
+  assert.equal('userId' in returned, false)
+
+  // AND THE REQUEST STILL DECIDED NOTHING ABOUT THE PROMPT. The repository was
+  // handed exactly the three validated fields, so nothing in this response came
+  // from the body.
+  const [, , input] = called('updateDraft')[0].args as [unknown, string, Record<string, unknown>]
+  assert.deepEqual(Object.keys(input).sort(), ['essay', 'expectedRevision', 'title'])
+})
+
+test('PATCH: a generic draft still answers with four explicit nulls', async () => {
+  repoReplies.updateDraft = { ok: true, value: draft({ revision: 2 }) }
+  const res = await (await item(true)).PATCH(
+    jsonRequest('PATCH', { title: 'Draft one', essay: 'Body.', expectedRevision: 1 }),
+    ctx(ID),
+  )
+  const { draft: returned } = await res.json()
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
+    assert.equal(key in returned, true, `${key} must survive serialisation`)
+    assert.equal(returned[key], null, `${key} must be null, not absent`)
+  }
+  assert.equal('userId' in returned, false)
+})
+
+test('GET one: a stored prompt snapshot reaches the client', async () => {
+  repoReplies.readDraft = {
+    ok: true,
+    value: draft({
+      schoolId: SCHOOL, promptId: PROMPT,
+      promptText: 'Why have you chosen nurse anaesthesia?', statedMaxWords: 500,
+    }),
+  }
+  const res = await (await item(true)).GET(jsonRequest('GET'), ctx(ID))
+  assert.equal(res.status, 200)
+  const { draft: returned } = await res.json()
+  assert.equal(returned.schoolId, SCHOOL)
+  assert.equal(returned.promptId, PROMPT)
+  assert.equal(returned.promptText, 'Why have you chosen nurse anaesthesia?')
+  assert.equal(returned.statedMaxWords, 500)
+  assert.equal('userId' in returned, false)
+})
+
+test('the routes still send NO ability to select a prompt', async () => {
+  // Checkpoint A stays unwired: neither route reads a prompt from a body, and
+  // neither resolves one. This is the READ side only.
+  const sources = await Promise.all([
+    import('node:fs/promises').then((fs) => fs.readFile(
+      new URL('./route.ts', import.meta.url), 'utf8')),
+    import('node:fs/promises').then((fs) => fs.readFile(
+      new URL('./[id]/route.ts', import.meta.url), 'utf8')),
+  ])
+  for (const source of sources) {
+    for (const forbidden of [
+      'checkPromptSelection', 'promptSelectionOf', 'readActivePrompt',
+      'promptRepo', 'promptId', 'schoolId', 'statedMaxWords',
+    ]) {
+      assert.equal(source.includes(forbidden), false, `${forbidden} belongs to a later step`)
+    }
+  }
 })
 
 test('POST: a request-supplied userId, id, revision or timestamp is ignored entirely', async () => {

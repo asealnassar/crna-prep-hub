@@ -183,12 +183,26 @@ export interface PublicDraft {
   readonly revision: number
   readonly createdAt: string
   readonly updatedAt: string
+
+  // ----------------------------------------------- the prompt snapshot
+  // PRESENT AND null ON A GENERIC DRAFT, never omitted. A client that receives
+  // four explicit nulls knows this draft has no prompt; one that receives four
+  // absent keys cannot tell that from a server too old to send them.
+  readonly schoolId: string | null
+  readonly promptId: string | null
+  readonly promptText: string | null
+  readonly statedMaxWords: number | null
 }
 
 /**
  * BUILT, NOT SPREAD. `{ ...draft }` would carry userId today and whatever is
- * added to StatementDraft tomorrow; naming the six fields means a new column
+ * added to StatementDraft tomorrow; naming the ten fields means a new column
  * cannot reach a client by being added upstream.
+ *
+ * THE FOUR PROMPT FIELDS ARE COPIED AS THEY ARE, nulls included. There is no
+ * `?? undefined`, no omit-when-null and no reshaping into a nested object: a
+ * generic draft serialises `"schoolId": null`, so a client reads the absence of
+ * a prompt rather than inferring it from a missing key.
  */
 export function publicDraft(draft: StatementDraft): PublicDraft {
   return {
@@ -198,5 +212,9 @@ export function publicDraft(draft: StatementDraft): PublicDraft {
     revision: draft.revision,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
+    schoolId: draft.schoolId,
+    promptId: draft.promptId,
+    promptText: draft.promptText,
+    statedMaxWords: draft.statedMaxWords,
   }
 }

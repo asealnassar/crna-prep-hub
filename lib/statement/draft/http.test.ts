@@ -198,6 +198,10 @@ test('the not-found body says nothing about ownership', () => {
 
 // ---------------------------------------------------------- the public draft
 
+const SCHOOL = 'aaaaaaaa-0000-4000-8000-000000000003'
+const PROMPT = 'c0ffee00-0000-4000-8000-000000000004'
+
+/** A GENERIC draft: no prompt, four explicit nulls. */
 const stored: StatementDraft = {
   id: 'd1e2f3a4-0000-4000-8000-000000000001',
   userId: 'u1e2f3a4-0000-4000-8000-000000000002',
@@ -206,14 +210,57 @@ const stored: StatementDraft = {
   revision: 3,
   createdAt: '2026-09-29T12:00:00.000Z',
   updatedAt: '2026-09-29T12:30:00.000Z',
+  schoolId: null,
+  promptId: null,
+  promptText: null,
+  statedMaxWords: null,
 }
 
-test('publicDraft: drops userId and keeps exactly the six client fields', () => {
+/** The same draft with a prompt snapshot on it. */
+const withPrompt: StatementDraft = {
+  ...stored,
+  schoolId: SCHOOL,
+  promptId: PROMPT,
+  promptText: 'Why have you chosen nurse anaesthesia?',
+  statedMaxWords: 500,
+}
+
+test('publicDraft: drops userId and keeps exactly the TEN client fields', () => {
   const result = publicDraft(stored)
-  assert.deepEqual(Object.keys(result).sort(),
-    ['createdAt', 'essay', 'id', 'revision', 'title', 'updatedAt'])
+  assert.deepEqual(Object.keys(result).sort(), [
+    'createdAt', 'essay', 'id', 'promptId', 'promptText', 'revision',
+    'schoolId', 'statedMaxWords', 'title', 'updatedAt',
+  ])
+  assert.equal(Object.keys(result).length, 10)
   assert.equal('userId' in result, false)
   assert.equal(JSON.stringify(result).includes(stored.userId), false)
+})
+
+test('publicDraft: EXPOSES all four prompt fields when a prompt is chosen', () => {
+  const result = publicDraft(withPrompt)
+  assert.equal(result.schoolId, SCHOOL)
+  assert.equal(result.promptId, PROMPT)
+  assert.equal(result.promptText, 'Why have you chosen nurse anaesthesia?')
+  assert.equal(result.statedMaxWords, 500)
+})
+
+test('publicDraft: a GENERIC draft serialises four EXPLICIT nulls', () => {
+  // Present and null, never omitted: four absent keys are indistinguishable
+  // from a server too old to send them.
+  const result = publicDraft(stored)
+  const parsed = JSON.parse(JSON.stringify(result)) as Record<string, unknown>
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
+    assert.equal(key in parsed, true, `${key} must survive serialisation`)
+    assert.equal(parsed[key], null, `${key} must be null, not absent`)
+  }
+  assert.equal(Object.keys(parsed).length, 10)
+})
+
+test('publicDraft: a chosen prompt with no stated limit keeps a null limit', () => {
+  const result = publicDraft({ ...withPrompt, statedMaxWords: null })
+  assert.equal(result.promptId, PROMPT)
+  assert.equal(result.statedMaxWords, null)
+  assert.equal('statedMaxWords' in result, true)
 })
 
 test('publicDraft: BUILT, not spread -- an added column cannot leak through it', () => {

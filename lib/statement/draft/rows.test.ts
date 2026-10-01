@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { draftFromRow, draftSummaryFromRow, parseStoredRevision } from './rows.ts'
 import type { StatementDraftRow, StatementDraftSummaryRow } from './rows.ts'
+// Imported ONLY to assert the two snapshot parsers have not drifted apart.
+import { promptSnapshotFromRow } from './promptRepo.ts'
 
 /**
  * Pure. No client, no network, no clock.
@@ -12,6 +14,12 @@ import type { StatementDraftRow, StatementDraftSummaryRow } from './rows.ts'
  * conflict, and the corruption behind it would never surface.
  */
 
+const SCHOOL = 'aaaaaaaa-0000-4000-8000-000000000003'
+const PROMPT = 'c0ffee00-0000-4000-8000-000000000004'
+const WORDING = 'Why have you chosen nurse anaesthesia?'
+
+/** The DEFAULT IS A GENERIC DRAFT: no prompt, all four snapshot columns NULL,
+ *  which is what every draft created today looks like. */
 const row = (over: Partial<StatementDraftRow> = {}): StatementDraftRow => ({
   id: 'd1e2f3a4-0000-4000-8000-000000000001',
   user_id: 'u1e2f3a4-0000-4000-8000-000000000002',
@@ -20,6 +28,19 @@ const row = (over: Partial<StatementDraftRow> = {}): StatementDraftRow => ({
   revision: 1,
   created_at: '2026-09-28T12:00:00.000Z',
   updated_at: '2026-09-28T12:00:00.000Z',
+  school_id: null,
+  prompt_id: null,
+  prompt_text: null,
+  stated_max_words: null,
+  ...over,
+})
+
+/** The same row with a prompt chosen. */
+const chosen = (over: Partial<StatementDraftRow> = {}): StatementDraftRow => row({
+  school_id: SCHOOL,
+  prompt_id: PROMPT,
+  prompt_text: WORDING,
+  stated_max_words: 500,
   ...over,
 })
 
@@ -130,7 +151,7 @@ test('revision: THERE IS NO SILENT FALLBACK TO 1 for any refused value', () => {
 
 // ----------------------------------------------------------- row normalisation
 
-test('row: a well-formed row becomes a draft with camel-cased fields', () => {
+test('row: a GENERIC row becomes a draft whose four prompt fields are null', () => {
   const draft = draftFromRow(row())
   assert.deepEqual(draft, {
     id: 'd1e2f3a4-0000-4000-8000-000000000001',
@@ -140,7 +161,18 @@ test('row: a well-formed row becomes a draft with camel-cased fields', () => {
     revision: 1,
     createdAt: '2026-09-28T12:00:00.000Z',
     updatedAt: '2026-09-28T12:00:00.000Z',
+    schoolId: null,
+    promptId: null,
+    promptText: null,
+    statedMaxWords: null,
   })
+  // PRESENT AND null, not absent: a consumer must be able to tell "no prompt"
+  // from "this parser forgot".
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
+    assert.equal(key in (draft as object), true, `${key} must be present`)
+    assert.equal((draft as Record<string, unknown>)[key], null)
+  }
+  assert.equal(JSON.stringify(draft).includes('undefined'), false)
 })
 
 test('row: a string bigint revision is normalised to a number', () => {
@@ -176,6 +208,156 @@ test('row: null, undefined and a non-object are unusable rather than thrown on',
   assert.equal(draftFromRow(null), null)
   assert.equal(draftFromRow(undefined), null)
   assert.equal(draftFromRow('row' as unknown as StatementDraftRow), null)
+})
+
+// ------------------------------------------------------- the prompt snapshot
+
+test('snapshot: a CHOSEN prompt parses into all four camel-cased fields', () => {
+  const draft = draftFromRow(chosen())
+  assert.equal(draft === null, false)
+  assert.equal(draft?.schoolId, SCHOOL)
+  assert.equal(draft?.promptId, PROMPT)
+  assert.equal(draft?.promptText, WORDING)
+  assert.equal(draft?.statedMaxWords, 500)
+})
+
+test('snapshot: a chosen prompt with NO stated word limit is valid', () => {
+  // A school stating no limit is a real and common fact, distinct from zero.
+  const draft = draftFromRow(chosen({ stated_max_words: null }))
+  assert.equal(draft === null, false)
+  assert.equal(draft?.statedMaxWords, null)
+  assert.equal(draft?.promptText, WORDING)
+})
+
+test('snapshot: the wording is returned verbatim -- not trimmed or normalised', () => {
+  const shaped = '  First paragraph.\n\n    Indented second.  '
+  const draft = draftFromRow(chosen({ prompt_text: shaped }))
+  assert.equal(draft?.promptText, shaped)
+})
+
+test('snapshot: an invalid school_id makes the row unusable', () => {
+  for (const school of ['', ' ', 'not-a-uuid', SCHOOL.slice(0, -1), 42 as never, true as never]) {
+    assert.equal(draftFromRow(chosen({ school_id: school })), null, String(school))
+  }
+})
+
+test('snapshot: an invalid prompt_id makes the row unusable', () => {
+  for (const prompt of ['', ' ', 'not-a-uuid', `${PROMPT}0`, 42 as never, true as never]) {
+    assert.equal(draftFromRow(chosen({ prompt_id: prompt })), null, String(prompt))
+  }
+})
+
+test('snapshot: blank or non-string prompt_text makes the row unusable', () => {
+  for (const text of ['', ' ', '\n\t  ', 42 as never, true as never, {} as never]) {
+    assert.equal(draftFromRow(chosen({ prompt_text: text })), null, JSON.stringify(text))
+  }
+})
+
+test('snapshot: prompt_text of exactly 5,000 code points is accepted', () => {
+  const draft = draftFromRow(chosen({ prompt_text: 'a'.repeat(5000) }))
+  assert.equal(draft === null, false)
+  assert.equal(draft?.promptText?.length, 5000)
+})
+
+test('snapshot: prompt_text of 5,001 code points makes the row unusable', () => {
+  assert.equal(draftFromRow(chosen({ prompt_text: 'a'.repeat(5001) })), null)
+})
+
+test('snapshot: the ceiling counts CODE POINTS, as char_length does', () => {
+  // 3,000 astral characters are 3,000 code points but 6,000 UTF-16 code units.
+  // Postgres stored them, so this parser must read them.
+  const emoji = '\u{1f642}'
+  const within = emoji.repeat(3000)
+  assert.equal(within.length, 6000, 'code units')
+  assert.equal([...within].length, 3000, 'code points')
+  assert.equal(draftFromRow(chosen({ prompt_text: within }))?.promptText, within)
+
+  const over = emoji.repeat(5001)
+  assert.equal([...over].length, 5001)
+  assert.equal(draftFromRow(chosen({ prompt_text: over })), null)
+})
+
+test('snapshot: an invalid stated_max_words makes the row unusable', () => {
+  for (const words of [0, -1, 5001, 1.5, NaN, Infinity, '500' as never, true as never]) {
+    assert.equal(draftFromRow(chosen({ stated_max_words: words })), null, String(words))
+  }
+})
+
+test('snapshot: both boundary word limits the CHECK permits are accepted', () => {
+  for (const words of [1, 5000]) {
+    assert.equal(draftFromRow(chosen({ stated_max_words: words }))?.statedMaxWords, words)
+  }
+})
+
+test('snapshot: PARTIAL metadata is refused -- a prompt is all three or none', () => {
+  // There is no cross-column CHECK and no foreign key at this checkpoint, so
+  // the read side is where incoherence has to be caught. Each of these is a row
+  // claiming a prompt while missing part of it.
+  const partial: Partial<StatementDraftRow>[] = [
+    { school_id: SCHOOL },                              // school alone
+    { prompt_id: PROMPT },                              // id alone
+    { prompt_text: WORDING },                           // wording alone
+    { stated_max_words: 500 },                          // a limit and nothing else
+    { school_id: SCHOOL, prompt_id: PROMPT },           // no wording
+    { school_id: SCHOOL, prompt_text: WORDING },        // no id
+    { prompt_id: PROMPT, prompt_text: WORDING },        // no school
+    { school_id: null, prompt_id: PROMPT, prompt_text: WORDING, stated_max_words: 500 },
+    { school_id: SCHOOL, prompt_id: null, prompt_text: WORDING, stated_max_words: 500 },
+    { school_id: SCHOOL, prompt_id: PROMPT, prompt_text: null, stated_max_words: 500 },
+  ]
+  for (const hole of partial) {
+    assert.equal(draftFromRow(row(hole)), null, JSON.stringify(hole))
+  }
+})
+
+test('snapshot: an ABSENT column is unusable, not read as a generic draft', () => {
+  // A projection that forgot the columns must be loud. Read as null, every
+  // draft in the database would silently look like it had no prompt.
+  for (const key of ['school_id', 'prompt_id', 'prompt_text', 'stated_max_words'] as const) {
+    const missing = { ...row() }
+    delete (missing as Record<string, unknown>)[key]
+    assert.equal(draftFromRow(missing as StatementDraftRow), null, `missing ${key}`)
+
+    const explicitly = row({ [key]: undefined } as Partial<StatementDraftRow>)
+    assert.equal(draftFromRow(explicitly), null, `undefined ${key}`)
+  }
+})
+
+test('snapshot: nothing is repaired, clamped or inferred', () => {
+  // Every refusal above returns null. None of them returns a draft carrying a
+  // corrected value, which is what a clamp or a fallback would look like.
+  for (const over of [
+    { stated_max_words: 9999 }, { stated_max_words: 0 },
+    { prompt_text: 'a'.repeat(6000) }, { prompt_text: '   ' },
+  ] as Partial<StatementDraftRow>[]) {
+    assert.equal(draftFromRow(chosen(over)), null, JSON.stringify(over))
+  }
+})
+
+test('snapshot: THE DRAFT PARSER AND THE PROMPT RESOLVER AGREE ON EVERY BOUNDARY', () => {
+  // rows.ts repeats promptRepo.ts's value rules rather than importing them, so
+  // that the draft read path does not reach into the prompt resolver. This is
+  // what stops the two copies drifting apart.
+  const cases: readonly { text?: unknown; words?: unknown }[] = [
+    { text: 'a'.repeat(5000) }, { text: 'a'.repeat(5001) },
+    { text: '' }, { text: '   ' }, { text: '\u{1f642}'.repeat(3000) },
+    { words: 1 }, { words: 5000 }, { words: 0 }, { words: 5001 },
+    { words: null }, { words: 1.5 }, { words: '500' },
+  ]
+  for (const c of cases) {
+    const text = c.text === undefined ? WORDING : c.text
+    const words = c.words === undefined ? 500 : c.words
+
+    const draftOk = draftFromRow(chosen({
+      prompt_text: text as never, stated_max_words: words as never,
+    })) !== null
+    const promptOk = promptSnapshotFromRow({
+      id: PROMPT, school_id: SCHOOL,
+      prompt_text: text as never, stated_max_words: words as never,
+    }) !== null
+
+    assert.equal(draftOk, promptOk, `disagreed about ${JSON.stringify(c)}`)
+  }
 })
 
 // ------------------------------------------------------ summary normalisation
