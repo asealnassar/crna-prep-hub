@@ -11,6 +11,7 @@ import {
 import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
 import { MAX_TITLE_CHARS } from '@/lib/statement/draft/validate'
 import type { DraftPromptSnapshot, StatementDraft } from '@/lib/statement/draft/rows'
+import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
   ACCEPT_ATTRIBUTE,
@@ -82,7 +83,34 @@ const LIBRARY = '/statement-studio'
  * Still deferred: analysis, the school/prompt PICKER and its catalog request,
  * version history, delete, drag-and-drop, upload history.
  */
-export default function StatementStudioClient({ draft }: { draft: StatementDraft }) {
+/**
+ * WHAT THE SERVER HANDS THIS EDITOR.
+ *
+ * `schools` and `schoolsUnavailable` ARRIVE BUT ARE NOT YET READ. The picker
+ * that will render them is the next checkpoint; they are accepted now so the
+ * server read, its sanitisation and its failure state are settled and tested
+ * before any control exists. Nothing is invented to consume them -- no hidden
+ * element, no attribute, no log line.
+ *
+ * THE TWO ARE SEPARATE ON PURPOSE. `schools: []` with `schoolsUnavailable:
+ * false` means the directory is genuinely empty; the same array with the flag
+ * TRUE means it could not be read. A picker must say different things about
+ * those, and merging them would let a dropped connection read as "your
+ * programme is not supported".
+ *
+ * NOTHING IS FETCHED HERE. This component makes no Supabase call of any kind --
+ * the draft and the school list both arrive as props, read on the server behind
+ * the Studio gate -- and it does not call the prompt catalog endpoint yet.
+ */
+export default function StatementStudioClient({
+  draft,
+  schools,
+  schoolsUnavailable,
+}: {
+  draft: StatementDraft
+  schools: readonly SchoolOption[]
+  schoolsUnavailable: boolean
+}) {
   const router = useRouter()
 
   /** Read-only, but stateful: a reload may bring a title changed elsewhere. */

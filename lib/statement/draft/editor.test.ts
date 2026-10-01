@@ -367,8 +367,21 @@ test('the page still gates, still reads server-side, and hands the draft down', 
   assert.doesNotMatch(PAGE, /SERVICE_ROLE/i)
   assert.doesNotMatch(PAGE, /\.from\(|statement_drafts/)
   assert.doesNotMatch(PAGE, /\.detail\b/)
-  // The one new thing.
-  assert.match(PAGE, /<StatementStudioClient draft=\{draft\} \/>/)
+  // The draft is still handed over whole, and is still the FIRST prop. It is no
+  // longer the only one -- the server now also reads the school options behind
+  // the same gate -- so the assertion names the props rather than the whole tag.
+  assert.match(PAGE, /<StatementStudioClient\s*\n?\s*draft=\{draft\}/)
+  assert.match(PAGE, /schools=\{schools\.ok \? schools\.value : \[\]\}/)
+  assert.match(PAGE, /schoolsUnavailable=\{!schools\.ok\}/)
+  // THE SCHOOL READ IS LAST, after every access check and after the draft, so a
+  // blocked visitor can never reach it.
+  assert.ok(
+    PAGE.indexOf('listSchoolPickerOptions(db)') > PAGE.indexOf('readDraft(db'),
+    'the directory is read after the draft'
+  )
+  // The SAME caller-scoped client, not a second one.
+  assert.match(PAGE, /listSchoolPickerOptions\(db\)/)
+  assert.equal((PAGE.match(/createClient\(/g) ?? []).length, 1, 'one client on the page')
   assert.doesNotMatch(PAGE, /'use client'/)
   const gate = PAGE.indexOf('statementStudioAccess({')
   assert.ok(gate !== -1 && gate < PAGE.indexOf('readDraft(db'))
@@ -483,8 +496,11 @@ test('none of the deferred features crept in', () => {
     // THE PICKER IS STILL DEFERRED. The editor now CARRIES prompt metadata --
     // see the test below -- but it cannot choose any: no catalog endpoint, no
     // school list, no control of any kind.
-    /\/api\/statement\/prompts/, /\bschools\b/, /<select/, /<option/,
+    /\/api\/statement\/prompts/, /<select/, /<option/,
     /setSchool/, /listPrompts/, /readActivePrompt/, /promptSelectionOf/,
+    // The school options now ARRIVE as a prop -- see the test below -- so the
+    // ban narrows to FETCHING or RENDERING them, which is the picker's job.
+    /from\('schools'\)/, /useState<.*SchoolOption/, /schools\.map/,
   ]) {
     assert.doesNotMatch(CLIENT, deferred, `${deferred} belongs to a later step`)
   }
@@ -497,6 +513,30 @@ test('none of the deferred features crept in', () => {
       "type: 'retry'", "type: 'save-failed'", "type: 'save-started'",
     ]
   )
+})
+
+test('SCHOOL OPTIONS ARRIVE AS A PROP AND ARE NOT YET READ', () => {
+  // The precise invariant replacing the old blanket "no schools anywhere". The
+  // editor accepts the server's list; it does not fetch one and does not render
+  // a control for it.
+  assert.match(CLIENT, /schools: readonly SchoolOption\[\]/)
+  assert.match(CLIENT, /schoolsUnavailable: boolean/)
+  assert.match(CLIENT, /import type \{ SchoolOption \} from '@\/lib\/statement\/draft\/schoolPicker'/)
+
+  // NOT READ YET, and nothing was invented to consume them.
+  assert.doesNotMatch(CLIENT, /schools\./)
+  assert.doesNotMatch(CLIENT, /schools\[/)
+  assert.doesNotMatch(CLIENT, /schoolsUnavailable \?/)
+  assert.doesNotMatch(CLIENT, /schoolsUnavailable &&/)
+  assert.doesNotMatch(CLIENT, /data-school/)
+
+  // AND NO BROWSER-SIDE DATABASE QUERY, which is the whole reason the server
+  // reads this: the gate runs there.
+  for (const forbidden of [/createClient/, /supabase/i, /anon[_-]?key/i, /@supabase/]) {
+    assert.doesNotMatch(CLIENT, forbidden, 'the browser must not query the database')
+  }
+  // Still exactly the three fetches this editor has always made.
+  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
 })
 
 test('PROMPT METADATA IS CARRIED BUT NEVER SENT', () => {

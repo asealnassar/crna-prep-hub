@@ -4,6 +4,7 @@ import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAut
 import { statementStudioAccess, statementStudioMode } from '@/lib/statement/studioGate'
 import { isDraftId } from '@/lib/statement/draft/http'
 import { readDraft } from '@/lib/statement/draft/draftRepo'
+import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
 import StatementStudioClient from '../components/StatementStudioClient'
 
 /**
@@ -24,6 +25,11 @@ import StatementStudioClient from '../components/StatementStudioClient'
  *
  * Upload, analysis, version history, delete and navigation guards are still
  * absent; /personal-statement continues to serve users in the meantime.
+ *
+ * THE SCHOOL OPTIONS ARE LOADED HERE, NOT IN THE BROWSER, for the same reason
+ * the draft is: the gate runs on the server, so a browser-side directory fetch
+ * would be the one Studio data path not behind it. The editor receives them as
+ * a prop and renders no control for them yet.
  *
  * The read is made with the caller's own JWT, so RLS decides what they may open.
  * A draft that belongs to someone else is not "forbidden" here; it simply does
@@ -96,7 +102,37 @@ export default async function StatementStudioPage({
   }
   const draft = read.value
 
+  /**
+   * THE SCHOOL OPTIONS, READ LAST AND ON PURPOSE.
+   *
+   * AFTER EVERY ACCESS CHECK. The gate, the session, the token, the id check
+   * and the draft read have all already succeeded above, so a blocked visitor
+   * and a caller asking after somebody else's draft never reach this line --
+   * this query cannot be used to probe the directory from behind the Studio
+   * gate. It uses the SAME caller-scoped client the draft was read with; there
+   * is no service-role client on this page.
+   *
+   * THREE COLUMNS, NEVER A SCHOOL ROW. listSchoolPickerOptions returns
+   * { id, name, locationState } and nothing else -- see schoolPicker.ts for why
+   * getPublicSchools() is deliberately not reused here.
+   *
+   * A FAILURE DOES NOT COST THE APPLICANT THEIR ESSAY. The draft is already in
+   * hand, so a directory that cannot be read becomes an EXPLICIT flag rather
+   * than an exception or a silent empty list: the editor opens, the essay is
+   * editable and autosave works, and the picker that will eventually render
+   * these knows the difference between "no schools exist" and "we could not
+   * ask". Collapsing those two would show an applicant an empty dropdown and
+   * let them conclude their programme is not supported.
+   */
+  const schools = await listSchoolPickerOptions(db)
+
   // The persisted draft, in full, straight into the editor. Its `revision` is
   // what seeds autosave -- the client never invents one.
-  return <StatementStudioClient draft={draft} />
+  return (
+    <StatementStudioClient
+      draft={draft}
+      schools={schools.ok ? schools.value : []}
+      schoolsUnavailable={!schools.ok}
+    />
+  )
 }

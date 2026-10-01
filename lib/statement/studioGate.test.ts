@@ -366,7 +366,9 @@ test('the draft is rendered as escaped text, whitespace preserved', () => {
   for (const [name, source] of [['page', PAGE], ['editor', editor]] as const) {
     assert.doesNotMatch(source, /dangerouslySetInnerHTML/, `${name} must never set raw HTML`)
   }
-  assert.match(PAGE, /<StatementStudioClient draft=\{draft\} \/>/)
+  // The draft is still handed over whole; it is no longer the only prop, so the
+  // assertion names it rather than the whole tag.
+  assert.match(PAGE, /<StatementStudioClient\s*\n?\s*draft=\{draft\}/)
   // The title is EDITABLE now, so "no input" is no longer the invariant. What
   // still has to hold is where its value comes from and how it reaches the DOM.
   //
