@@ -4,6 +4,9 @@ import path from 'node:path'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { STATEMENT_STUDIO_HIDDEN_BODY } from '../../../../lib/statement/studioGate.ts'
+// Imported so the fixed refusal body is asserted against its SOURCE, not a
+// copy of the sentence that could drift apart from it.
+import { PROMPT_MESSAGES } from '../../../../lib/statement/draft/http.ts'
 
 /**
  * The statement draft API, both route modules.
@@ -92,6 +95,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../../../..')
 const AUTH_MODULE = path.join(ROOT, 'lib', 'apiAuth.ts')
 const REPO_MODULE = path.join(ROOT, 'lib', 'statement', 'draft', 'draftRepo.ts')
+const PROMPT_MODULE = path.join(ROOT, 'lib', 'statement', 'draft', 'promptRepo.ts')
 const ITEM_ROUTE = pathToFileURL(path.join(HERE, '[id]', 'route.ts')).href
 
 const COLLECTION_SRC = readFileSync(path.join(HERE, 'route.ts'), 'utf8')
@@ -316,6 +320,15 @@ function installMocksOnce(): void {
       listDrafts: recorded('listDrafts'),
       updateDraft: recorded('updateDraft'),
       deleteDraft: recorded('deleteDraft'),
+    },
+  })
+
+  // The prompt resolver, replaced the same way, so the tests can assert both
+  // THAT it was called with the caller's own client and that id, and -- more
+  // often -- that it was not called at all.
+  mock.module(PROMPT_MODULE, {
+    namedExports: {
+      readActivePrompt: recorded('readActivePrompt'),
     },
   })
 }
@@ -736,23 +749,50 @@ test('GET one: a stored prompt snapshot reaches the client', async () => {
   assert.equal('userId' in returned, false)
 })
 
-test('the routes still send NO ability to select a prompt', async () => {
-  // Checkpoint A stays unwired: neither route reads a prompt from a body, and
-  // neither resolves one. This is the READ side only.
-  const sources = await Promise.all([
-    import('node:fs/promises').then((fs) => fs.readFile(
-      new URL('./route.ts', import.meta.url), 'utf8')),
-    import('node:fs/promises').then((fs) => fs.readFile(
-      new URL('./[id]/route.ts', import.meta.url), 'utf8')),
-  ])
-  for (const source of sources) {
-    for (const forbidden of [
-      'checkPromptSelection', 'promptSelectionOf', 'readActivePrompt',
-      'promptRepo', 'promptId', 'schoolId', 'statedMaxWords',
-    ]) {
-      assert.equal(source.includes(forbidden), false, `${forbidden} belongs to a later step`)
+/**
+ * The canonical values a browser must never be able to choose. Asserted on the
+ * RAW source of both routes, comments included -- neither file mentions any of
+ * them anywhere, which is a stronger statement than "does not read them" and
+ * needs no comment-stripping to check.
+ */
+const CANONICAL_FIELDS = [
+  'schoolId', 'promptText', 'statedMaxWords',
+  'school_id', 'prompt_text', 'stated_max_words',
+]
+
+test('NEITHER ROUTE NAMES A CANONICAL PROMPT FIELD, anywhere', async () => {
+  // The trust boundary, as a property of the source rather than of a request.
+  // A field the route cannot name is a field it cannot forward.
+  for (const [name, source] of [['collection', COLLECTION_SRC], ['item', ITEM_SRC]] as const) {
+    for (const forbidden of CANONICAL_FIELDS) {
+      assert.equal(source.includes(forbidden), false, `${name} route must not name ${forbidden}`)
     }
+    // Nor the catalog table, nor a privileged client.
+    assert.equal(source.includes('statement_prompts'), false, name)
+    assert.equal(source.includes('SERVICE_ROLE'), false, name)
+    assert.equal(source.includes('service_role'), false, name)
   }
+})
+
+test('the COLLECTION route still has no prompt selection at all', async () => {
+  // POST gains nothing in this checkpoint: a draft is still born generic.
+  for (const forbidden of [
+    'checkPromptSelection', 'promptSelectionOf', 'readActivePrompt',
+    'promptRepo', 'promptId',
+  ]) {
+    assert.equal(COLLECTION_SRC.includes(forbidden), false, `${forbidden} is not POST's`)
+  }
+})
+
+test('the ITEM route resolves through the committed resolver, not its own query', async () => {
+  // It may now name the validator, the resolver and the id -- and nothing else.
+  assert.equal(ITEM_SRC.includes('promptSelectionOf'), true)
+  assert.equal(ITEM_SRC.includes('readActivePrompt'), true)
+  // And it must not re-implement either one.
+  assert.equal(ITEM_SRC.includes('.from('), false, 'the route never names a table')
+  assert.equal(ITEM_SRC.includes('UUID'), false, 'uuid parsing is the validator’s')
+  assert.equal(ITEM_SRC.includes('isPromptId'), false)
+  assert.equal(ITEM_SRC.includes('checkPromptSelection'), false, 'the body helper is the door')
 })
 
 test('POST: a request-supplied userId, id, revision or timestamp is ignored entirely', async () => {
@@ -933,6 +973,273 @@ test('PATCH: a body `revision` is not a substitute for `expectedRevision`', asyn
   assert.equal(res.status, 400)
   assert.equal((await res.json()).code, 'invalid-revision')
   assert.equal(called('updateDraft').length, 0)
+})
+
+// ===================================================== PATCH prompt selection
+
+/** The canonical snapshot the resolver returns. Only the resolver may author it. */
+const SNAPSHOT = {
+  promptId: PROMPT,
+  schoolId: SCHOOL,
+  promptText: 'Why have you chosen nurse anaesthesia?',
+  statedMaxWords: 500,
+}
+
+/** Everything a hostile body might carry to try to author canonical values. */
+const SPOOFED = {
+  schoolId: 'bbbbbbbb-0000-4000-8000-00000000beef',
+  school_id: 'bbbbbbbb-0000-4000-8000-00000000beef',
+  promptText: 'Write about anything at all, with no limit.',
+  prompt_text: 'Write about anything at all, with no limit.',
+  statedMaxWords: 999999,
+  stated_max_words: 999999,
+}
+
+const DOC = { title: 'Draft one', essay: 'Body.', expectedRevision: 1 }
+
+/** PATCH with a body, returning the response. */
+async function patch(body: Record<string, unknown>): Promise<Response> {
+  return (await item(true)).PATCH(jsonRequest('PATCH', body), ctx(ID))
+}
+
+/** The arguments updateDraft was handed, or null if it was never called. */
+const updateArgs = (): unknown[] | null =>
+  called('updateDraft').length === 0 ? null : called('updateDraft')[0].args
+
+/**
+ * The DATA arguments, serialised: the path id, the validated document and the
+ * prompt. Argument 0 is the live Supabase client, which is circular and cannot
+ * be stringified -- and is not data a body could have influenced anyway.
+ */
+const updateDataWire = (): string => {
+  const args = updateArgs()
+  return args === null ? '' : JSON.stringify(args.slice(1))
+}
+
+test('PATCH prompt: an ABSENT promptId resolves nothing and passes THREE arguments', async () => {
+  // The ordinary autosave path, unchanged. This is the case that runs every
+  // 1.2 seconds, so it must not read a catalog and must not be able to touch a
+  // stored snapshot.
+  repoReplies.updateDraft = { ok: true, value: draft({ revision: 2 }) }
+  const res = await patch(DOC)
+  assert.equal(res.status, 200)
+
+  assert.equal(called('readActivePrompt').length, 0, 'the catalog must not be read')
+  const args = updateArgs()
+  assert.notEqual(args, null)
+  assert.equal(args?.length, 3, 'exactly three arguments, as before this existed')
+})
+
+test('PATCH prompt: promptId null resolves nothing and passes null as the 4th argument', async () => {
+  // Clearing needs no prompt, so it needs no catalog read.
+  repoReplies.updateDraft = { ok: true, value: draft({ revision: 2 }) }
+  const res = await patch({ ...DOC, promptId: null })
+  assert.equal(res.status, 200)
+
+  assert.equal(called('readActivePrompt').length, 0, 'clearing reads no catalog')
+  const args = updateArgs()
+  assert.equal(args?.length, 4)
+  assert.equal(args?.[3], null, 'an explicit clear')
+})
+
+test('PATCH prompt: a valid uuid resolves ONCE, with the caller’s own client', async () => {
+  repoReplies.readActivePrompt = { ok: true, value: SNAPSHOT }
+  repoReplies.updateDraft = { ok: true, value: draft({ revision: 2 }) }
+  const res = await patch({ ...DOC, promptId: PROMPT })
+  assert.equal(res.status, 200)
+
+  const resolves = called('readActivePrompt')
+  assert.equal(resolves.length, 1, 'exactly one resolve')
+  const [db, requestedId] = resolves[0].args as [unknown, string]
+  assert.equal(requestedId, PROMPT)
+  // The SAME client the route was admitted with -- not a new or privileged one.
+  assert.equal(db, (updateArgs() as unknown[])[0], 'the caller-scoped client')
+  assert.equal(resolves[0].args.length, 2)
+})
+
+test('PATCH prompt: updateDraft receives EXACTLY the resolver’s snapshot', async () => {
+  repoReplies.readActivePrompt = { ok: true, value: SNAPSHOT }
+  repoReplies.updateDraft = { ok: true, value: draft({ revision: 2 }) }
+  await patch({ ...DOC, promptId: PROMPT })
+
+  const args = updateArgs()
+  assert.equal(args?.length, 4)
+  // Identity, not merely equality: the route forwards the object it was given
+  // and builds nothing of its own.
+  assert.equal(args?.[3], SNAPSHOT)
+  assert.deepEqual(args?.[3], {
+    promptId: PROMPT,
+    schoolId: SCHOOL,
+    promptText: 'Why have you chosen nurse anaesthesia?',
+    statedMaxWords: 500,
+  })
+  // And the document half is still exactly the three validated fields.
+  assert.deepEqual(Object.keys(args?.[2] as object).sort(),
+    ['essay', 'expectedRevision', 'title'])
+})
+
+test('PATCH prompt: SPOOFED CANONICAL FIELDS HAVE ZERO INFLUENCE', async () => {
+  // The whole point of the checkpoint. A body supplying the school, the wording
+  // and the word limit changes nothing: the snapshot handed to the repository is
+  // the resolver's, byte for byte.
+  repoReplies.readActivePrompt = { ok: true, value: SNAPSHOT }
+  repoReplies.updateDraft = { ok: true, value: draft({ revision: 2 }) }
+  await patch({ ...DOC, ...SPOOFED, promptId: PROMPT })
+
+  const args = updateArgs() as unknown[]
+  assert.equal(args[3], SNAPSHOT)
+  const wire = updateDataWire()
+  for (const spoof of ['beef', '999999', 'anything at all']) {
+    assert.equal(wire.includes(spoof), false, `${spoof} must never reach the repository`)
+  }
+  // The snapshot that DID arrive holds the resolver's values, not the body's.
+  assert.equal(wire.includes('anaesthesia'), true, 'the canonical wording did')
+  // The resolver was asked about the id and nothing else.
+  assert.deepEqual(called('readActivePrompt')[0].args.length, 2)
+})
+
+test('PATCH prompt: spoofed fields WITHOUT a promptId change nothing at all', async () => {
+  // No promptId means no opinion, so the canonical fields cannot even arrive
+  // by being accompanied by a selection.
+  repoReplies.updateDraft = { ok: true, value: draft({ revision: 2 }) }
+  const res = await patch({ ...DOC, ...SPOOFED })
+  assert.equal(res.status, 200)
+
+  assert.equal(called('readActivePrompt').length, 0)
+  const args = updateArgs()
+  assert.equal(args?.length, 3, 'still the three-argument path')
+  const wire = updateDataWire()
+  assert.equal(wire.includes('beef'), false)
+  assert.equal(wire.includes('999999'), false)
+  assert.equal(wire.includes('anything at all'), false)
+})
+
+test('PATCH prompt: a MALFORMED promptId is 400 invalid-prompt, with no resolve and no write', async () => {
+  for (const bogus of [
+    'not-a-uuid', '', ' ', `${PROMPT}0`, PROMPT.slice(0, -1), 42, true, [], {},
+    [PROMPT], { id: PROMPT },
+  ]) {
+    repoCalls = []
+    const res = await patch({ ...DOC, promptId: bogus })
+    assert.equal(res.status, 400, JSON.stringify(bogus))
+    const body = await res.json()
+    assert.equal(body.code, 'invalid-prompt')
+    assert.equal(called('readActivePrompt').length, 0, 'the catalog must not be read')
+    assert.equal(called('updateDraft').length, 0, 'nothing may be written')
+
+    // NO ECHO, proved by the body being a FIXED CONSTANT rather than by
+    // substring checks. Two keys and a chosen sentence: there is nowhere for
+    // the rejected value to be. (A substring check would also be unsound here
+    // -- '' and ' ' are substrings of any prose, so it would assert nothing for
+    // exactly the inputs most likely to slip through.)
+    assert.deepEqual(Object.keys(body).sort(), ['code', 'error'])
+    assert.equal(body.error, PROMPT_MESSAGES['invalid-prompt'])
+    assert.equal('characters' in body, false)
+    assert.equal('detail' in body, false)
+  }
+  // And a distinctive value really is absent, as a direct check too.
+  repoCalls = []
+  const res = await patch({ ...DOC, promptId: 'deadbeef-not-a-uuid-at-all' })
+  assert.equal(JSON.stringify(await res.json()).includes('deadbeef'), false)
+})
+
+test('PATCH prompt: an UNKNOWN OR INACTIVE prompt is 422 prompt-not-found, with no write', async () => {
+  // The resolver cannot distinguish the two -- the active-only policy makes a
+  // withdrawn prompt invisible rather than refused -- and neither does this.
+  repoReplies.readActivePrompt = { ok: false, reason: 'not-found', detail: '' }
+  const res = await patch({ ...DOC, promptId: PROMPT })
+
+  assert.equal(res.status, 422)
+  const body = await res.json()
+  assert.equal(body.code, 'prompt-not-found')
+  assert.equal(called('readActivePrompt').length, 1)
+  assert.equal(called('updateDraft').length, 0, 'nothing may be written')
+  // NOT 404: the draft was found. Only the selection could not be honoured.
+  assert.notEqual(res.status, 404)
+})
+
+test('PATCH prompt: a resolver READ FAILURE is a safe generic 500, with no write', async () => {
+  repoReplies.readActivePrompt = {
+    ok: false, reason: 'read-failed',
+    detail: '08006 connection failure to statement_prompts',
+  }
+  const res = await patch({ ...DOC, promptId: PROMPT })
+
+  assert.equal(res.status, 500)
+  const body = await res.json()
+  assert.equal(body.code, 'server-error')
+  assert.equal(called('updateDraft').length, 0)
+  // The resolver's detail is a database message; it reaches no client.
+  const text = JSON.stringify(body)
+  for (const leak of ['08006', 'connection failure', 'statement_prompts']) {
+    assert.equal(text.includes(leak), false, `${leak} must never be sent`)
+  }
+})
+
+test('PATCH prompt: a resolver DATA-INTEGRITY failure is a safe generic 500, with no write', async () => {
+  repoReplies.readActivePrompt = {
+    ok: false, reason: 'data-integrity', detail: 'unusable stored row (prompt)',
+  }
+  const res = await patch({ ...DOC, promptId: PROMPT })
+
+  assert.equal(res.status, 500)
+  assert.equal((await res.json()).code, 'server-error')
+  assert.equal(called('updateDraft').length, 0)
+})
+
+test('PATCH prompt: the DOCUMENT’s refusal still wins when both are wrong', async () => {
+  // The existing refusal order -- title, essay, revision -- is unchanged, so a
+  // body wrong in two ways reports the same code it always did.
+  const res = await patch({ title: '   ', essay: 'e', expectedRevision: 1, promptId: 'nope' })
+  assert.equal(res.status, 400)
+  assert.equal((await res.json()).code, 'invalid-title')
+  assert.equal(called('readActivePrompt').length, 0, 'not even resolved')
+  assert.equal(called('updateDraft').length, 0)
+})
+
+test('PATCH prompt: a prompt change uses the SAME CAS path and the same conflict answer', async () => {
+  repoReplies.readActivePrompt = { ok: true, value: SNAPSHOT }
+  repoReplies.updateDraft = { ok: false, reason: 'conflict', storedRevision: 9 }
+  const res = await patch({ ...DOC, promptId: PROMPT })
+
+  assert.equal(res.status, 409)
+  const body = await res.json()
+  assert.equal(body.code, 'conflict')
+  assert.equal(body.storedRevision, 9)
+  // ONE compare-and-swap, carrying the prompt: no separate prompt write.
+  assert.equal(called('updateDraft').length, 1)
+  assert.equal((updateArgs() as unknown[])[3], SNAPSHOT)
+})
+
+test('PATCH prompt: a 409 exposes no prompt wording or id', async () => {
+  repoReplies.readActivePrompt = { ok: true, value: SNAPSHOT }
+  repoReplies.updateDraft = { ok: false, reason: 'conflict', storedRevision: 9 }
+  const res = await patch({ ...DOC, promptId: PROMPT })
+
+  const text = JSON.stringify(await res.json())
+  for (const leak of [PROMPT, SCHOOL, 'anaesthesia', '500']) {
+    assert.equal(text.includes(leak), false, `${leak} must not be in a conflict`)
+  }
+  assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ['code', 'error', 'storedRevision'])
+})
+
+test('POST: prompt selection is IGNORED on creation -- a draft is born generic', async () => {
+  repoReplies.createDraft = { ok: true, value: draft() }
+  const res = await (await collection(true)).POST(jsonRequest('POST', {
+    title: 'Draft one', essay: '', promptId: PROMPT, ...SPOOFED,
+  }))
+  assert.equal(res.status, 201)
+
+  assert.equal(called('readActivePrompt').length, 0, 'POST resolves nothing')
+  // Still exactly two validated fields, and three arguments.
+  const [, , input] = called('createDraft')[0].args as [unknown, string, Record<string, unknown>]
+  assert.deepEqual(Object.keys(input).sort(), ['essay', 'title'])
+  assert.equal(called('createDraft')[0].args.length, 3)
+  // And the new draft is generic over the wire.
+  const { draft: returned } = await res.json()
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
+    assert.equal(returned[key], null, `${key} must be null on a new draft`)
+  }
 })
 
 test('PATCH: hostile timestamps and ids never reach the repository input', async () => {

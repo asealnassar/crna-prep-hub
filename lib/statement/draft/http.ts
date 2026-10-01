@@ -152,6 +152,68 @@ export const INVALID_ID_BODY = {
   code: 'invalid-id',
 } as const
 
+// ---------------------------------------------------------------------------
+// PROMPT SELECTION, as HTTP
+//
+// A SEPARATE UNION, NOT MEMBERS OF DraftRefusal, deliberately. VALIDATION_MESSAGES
+// is Record<DraftRefusal, string> and statusForValidation() switches
+// exhaustively over the same union, so folding these two codes in would change
+// the type of both and force every existing caller to be re-read -- for two
+// codes that only one handler can produce. Keeping them in their own union is
+// the smaller surface: the title, essay, revision, not-found, conflict and
+// server-fault paths are untouched, and a reader of either table still sees one
+// code per row.
+// ---------------------------------------------------------------------------
+
+/** What a prompt selection can be refused for, as a client sees it. */
+export type PromptRefusalCode =
+  /** The body's promptId was neither a uuid, nor null, nor absent. */
+  | 'invalid-prompt'
+  /** A well-formed id that names no ACTIVE prompt: unknown, or withdrawn. */
+  | 'prompt-not-found'
+
+/**
+ * What a client is told. Fixed strings chosen here -- never a resolver internal,
+ * never the id, never a database message.
+ *
+ * NEITHER MESSAGE CONFIRMS WHETHER THE ID EXISTS. "no longer available" covers
+ * an id that never existed, one belonging to a school the catalog dropped, and
+ * one deactivated this morning, because the resolver cannot distinguish them
+ * either -- the active-only policy makes a withdrawn prompt invisible rather
+ * than refused.
+ */
+export const PROMPT_MESSAGES: Record<PromptRefusalCode, string> = {
+  'invalid-prompt': 'That prompt selection is not one this editor can save. Reload the page.',
+  'prompt-not-found': 'That prompt is no longer available. Choose another and try again.',
+}
+
+/**
+ * A prompt refusal's status.
+ *
+ * THE SAME 400-vs-422 LINE the rest of this file draws. A promptId that is not
+ * a uuid is a malformed REQUEST -- no client should ever send one, so it is 400,
+ * beside 'invalid-title' and 'invalid-revision'. A well-formed id that names no
+ * active prompt is a well-formed request whose CONTENT cannot be honoured, which
+ * is 422, beside 'essay-too-long'.
+ *
+ * NOT 404. A 404 here would mean the DRAFT was not found, which is a different
+ * answer to a different question and would send an editor looking for work it
+ * has not lost.
+ */
+export function statusForPrompt(code: PromptRefusalCode): number {
+  switch (code) {
+    case 'invalid-prompt': return 400
+    case 'prompt-not-found': return 422
+  }
+}
+
+/** A prompt refusal, with its machine code. No count, no id, no detail. */
+export function promptRefusalBody(
+  code: PromptRefusalCode,
+): { error: string; code: PromptRefusalCode } {
+  return { error: PROMPT_MESSAGES[code], code }
+}
+
 /** A conflict, carrying the one fact a client needs to resync: the revision. */
 export function conflictBody(storedRevision: number): {
   error: string; code: 'conflict'; storedRevision: number

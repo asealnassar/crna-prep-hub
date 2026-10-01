@@ -2,9 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   INVALID_ID_BODY, MALFORMED_JSON_BODY, NOT_AN_OBJECT_BODY, NOT_FOUND_BODY,
-  SERVER_ERROR_BODY, UNAUTHENTICATED_BODY, UUID, VALIDATION_MESSAGES,
-  checkBodyShape, conflictBody, isDraftId, isServerFault, publicDraft,
-  statusForRepo, statusForValidation, validationBody,
+  PROMPT_MESSAGES, SERVER_ERROR_BODY, UNAUTHENTICATED_BODY, UUID, VALIDATION_MESSAGES,
+  checkBodyShape, conflictBody, isDraftId, isServerFault, promptRefusalBody,
+  publicDraft, statusForPrompt, statusForRepo, statusForValidation, validationBody,
 } from './http.ts'
 import type { DraftRefusal } from './validate.ts'
 import type { DraftRepoRefusal } from './draftRepo.ts'
@@ -194,6 +194,67 @@ test('the not-found body says nothing about ownership', () => {
   for (const leak of ['forbidden', 'another', 'owner', 'permission', 'access']) {
     assert.equal(text.includes(leak), false, leak)
   }
+})
+
+// -------------------------------------------------------- prompt refusals
+
+test('prompt: the two codes map to 400 and 422, and nothing else moved', () => {
+  assert.equal(statusForPrompt('invalid-prompt'), 400)
+  assert.equal(statusForPrompt('prompt-not-found'), 422)
+  // NOT 404: that answer means the DRAFT was not found.
+  assert.notEqual(statusForPrompt('prompt-not-found'), 404)
+  // The existing table is untouched -- same codes, same statuses.
+  assert.equal(statusForValidation('invalid-title'), 400)
+  assert.equal(statusForValidation('essay-too-long'), 422)
+  assert.equal(statusForRepo('not-found'), 404)
+  assert.equal(statusForRepo('conflict'), 409)
+})
+
+test('prompt: the refusal body is exactly a message and a machine code', () => {
+  for (const code of ['invalid-prompt', 'prompt-not-found'] as const) {
+    const body = promptRefusalBody(code)
+    assert.deepEqual(Object.keys(body).sort(), ['code', 'error'])
+    assert.equal(body.code, code)
+    assert.equal(body.error, PROMPT_MESSAGES[code])
+    assert.equal(typeof body.error, 'string')
+    assert.ok(body.error.length > 0)
+  }
+})
+
+test('prompt: the two messages exist, differ, and name nothing internal', () => {
+  const messages = Object.values(PROMPT_MESSAGES)
+  assert.equal(messages.length, 2)
+  assert.equal(new Set(messages).size, 2, 'two refusals must read differently')
+  for (const message of messages) {
+    // UNAMBIGUOUS INTERNALS ONLY. 'select' and 'row' are deliberately NOT on
+    // this list: "prompt selection" is exactly what a reader calls it, and a
+    // blacklist that matches ordinary English refuses good prose rather than
+    // leaked jargon.
+    for (const internal of [
+      'statement_prompts', 'statement_drafts', 'uuid', 'UUID', 'RLS', 'is_active',
+      'postgres', 'Postgres', 'PostgREST', 'SELECT', 'constraint', 'column',
+    ]) {
+      assert.equal(message.includes(internal), false, `${internal} is not a reader's word`)
+    }
+  }
+})
+
+test('prompt: NEITHER message says whether the id exists', () => {
+  // The resolver cannot distinguish unknown from withdrawn -- the active-only
+  // policy makes a deactivated prompt invisible -- so neither may the prose.
+  const notFound = PROMPT_MESSAGES['prompt-not-found']
+  for (const confirming of ['deleted', 'deactivated', 'inactive', 'withdrawn', 'exists']) {
+    assert.equal(notFound.includes(confirming), false, `${confirming} confirms too much`)
+  }
+})
+
+test('prompt: the codes are NOT members of DraftRefusal', () => {
+  // Kept in their own union so VALIDATION_MESSAGES and statusForValidation --
+  // both keyed on DraftRefusal -- did not change shape for two codes only one
+  // handler can produce.
+  assert.equal('invalid-prompt' in VALIDATION_MESSAGES, false)
+  assert.equal('prompt-not-found' in VALIDATION_MESSAGES, false)
+  assert.equal(Object.keys(VALIDATION_MESSAGES).length, 5, 'still the five draft refusals')
 })
 
 // ---------------------------------------------------------- the public draft
