@@ -567,25 +567,28 @@ test('THE PICKER IS HANDED THE SNAPSHOT AND NO WAY TO CHANGE IT', () => {
   assert.doesNotMatch(CLIENT, /setPrompt\(choice/)
 })
 
-test('PROMPT METADATA IS CARRIED BUT NEVER SENT', () => {
-  // The precise invariant that replaces the old blanket "no promptId anywhere".
-  // The editor legitimately knows the four fields now -- it has to, or a reload
-  // would drop them -- and the line that matters is narrower: nothing prompt
-  // shaped may enter a REQUEST.
+test('ONLY A PROMPT ID EVER ENTERS A REQUEST', () => {
+  // Retargeted for J2b: the editor now sends a chosen id. The line that matters
+  // is narrower than before -- the three CANONICAL fields must still never be
+  // browser-authored, and the id must only ever come from the picker.
 
-  // 1. Every use of promptId flows SERVER -> STATE, and never the other way.
-  const promptIdUses = [...new Set(CLIENT.match(/[\w.]*promptId[\w.]*/g) ?? [])].sort()
-  assert.deepEqual(promptIdUses, [
-    'draft.promptId',           // seeded from the server-rendered draft
-    'outcome.draft.promptId',   // replaced by a successful reload
-    'promptId',                 // the property name in those two objects
-  ].sort())
-
-  // 2. The same for the other three, which are never read back at all yet.
+  // 1. The canonical three are READ from the server and written nowhere else.
   for (const field of ['schoolId', 'promptText', 'statedMaxWords']) {
     const uses = [...new Set(CLIENT.match(new RegExp(`[\\w.]*${field}[\\w.]*`, 'g')) ?? [])].sort()
     assert.deepEqual(uses, [field, `draft.${field}`, `outcome.draft.${field}`].sort(), field)
   }
+
+  // 2. THE ONLY VALUE THAT TRAVELS OUT is promptForRequest(captured) -- a uuid
+  // or null, taken from the pending instruction and nothing else.
+  assert.match(CLIENT, /prompt: promptForRequest\(captured\)/)
+  assert.equal((CLIENT.match(/prompt: /g) ?? []).length, 1, 'one prompt field in one body')
+  // No canonical value is ever put in a request.
+  for (const field of ['schoolId:', 'promptText:', 'statedMaxWords:']) {
+    const inRequest = new RegExp(`body:[\\s\\S]{0,400}${field}`)
+    assert.doesNotMatch(CLIENT, inRequest, `${field} must never be sent`)
+  }
+  // And the handler validates the id with the SAME predicate the route uses.
+  assert.match(CLIENT, /if \(!isPromptId\(promptId\)\) return/)
 
   // 3. THE SAVE BODY IS THE VALIDATOR'S OBJECT AND NOTHING ELSE. One PATCH, one
   // body expression, built by nothing in this file -- so there is no place for a
@@ -914,29 +917,50 @@ test('prompt: SAVE_BLOCKED_MESSAGES extends BLOCKED_MESSAGES without changing it
   assert.equal(new Set(messages).size, messages.length)
 })
 
-test('prompt: THE PENDING SELECTION IS PLUMBED BUT NOTHING CAN SET IT', () => {
-  // Retargeted from "the editor supplies no prompt": the lifecycle exists now.
-  // The narrower invariant is that no APPLICANT action can reach it -- the
-  // picker has no callback and its button is still disabled -- so every save is
-  // still the original three keys.
+test('prompt: THE SELECTION HANDLER IS THE ONLY WAY TO SET A PENDING PROMPT', () => {
+  // Retargeted for J2b: the applicant can choose now. The invariant is that
+  // exactly ONE handler assigns a selection, and it dispatches an ordinary edit
+  // rather than reaching for a request.
   assert.match(CLIENT, /const pendingPrompt = useRef<PendingPrompt \| null>\(null\)/)
-  assert.match(CLIENT, /prompt: promptForRequest\(captured\)/)
+  assert.match(CLIENT, /const lastPromptToken = useRef\(0\)/)
 
-  // THE REF IS ONLY EVER CLEARED, never set to a selection. Four sites: the
-  // capture (a read), the success retirement, the reload discard, and unmount.
-  const writes = CLIENT.match(/pendingPrompt\.current = [^\n]+/g) ?? []
-  assert.deepEqual([...new Set(writes)], ['pendingPrompt.current = null'],
-    'nothing in this checkpoint may assign a selection')
-  assert.doesNotMatch(CLIENT, /pendingPrompt\.current = nextPendingPrompt/)
-  assert.doesNotMatch(CLIENT, /onUsePrompt/)
+  // Exactly two kinds of assignment: the one selection, and clearing.
+  const writes = [...new Set(CLIENT.match(/pendingPrompt\.current = [^\n]+/g) ?? [])].sort()
+  assert.deepEqual(writes, ['pendingPrompt.current = next', 'pendingPrompt.current = null'])
+  // The assignment happens once, inside choosePrompt, and nowhere else.
+  const choose = CLIENT.slice(CLIENT.indexOf('const choosePrompt'), CLIENT.indexOf('const retryPromptSave'))
+  assert.ok(choose.length > 0, 'choosePrompt was located')
+  assert.equal((choose.match(/pendingPrompt\.current = next/g) ?? []).length, 1)
+  assert.match(choose, /lastPromptToken\.current \+= 1/)
+  assert.match(choose, /setSave\(\(state\) => reduce\(state, \{ type: 'edited'/)
+  // AND IT ISSUES NO REQUEST. No endpoint, no fetch, no startSave.
+  for (const forbidden of ['fetch(', 'draftApiPath', 'startSave(', "method: 'PATCH'"]) {
+    assert.equal(choose.includes(forbidden), false, `choosePrompt must not ${forbidden}`)
+  }
+  // The ref and its render mirror move together.
+  assert.match(choose, /setPendingView\(next\)/)
+})
 
-  // And the disabled button is still disabled.
-  const PICKER = readFileSync(
+test('prompt: THE ATTACH BUTTON IS LIVE, and carries only an id', () => {
+  // STRIPPED, because both components' comments say in prose that they hold no
+  // Supabase client -- and a blacklist over the raw text would match that
+  // sentence rather than any code. CLIENT is already stripped; this matches it.
+  const PICKER = strip(readFileSync(
     path('../../../app/statement-studio/components/PromptPicker.tsx'), 'utf8'
-  )
-  assert.match(PICKER, /disabled\n\s*title="Attaching a prompt to a draft is not available yet\."/)
+  ))
+  assert.match(CLIENT, /onUsePrompt=\{choosePrompt\}/)
+  assert.match(CLIENT, /onRetryPromptSave=\{retryPromptSave\}/)
+  assert.match(PICKER, /onClick=\{\(\) => onUsePrompt\(preview\.id\)\}/)
+  assert.match(PICKER, /onUsePrompt: \(promptId: string\) => void/)
+  // Still no persistence path in the picker.
   assert.equal(PICKER.includes("method: 'PATCH'"), false)
-  assert.equal(PICKER.includes('onUsePrompt'), false)
+  assert.equal((PICKER.match(/await fetch\(/g) ?? []).length, 1)
+  // And no browser-side database access, in either component.
+  for (const source of [CLIENT, PICKER]) {
+    for (const forbidden of [/createClient/, /supabase/i, /@supabase/]) {
+      assert.doesNotMatch(source, forbidden)
+    }
+  }
 })
 
 test('lifecycle: the SAVE SITE captures the pending selection exactly once', () => {
@@ -1023,6 +1047,114 @@ test('lifecycle: STILL ONE PATCH, ONE BODY, ONE ENGINE', () => {
   assert.equal(CLIENT.split('body: JSON.stringify(attempt.body)').length - 1, 1)
   assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
   // And the engine is used through its public events only -- the same six.
+  assert.deepEqual(
+    [...new Set((CLIENT.match(/type: '[a-z-]+'/g) ?? []))].sort(),
+    [
+      "type: 'edited'", "type: 'flush'", "type: 'reloaded'",
+      "type: 'retry'", "type: 'save-failed'", "type: 'save-started'",
+    ]
+  )
+})
+
+test('unconfirmed: AN UNREADABLE 200 WARNS AND RETIRES NOTHING', () => {
+  const start = CLIENT.slice(CLIENT.indexOf('const startSave'), CLIENT.indexOf('const action = statementDriverAction'))
+
+  // The else-branch: a 200 whose canonical fields did not parse, for a request
+  // that actually carried a selection.
+  assert.match(start, /\} else if \(captured !== null\) \{\n\s*setPromptConfirmFailed\(captured\.token\)/)
+  // The pending selection is NOT retired there: the only retirement sits inside
+  // the `saved !== null` branch.
+  const elseBranch = start.slice(start.indexOf('} else if (captured !== null) {'))
+  assert.equal(elseBranch.includes('pendingPrompt.current = null'), false)
+  assert.equal(elseBranch.includes('setPendingView(null)'), false)
+  // AND NOTHING AUTOMATIC SCHEDULES ANOTHER SAVE. No edited, no flush, no
+  // timer: a server returning malformed bodies would otherwise be saved
+  // against for ever.
+  assert.equal(elseBranch.includes("type: 'edited'"), false, 'no automatic retry')
+  assert.equal(elseBranch.includes("type: 'flush'"), false)
+  assert.equal(elseBranch.includes('setTimeout'), false)
+  assert.equal(elseBranch.includes('startSave('), false)
+})
+
+test('unconfirmed: THE DELIBERATE RETRY IS THE ONLY RESCHEDULER', () => {
+  const retry = CLIENT.slice(CLIENT.indexOf('const retryPromptSave'), CLIENT.indexOf('const onTitleChange'))
+  assert.ok(retry.length > 0, 'retryPromptSave was located')
+
+  // It needs something pending, uses the engine's own edited event, and starts
+  // no request of its own -- so the existing driver and in-flight guard apply.
+  assert.match(retry, /if \(pendingPrompt\.current === null\) return/)
+  assert.match(retry, /setSave\(\(state\) => reduce\(state, \{ type: 'edited'/)
+  for (const forbidden of ['fetch(', 'startSave(', 'draftApiPath', "method: 'PATCH'", 'setTimeout']) {
+    assert.equal(retry.includes(forbidden), false, `the retry must not ${forbidden}`)
+  }
+  // It does NOT invent a revision: the driver uses save.revision, which only a
+  // server response ever sets.
+  assert.equal(retry.includes('revision'), false)
+
+  // AND IT IS REACHED ONLY FROM A CLICK.
+  assert.match(CLIENT, /onRetryPromptSave=\{retryPromptSave\}/)
+  assert.equal((CLIENT.match(/retryPromptSave/g) ?? []).length, 2, 'declared once, passed once')
+})
+
+test('unconfirmed: the warning is CLEARED on a new choice, a success and a reload', () => {
+  // Four places, and no more: superseded, confirmed, reloaded, and the one
+  // place it is set.
+  const sets = CLIENT.match(/setPromptConfirmFailed\([^\n]*/g) ?? []
+  assert.equal(sets.length, 4, 'one set, three clears')
+
+  const choose = CLIENT.slice(CLIENT.indexOf('const choosePrompt'), CLIENT.indexOf('const retryPromptSave'))
+  assert.match(choose, /setPromptConfirmFailed\(null\)/)            // superseded
+
+  const start = CLIENT.slice(CLIENT.indexOf('const startSave'), CLIENT.indexOf('const action = statementDriverAction'))
+  assert.match(start, /setPromptConfirmFailed\(\(failed\) =>/)       // confirmed
+  assert.match(start, /setPromptConfirmFailed\(captured\.token\)/)   // set
+
+  const reload = CLIENT.slice(CLIENT.indexOf('const reloadLatest'), CLIENT.indexOf('const retrySave'))
+  assert.match(reload, /setPromptConfirmFailed\(null\)/)             // reloaded
+})
+
+test('unconfirmed: the render mirror moves with the ref, except at unmount', () => {
+  // pendingView exists only so the picker can render; a divergence would show a
+  // state the editor is not in. UNMOUNT IS THE ONE EXCEPTION, and deliberately
+  // so: the component is going away, and setting state on it would be a
+  // meaningless update on something nothing will render.
+  const refWrites = (CLIENT.match(/pendingPrompt\.current = /g) ?? []).length
+  const viewWrites = (CLIENT.match(/setPendingView\(/g) ?? []).length
+  assert.equal(refWrites, 4, 'select, retire, reload, unmount')
+  assert.equal(viewWrites, 3, 'select, retire, reload -- not unmount')
+
+  // Each of the three live sites pairs them.
+  for (const [name, from, to] of [
+    ['choosePrompt', 'const choosePrompt', 'const retryPromptSave'],
+    ['startSave', 'const startSave', 'const action = statementDriverAction'],
+    ['reloadLatest', 'const reloadLatest', 'const retrySave'],
+  ] as const) {
+    const region = CLIENT.slice(CLIENT.indexOf(from), CLIENT.indexOf(to))
+    assert.ok(region.length > 0, `${name} was located`)
+    assert.equal(
+      (region.match(/pendingPrompt\.current = /g) ?? []).length,
+      (region.match(/setPendingView\(/g) ?? []).length,
+      `${name} must move both together`
+    )
+  }
+
+  // And unmount retires the ref without touching state.
+  const unmount = CLIENT.slice(CLIENT.indexOf('alive.current = false'), CLIENT.indexOf('const startSave'))
+  assert.match(unmount, /pendingPrompt\.current = null/)
+  assert.equal(unmount.includes('setPendingView'), false, 'no state update on a dead component')
+})
+
+test('unconfirmed: THE SELECTION ALONE SCHEDULES A SAVE', () => {
+  // choosePrompt dispatches `edited`, and nextAction reads only timers and
+  // status -- never the title or the essay -- so a prompt change with no text
+  // change still saves. The engine proves it; this pins the dispatch.
+  const choose = CLIENT.slice(CLIENT.indexOf('const choosePrompt'), CLIENT.indexOf('const retryPromptSave'))
+  assert.match(choose, /type: 'edited'/)
+  // And it does not touch the document.
+  for (const forbidden of ['setTitle(', 'setEssay(', 'essayRef.current =']) {
+    assert.equal(choose.includes(forbidden), false, `choosePrompt must not ${forbidden}`)
+  }
+  // The engine still sees only its six public events.
   assert.deepEqual(
     [...new Set((CLIENT.match(/type: '[a-z-]+'/g) ?? []))].sort(),
     [

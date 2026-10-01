@@ -9,11 +9,12 @@ import {
   type AutosaveState,
 } from '@/lib/resume/draft/autosave'
 import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
-import { MAX_TITLE_CHARS } from '@/lib/statement/draft/validate'
+import { MAX_TITLE_CHARS, isPromptId } from '@/lib/statement/draft/validate'
 import type { DraftPromptSnapshot, StatementDraft } from '@/lib/statement/draft/rows'
 import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
 import {
-  PICKER_MESSAGES, promptForRequest, samePendingPrompt, savedPromptFromResponse,
+  PICKER_MESSAGES, confirmationApplies, needsPromptWrite, nextPendingPrompt,
+  promptForRequest, samePendingPrompt, savedPromptFromResponse,
 } from '@/lib/statement/draft/picker'
 import type { PendingPrompt } from '@/lib/statement/draft/picker'
 import PromptPicker from './PromptPicker'
@@ -155,6 +156,35 @@ export default function StatementStudioClient({
    * is settled before any applicant can reach it.
    */
   const pendingPrompt = useRef<PendingPrompt | null>(null)
+
+  /**
+   * THE TOKEN SOURCE, AND IT NEVER RESETS for the life of this editor.
+   *
+   * Counting from whatever is pending would restart at 1 after every success
+   * and every reload, so a response for the first token 1 could retire a brand
+   * new token 1. Monotonic here means every selection an applicant ever makes
+   * -- across saves, failures and reloads -- has an identity of its own.
+   */
+  const lastPromptToken = useRef(0)
+
+  /**
+   * The same pending selection, as STATE, purely so the picker can render it.
+   *
+   * The ref above is authoritative because it is synchronous; this mirror is
+   * what React re-renders on. They are written together, in one handler, and
+   * retired together -- a test asserts neither moves without the other.
+   */
+  const [pendingView, setPendingView] = useState<PendingPrompt | null>(null)
+
+  /**
+   * The token of a selection whose confirmation FAILED: a 200 arrived, the
+   * revision was readable, and the four canonical prompt fields were not.
+   *
+   * A TOKEN, NOT A BOOLEAN, so the warning belongs to one selection. A failure
+   * recorded for A must not appear as a failure of B -- confirmationApplies()
+   * compares it with what is pending now, and a newer choice supersedes it.
+   */
+  const [promptConfirmFailed, setPromptConfirmFailed] = useState<number | null>(null)
 
   const [prompt, setPrompt] = useState<DraftPromptSnapshot>(() => ({
     schoolId: draft.schoolId,
@@ -322,7 +352,26 @@ export default function StatementStudioClient({
             // the engine's own dirty window schedules its save.
             if (samePendingPrompt(pendingPrompt.current, captured)) {
               pendingPrompt.current = null
+              setPendingView(null)
+              // This selection is confirmed, so any warning about it is spent.
+              setPromptConfirmFailed((failed) =>
+                captured !== null && failed === captured.token ? null : failed
+              )
             }
+          } else if (captured !== null) {
+            // UNREADABLE CANONICAL METADATA ON A 200.
+            //
+            // The revision came back, so the document WAS written and the engine
+            // is right to say so. But the four prompt fields did not arrive in a
+            // form this application can trust, so whether the selection landed
+            // is unknown -- and an unknown is not a success. The selection stays
+            // pending, the display is not touched, and the applicant is told.
+            //
+            // NO `edited` IS DISPATCHED HERE, deliberately. Re-scheduling a save
+            // from a response that keeps arriving malformed is an infinite loop.
+            // The only thing that schedules another attempt is the applicant's
+            // own click on the retry button below.
+            setPromptConfirmFailed(captured.token)
           }
         }
         setSave((state) => reduce(state, event))
@@ -365,6 +414,69 @@ export default function StatementStudioClient({
 
     void startSave(save.revision, title, essay)
   }, [save, title, essay, tick, startSave])
+
+  /**
+   * The applicant has chosen a prompt. THIS IS AN EDIT, and nothing more.
+   *
+   * WHAT IT DOES NOT DO. It issues no request, names no endpoint, and touches
+   * neither the title nor the essay. It writes an instruction and dispatches the
+   * engine's own `edited` event; the existing driver then saves the document on
+   * its ordinary debounce, with the prompt id travelling inside the same PATCH
+   * and the same compare-and-swap. There is no prompt-only save path.
+   *
+   * THE ID AND NOTHING ELSE. A uuid is the whole of what a browser may say about
+   * a prompt -- the school, the wording and the word limit are resolved by the
+   * server from the catalog -- so this takes a string and the picker has nothing
+   * else to give it.
+   *
+   * THE REF IS WRITTEN SYNCHRONOUSLY, before the dispatch, because startSave may
+   * run on the very next tick and must see this instruction rather than the one
+   * before it.
+   *
+   * REDUNDANT CHOICES ARE DROPPED, but carefully: needsPromptWrite compares
+   * against what is PENDING when anything is, and only against the server's
+   * snapshot when nothing is. That is what lets an applicant reverse an
+   * in-flight change back to the prompt their draft already shows.
+   */
+  const choosePrompt = useCallback((promptId: string) => {
+    if (!isPromptId(promptId)) return
+    if (!needsPromptWrite({
+      chosenId: promptId,
+      savedPromptId: prompt.promptId,
+      pending: pendingPrompt.current,
+    })) return
+
+    lastPromptToken.current += 1
+    const next = nextPendingPrompt(lastPromptToken.current - 1, promptId)
+    pendingPrompt.current = next
+    setPendingView(next)
+    // A newer choice supersedes any warning about an older one.
+    setPromptConfirmFailed(null)
+    setNotice(null)
+    setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
+    // `prompt.promptId` is read above, so this handler is rebuilt when the
+    // server's snapshot changes. A click handler has no stale-closure hazard
+    // the way startSave does -- it runs from the render it was built in.
+  }, [prompt.promptId])
+
+  /**
+   * A DELIBERATE retry of a prompt whose confirmation failed.
+   *
+   * THE ONLY THING THAT SCHEDULES ANOTHER ATTEMPT after an unreadable 200. It
+   * dispatches the engine's `edited` event -- the same event typing dispatches,
+   * no new event and no second path -- so the existing driver saves the current
+   * document at the CURRENT confirmed revision, with the still-pending prompt
+   * inside the same PATCH. `inFlight` still guards against overlap.
+   *
+   * NOT CALLED BY ANYTHING AUTOMATIC. That is the whole reason the response
+   * branch above does not dispatch: a server returning malformed bodies would
+   * otherwise be saved against for ever.
+   */
+  const retryPromptSave = useCallback(() => {
+    if (pendingPrompt.current === null) return
+    setNotice(null)
+    setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
+  }, [])
 
   /**
    * A title edit is an edit. Same engine event, same dirty window, same
@@ -585,6 +697,11 @@ export default function StatementStudioClient({
       // token no longer matches, and snapshotRef above is already null.
       const discarded = pendingPrompt.current !== null
       pendingPrompt.current = null
+      setPendingView(null)
+      // AND THE WARNING GOES WITH IT. A confirmation failure describes a
+      // selection that no longer exists, so leaving it up would blame the
+      // reloaded draft for an older response.
+      setPromptConfirmFailed(null)
       setTitle(outcome.draft.title)
       setEssay(outcome.draft.essay)
       essayRef.current = outcome.draft.essay
@@ -897,17 +1014,27 @@ export default function StatementStudioClient({
       />
 
       {/*
-        THE PICKER READS; IT DOES NOT WRITE. `saved` is the draft's own
-        snapshot, handed down so the panel can show the question this essay
-        answers from the DRAFT rather than from the catalog. No setter and no
-        callback is passed, so browsing cannot reach `setPrompt`, cannot
-        dispatch an autosave event and cannot send a PATCH -- there is nothing
-        here for it to call. Attaching a preview is the next checkpoint.
+        WHAT THE PICKER CAN AND CANNOT DO.
+
+        `saved` is the draft's own snapshot, so the panel shows the question this
+        essay answers from the DRAFT rather than from the catalog. `pending` and
+        `confirmFailedToken` let it tell saved from chosen from merely previewed.
+
+        AND THE TWO CALLBACKS CARRY NO POWER OF THEIR OWN. `onUsePrompt` takes a
+        uuid and `onRetryPromptSave` takes nothing; both land in handlers above
+        that write an instruction and dispatch the engine's `edited` event. The
+        picker still has no setter for the draft's prompt, no endpoint, and no
+        way to reach startSave except through the ordinary autosave it shares
+        with typing.
       */}
       <PromptPicker
         schools={schools}
         schoolsUnavailable={schoolsUnavailable}
         saved={prompt}
+        pending={pendingView}
+        confirmFailedToken={promptConfirmFailed}
+        onUsePrompt={choosePrompt}
+        onRetryPromptSave={retryPromptSave}
       />
     </main>
   )

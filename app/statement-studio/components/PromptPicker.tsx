@@ -4,13 +4,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
 import type { DraftPromptSnapshot } from '@/lib/statement/draft/rows'
 import {
-  PICKER_MESSAGES, directoryNotice, hasSavedPrompt, matchingSchools, mayApplyPrompts,
-  previewIsSaved, promptListFrom, promptsPath, schoolLabel, wordLimitLabel,
+  PICKER_MESSAGES, confirmationApplies, directoryNotice, hasSavedPrompt, matchingSchools,
+  mayApplyPrompts, needsPromptWrite, promptBadgeFor, promptListFrom, promptsPath,
+  schoolLabel, wordLimitLabel,
 } from '@/lib/statement/draft/picker'
-import type { PromptChoice } from '@/lib/statement/draft/picker'
+import type { PendingPrompt, PromptChoice } from '@/lib/statement/draft/picker'
 
 /**
- * Find your school, read its prompts. BROWSING ONLY.
+ * Find your school, read its prompts, and attach one to your draft.
  *
  * THE ONE THING TO UNDERSTAND ABOUT THIS COMPONENT. There are two prompts on
  * screen and they are not the same kind of thing:
@@ -24,12 +25,20 @@ import type { PromptChoice } from '@/lib/statement/draft/picker'
  *   component's own state, it never leaves, and it is labelled as not attached
  *   to the draft every single time it is shown.
  *
- * SO BROWSING WRITES NOTHING. No autosave event is dispatched, no PATCH is
- * sent, no revision is consumed, the essay and the title are untouched, and the
- * saved snapshot is not cleared. The action that will attach a preview to a
- * draft belongs to the next checkpoint and deliberately does not exist yet --
- * the button that would do it is rendered disabled, so the shape of the
- * interface is settled without the behaviour being guessed at.
+ * SO BROWSING STILL WRITES NOTHING. Reading a question dispatches no autosave
+ * event, sends no request, consumes no revision and does not touch the essay,
+ * the title or the saved snapshot.
+ *
+ * ATTACHING IS A SEPARATE, DELIBERATE ACT. `onUsePrompt` is the only way out of
+ * this component, it carries one uuid, and it issues no request of its own --
+ * the editor turns it into an ordinary edit and the existing autosave sends it
+ * inside the existing PATCH. There is no persistence path here.
+ *
+ * AND THERE ARE THREE STATES, NOT TWO. A prompt on screen is SAVED (the
+ * server's snapshot says so, and nothing newer is waiting), PENDING (chosen,
+ * not yet confirmed) or PREVIEW (being read, attached to nothing).
+ * promptBadgeFor() decides, and `pending` always wins over `saved` so a newer
+ * choice can never look settled.
  *
  * WHY THE SAVED SNAPSHOT IS NOT LOOKED UP IN THE CATALOG. The draft stores its
  * own copy of the wording so that editing or withdrawing a catalog row can
@@ -46,11 +55,27 @@ export default function PromptPicker({
   schools,
   schoolsUnavailable,
   saved,
+  pending,
+  confirmFailedToken,
+  onUsePrompt,
+  onRetryPromptSave,
 }: {
   schools: readonly SchoolOption[]
   schoolsUnavailable: boolean
   /** The draft's persisted snapshot. Read-only here, by construction. */
   saved: DraftPromptSnapshot
+  /** What the applicant has chosen but the server has not confirmed. */
+  pending: PendingPrompt | null
+  /** The token of a selection whose confirmation failed, if any. */
+  confirmFailedToken: number | null
+  /**
+   * Attach the previewed prompt to the draft. THE ID AND NOTHING ELSE: the
+   * school, the wording and the word limit are the server's to resolve, so
+   * there is nothing else this component could hand over even by accident.
+   */
+  onUsePrompt: (promptId: string) => void
+  /** A deliberate re-attempt after a confirmation failure. */
+  onRetryPromptSave: () => void
 }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -142,6 +167,14 @@ export default function PromptPicker({
   })
   const showingList = promptsFor !== null && promptsFor === browsing?.id
   const savedVisible = hasSavedPrompt({ promptId: saved.promptId, promptText: saved.promptText })
+  const previewBadge = preview === null
+    ? 'preview'
+    : promptBadgeFor({ promptId: preview.id, savedPromptId: saved.promptId, pending })
+  const canUsePreview = preview !== null && needsPromptWrite({
+    chosenId: preview.id,
+    savedPromptId: saved.promptId,
+    pending,
+  })
 
   return (
     <section className="mt-6 rounded-xl border border-gray-300 bg-white px-4 py-4">
@@ -152,6 +185,29 @@ export default function PromptPicker({
       </p>
 
       {/* ---------------------------------------------- the draft's own prompt */}
+      {/*
+        THE CONFIRMATION WARNING. Shown only while the failure still describes
+        what is pending -- a newer choice supersedes it, and so does a success
+        or a reload. It is deliberately ABOVE the stored panel: the applicant
+        needs to know their choice is unconfirmed before they read what the
+        draft currently answers.
+      */}
+      {confirmationApplies({ failedToken: confirmFailedToken, pending }) ? (
+        <div
+          role="alert"
+          className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-amber-400 bg-amber-50 px-3 py-3"
+        >
+          <p className="text-sm text-amber-900">{PICKER_MESSAGES.confirmationFailed}</p>
+          <button
+            type="button"
+            onClick={onRetryPromptSave}
+            className="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+          >
+            {PICKER_MESSAGES.retryPromptSave}
+          </button>
+        </div>
+      ) : null}
+
       {savedVisible ? (
         <div className="mt-4 rounded-lg border border-blue-300 bg-blue-50 px-3 py-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-900">
@@ -248,9 +304,10 @@ export default function PromptPicker({
           {!loading && promptsError === null && showingList && prompts.length > 0 ? (
             <ul className="mt-2 space-y-2">
               {prompts.map((choice) => {
-                const isSaved = previewIsSaved({
-                  previewId: choice.id,
+                const badge = promptBadgeFor({
+                  promptId: choice.id,
                   savedPromptId: saved.promptId,
+                  pending,
                 })
                 return (
                   <li key={choice.id}>
@@ -266,9 +323,14 @@ export default function PromptPicker({
                           {choice.applicationCycle}
                         </span>
                       )}
-                      {isSaved ? (
+                      {badge === 'saved' ? (
                         <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-900">
                           Your draft&rsquo;s prompt
+                        </span>
+                      ) : null}
+                      {badge === 'pending' ? (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
+                          Saving&hellip;
                         </span>
                       ) : null}
                     </button>
@@ -290,16 +352,26 @@ export default function PromptPicker({
                 {preview.applicationCycle}
               </span>
             )}
-            {/* NEVER AMBIGUOUS. A preview says so, every time it is shown. */}
-            {previewIsSaved({ previewId: preview.id, savedPromptId: saved.promptId }) ? (
+            {/*
+              NEVER AMBIGUOUS, AND NOW THREE-WAY. `pending` beats `saved` in
+              promptBadgeFor, so a choice that has not been confirmed can never
+              read as attached -- however closely its id matches the stored one.
+            */}
+            {previewBadge === 'saved' ? (
               <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-900">
                 Already your draft&rsquo;s prompt
               </span>
-            ) : (
+            ) : null}
+            {previewBadge === 'pending' ? (
               <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
+                Chosen — not yet saved
+              </span>
+            ) : null}
+            {previewBadge === 'preview' ? (
+              <span className="rounded bg-gray-200 px-1.5 py-0.5 text-xs font-medium text-slate-700">
                 Preview — not attached to your draft
               </span>
-            )}
+            ) : null}
           </div>
 
           {/* Escaped React text, whitespace preserved. Never raw HTML. */}
@@ -308,13 +380,26 @@ export default function PromptPicker({
           </p>
           <p className="mt-2 text-xs text-slate-600">{wordLimitLabel(preview.statedMaxWords)}</p>
 
+          {/*
+            ENABLED ONLY WHEN IT WOULD CHANGE SOMETHING. needsPromptWrite says no
+            when the draft already answers this prompt and nothing is pending --
+            a second identical save would consume a revision to record a change
+            that is not one. It says YES whenever something IS pending for a
+            different prompt, which is what lets an applicant reverse a choice
+            that is still in the air.
+          */}
           <button
             type="button"
-            disabled
-            title="Attaching a prompt to a draft is not available yet."
-            className="mt-3 cursor-not-allowed rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-400"
+            disabled={!canUsePreview}
+            onClick={() => onUsePrompt(preview.id)}
+            title={
+              canUsePreview
+                ? 'Attach this prompt to your draft.'
+                : 'Your draft already answers this prompt.'
+            }
+            className="mt-3 rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-slate-400"
           >
-            Use this prompt (coming soon)
+            Use this prompt
           </button>
         </div>
       )}

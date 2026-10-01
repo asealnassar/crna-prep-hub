@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  PICKER_MESSAGES, PROMPTS_ENDPOINT, directoryNotice, hasSavedPrompt, matchingSchools,
-  mayApplyPrompts, needsPromptWrite, nextPendingPrompt, previewIsSaved, promptForRequest,
+  PICKER_MESSAGES, PROMPTS_ENDPOINT, confirmationApplies, directoryNotice, hasSavedPrompt,
+  matchingSchools,
+  mayApplyPrompts, needsPromptWrite, nextPendingPrompt, previewIsSaved, promptBadgeFor,
+  promptForRequest,
   promptListFrom, promptsPath, samePendingPrompt, savedPromptFromResponse, schoolLabel,
   wordLimitLabel,
 } from './picker.ts'
@@ -399,13 +401,30 @@ const savedBody = (over: Record<string, unknown> = {}) => ({
   },
 })
 
+/**
+ * A never-resetting token source, exactly as the component holds one.
+ *
+ * The component keeps `lastPromptToken` in a ref that is incremented on every
+ * selection and cleared by nothing. This models that, so these tests exercise
+ * the identity scheme the editor actually uses.
+ */
+function counter(): (promptId: string | null) => PendingPrompt {
+  let last = 0
+  return (promptId: string | null) => {
+    const next = nextPendingPrompt(last, promptId)
+    last = next.token
+    return next
+  }
+}
+
 test('pending: TOKENS MAKE A -> B -> A THREE DISTINGUISHABLE SELECTIONS', () => {
   // The whole reason a token exists. Comparing uuids could not tell the first A
   // from the third, so a response for the first would retire the third and the
   // applicant's standing choice would vanish with no error anywhere.
-  const first = nextPendingPrompt(null, P1)
-  const second = nextPendingPrompt(first, P2)
-  const third = nextPendingPrompt(second, P1)
+  const choose = counter()
+  const first = choose(P1)
+  const second = choose(P2)
+  const third = choose(P1)
 
   assert.deepEqual([first.token, second.token, third.token], [1, 2, 3])
   assert.equal(first.promptId, P1)
@@ -415,16 +434,33 @@ test('pending: TOKENS MAKE A -> B -> A THREE DISTINGUISHABLE SELECTIONS', () => 
   assert.equal(new Set([first.token, second.token, third.token]).size, 3)
 })
 
+test('pending: THE COUNTER NEVER RESETS, across successes and reloads', () => {
+  // The correction J2b required. Counting from whatever is PENDING would
+  // restart at 1 after every success -- and a response for the first token 1
+  // could then retire a brand new token 1 issued after it.
+  const choose = counter()
+  const a = choose(P1)
+  // …a succeeds, so the component retires it and pending becomes null.
+  const afterSuccess = choose(P2)
+  assert.equal(afterSuccess.token, 2, 'NOT 1 again')
+  assert.equal(samePendingPrompt(a, afterSuccess), false)
+  // …a conflict reload discards it, and pending becomes null again.
+  const afterReload = choose(P1)
+  assert.equal(afterReload.token, 3)
+  assert.equal(samePendingPrompt(a, afterReload), false, 'the first A cannot retire this one')
+})
+
 test('pending: a clear is a selection too, with its own token', () => {
-  const select = nextPendingPrompt(null, P1)
-  const clear = nextPendingPrompt(select, null)
+  const choose = counter()
+  const select = choose(P1)
+  const clear = choose(null)
   assert.equal(clear.token, 2)
   assert.equal(clear.promptId, null)
   assert.equal(samePendingPrompt(select, clear), false)
 })
 
 test('pending: identity is BY TOKEN, and nothing matches nothing', () => {
-  const a = nextPendingPrompt(null, P1)
+  const a = nextPendingPrompt(0, P1)
   assert.equal(samePendingPrompt(a, a), true)
   assert.equal(samePendingPrompt(a, { token: a.token, promptId: P2 }), true,
     'the token is the identity, not the id it carries')
@@ -443,21 +479,21 @@ test('request: NOTHING PENDING produces the original three keys', () => {
 })
 
 test('request: a PENDING UUID puts that id in the same PATCH body', () => {
-  const body = bodyFor(nextPendingPrompt(null, P1))
+  const body = bodyFor(nextPendingPrompt(0, P1))
   assert.equal((body as Record<string, unknown>).promptId, P1)
   assert.deepEqual(Object.keys(body as object).sort(),
     ['essay', 'expectedRevision', 'promptId', 'title'])
-  assert.equal(promptForRequest(nextPendingPrompt(null, P1)), P1)
+  assert.equal(promptForRequest(nextPendingPrompt(0, P1)), P1)
 })
 
 test('request: a PENDING CLEAR puts promptId: null in the same PATCH body', () => {
-  const body = bodyFor(nextPendingPrompt(null, null))
+  const body = bodyFor(nextPendingPrompt(0, null))
   assert.equal((body as Record<string, unknown>).promptId, null)
   assert.equal('promptId' in (body as object), true)
-  assert.equal(promptForRequest(nextPendingPrompt(null, null)), null)
+  assert.equal(promptForRequest(nextPendingPrompt(0, null)), null)
   // AND IT IS NOT THE SAME AS NOTHING PENDING. Collapsing these would make
   // every keystroke wipe the applicant's prompt.
-  assert.notEqual(promptForRequest(nextPendingPrompt(null, null)), promptForRequest(null))
+  assert.notEqual(promptForRequest(nextPendingPrompt(0, null)), promptForRequest(null))
 })
 
 // ----------------------------------------------- the response reconciliation
@@ -527,7 +563,7 @@ test('response: the strict parser is ROWS.TS’s, not a second opinion', () => {
 
 test('race: A SUCCEEDS WITH NO NEWER CHOICE -> A is retired', () => {
   // The simple case. `current` models the component's ref.
-  let current: PendingPrompt | null = nextPendingPrompt(null, P1)
+  let current: PendingPrompt | null = nextPendingPrompt(0, P1)
   const captured = current                       // startSave captures it
 
   // …the response arrives, carrying a usable snapshot.
@@ -539,9 +575,9 @@ test('race: A SUCCEEDS WITH NO NEWER CHOICE -> A is retired', () => {
 
 test('race: A STARTS, B ARRIVES, A SUCCEEDS -> B REMAINS PENDING', () => {
   // The required scenario.
-  let current: PendingPrompt | null = nextPendingPrompt(null, P1)   // choose A
+  let current: PendingPrompt | null = nextPendingPrompt(0, P1)   // choose A
   const captured = current                                          // A's PATCH leaves
-  current = nextPendingPrompt(current, P2)                           // choose B mid-flight
+  current = nextPendingPrompt(1, P2)                           // choose B mid-flight
 
   // A's response lands, with the server's snapshot for A.
   const saved = savedPromptFromResponse(savedBody({ promptId: P1 }))
@@ -560,10 +596,10 @@ test('race: A STARTS, B ARRIVES, A SUCCEEDS -> B REMAINS PENDING', () => {
 
 test('race: A -> B -> A, and the FIRST A’s response must not retire the FINAL A', () => {
   // The case uuid comparison cannot solve.
-  let current: PendingPrompt | null = nextPendingPrompt(null, P1)   // A
+  let current: PendingPrompt | null = nextPendingPrompt(0, P1)   // A
   const capturedFirstA = current                                    // A's PATCH leaves
-  current = nextPendingPrompt(current, P2)                           // B
-  current = nextPendingPrompt(current, P1)                           // A again
+  current = nextPendingPrompt(1, P2)                           // B
+  current = nextPendingPrompt(2, P1)                           // A again
 
   // Same uuid as the captured one…
   assert.equal(current?.promptId, capturedFirstA.promptId)
@@ -575,7 +611,7 @@ test('race: A -> B -> A, and the FIRST A’s response must not retire the FINAL 
 })
 
 test('race: A MALFORMED SUCCESS RETIRES NOTHING', () => {
-  let current: PendingPrompt | null = nextPendingPrompt(null, P1)
+  let current: PendingPrompt | null = nextPendingPrompt(0, P1)
   const captured = current
 
   const saved = savedPromptFromResponse(savedBody({ promptText: null }))
@@ -593,7 +629,7 @@ test('race: EVERY FAILURE LEAVES THE SELECTION PENDING', () => {
   for (const body of [
     null, { error: 'nope' }, { draft: {} }, { draft: null },
   ]) {
-    let current: PendingPrompt | null = nextPendingPrompt(null, P1)
+    let current: PendingPrompt | null = nextPendingPrompt(0, P1)
     const captured = current
     const saved = savedPromptFromResponse(body)
     assert.equal(saved, null)
@@ -605,9 +641,9 @@ test('race: EVERY FAILURE LEAVES THE SELECTION PENDING', () => {
 test('race: a MANUAL RETRY sends the CURRENT selection, not a captured one', () => {
   // retrySave dispatches `retry`, which makes the driver save again -- and
   // startSave re-reads the ref, so the newest instruction goes out.
-  let current: PendingPrompt | null = nextPendingPrompt(null, P1)
+  let current: PendingPrompt | null = nextPendingPrompt(0, P1)
   const capturedByTheFailedSave = current
-  current = nextPendingPrompt(current, P2)      // chosen after the failure
+  current = nextPendingPrompt(1, P2)      // chosen after the failure
 
   assert.equal((bodyFor(current) as Record<string, unknown>).promptId, P2)
   assert.notEqual((bodyFor(current) as Record<string, unknown>).promptId,
@@ -631,8 +667,151 @@ test('write: choosing the ALREADY SAVED prompt with nothing pending is not a wri
 test('write: anything PENDING means a write, even for the saved id', () => {
   // The pending instruction may be a CLEAR, and "the draft already answers
   // this" says nothing about an instruction that has not landed.
-  const pendingClear = nextPendingPrompt(null, null)
+  const pendingClear = nextPendingPrompt(0, null)
   assert.equal(needsPromptWrite({ chosenId: P1, savedPromptId: P1, pending: pendingClear }), true)
+})
+
+// ------------------------------------------- the in-flight reversal (J2b §3)
+
+test('reversal: CHOOSING A WHILE B IS IN FLIGHT IS NOT A NO-OP', () => {
+  // The required scenario. Saved is A, a request attaching B is in the air, and
+  // the applicant chooses A again. Suppressing that would let B silently become
+  // the final answer.
+  const choose = counter()
+  const pendingB = choose(P2)                  // B chosen, now in flight
+  const captured = pendingB
+
+  assert.equal(needsPromptWrite({ chosenId: P1, savedPromptId: P1, pending: pendingB }), true,
+    'the pending instruction is B, so choosing A IS a change')
+
+  const pendingA = choose(P1)                  // the reversal
+  assert.equal(pendingA.token, 2)
+
+  // B's response lands. It must not retire A.
+  assert.equal(samePendingPrompt(pendingA, captured), false)
+  // And the display takes the server's answer for B, which is honest: B really
+  // was saved. A stays pending and the next save sends it.
+  assert.equal(promptForRequest(pendingA), P1)
+})
+
+test('reversal: an IDENTICAL re-choice while in flight is NOT a second write', () => {
+  // pending A, chosen A -> the instruction is already on its way.
+  const pendingA = nextPendingPrompt(0, P1)
+  assert.equal(needsPromptWrite({ chosenId: P1, savedPromptId: null, pending: pendingA }), false)
+  // But pending <clear>, chosen A IS a change: the clear must be reversed.
+  const pendingClear = nextPendingPrompt(0, null)
+  assert.equal(needsPromptWrite({ chosenId: P1, savedPromptId: P1, pending: pendingClear }), true)
+})
+
+// ----------------------------------------- the three badges (J2b §4)
+
+test('badge: SAVED only when the server confirmed it and nothing newer waits', () => {
+  assert.equal(promptBadgeFor({ promptId: P1, savedPromptId: P1, pending: null }), 'saved')
+  assert.equal(promptBadgeFor({ promptId: P2, savedPromptId: P1, pending: null }), 'preview')
+  assert.equal(promptBadgeFor({ promptId: P1, savedPromptId: null, pending: null }), 'preview')
+})
+
+test('badge: PENDING BEATS SAVED, so a newer choice never looks settled', () => {
+  // The rule that stops an older response making a newer instruction appear
+  // finished. Even when the uuid matches the stored one.
+  const pendingA = nextPendingPrompt(0, P1)
+  assert.equal(promptBadgeFor({ promptId: P1, savedPromptId: P1, pending: pendingA }), 'pending')
+  // And a prompt that is NOT the pending one is merely a preview, even if the
+  // server's snapshot still names it.
+  assert.equal(promptBadgeFor({ promptId: P1, savedPromptId: P1, pending: nextPendingPrompt(0, P2) }),
+    'preview')
+})
+
+test('badge: a pending CLEAR leaves nothing looking saved', () => {
+  const clearing = nextPendingPrompt(0, null)
+  assert.equal(promptBadgeFor({ promptId: P1, savedPromptId: P1, pending: clearing }), 'preview')
+})
+
+// -------------------------- the unconfirmed 200 and its warning (J2b §5, §6)
+
+test('confirm: a warning belongs to ONE selection, by token', () => {
+  const choose = counter()
+  const a = choose(P1)
+  assert.equal(confirmationApplies({ failedToken: a.token, pending: a }), true)
+
+  // The applicant chooses B: the warning for A no longer describes anything.
+  const b = choose(P2)
+  assert.equal(confirmationApplies({ failedToken: a.token, pending: b }), false,
+    'a failure for A must not read as a failure of B')
+
+  // Nothing pending, or no failure recorded: nothing to show.
+  assert.equal(confirmationApplies({ failedToken: a.token, pending: null }), false)
+  assert.equal(confirmationApplies({ failedToken: null, pending: b }), false)
+  assert.equal(confirmationApplies({ failedToken: null, pending: null }), false)
+})
+
+test('confirm: the approved wording, exact, and a labelled retry', () => {
+  assert.equal(
+    PICKER_MESSAGES.confirmationFailed,
+    'Your essay was saved, but we couldn’t confirm your prompt selection. '
+    + 'Please try saving the prompt again.'
+  )
+  assert.equal(PICKER_MESSAGES.retryPromptSave, 'Try saving prompt again')
+  // It says BOTH true things: the essay saved, the prompt did not confirm.
+  assert.match(PICKER_MESSAGES.confirmationFailed, /essay was saved/)
+  assert.match(PICKER_MESSAGES.confirmationFailed, /couldn’t confirm/)
+})
+
+test('confirm: AN UNREADABLE 200 LEAVES THE SELECTION PENDING AND WARNS', () => {
+  // Played out as the component does it: the revision parsed, so the engine
+  // will say saved -- but the four canonical fields did not, so the selection
+  // is not confirmed.
+  const choose = counter()
+  let current: PendingPrompt | null = choose(P1)
+  const captured = current
+
+  const saved = savedPromptFromResponse(savedBody({ promptText: null }))
+  assert.equal(saved, null, 'the canonical snapshot is unusable')
+
+  // The component's branches, in order.
+  let failedToken: number | null = null
+  if (saved !== null) {
+    if (samePendingPrompt(current, captured)) current = null
+  } else if (captured !== null) {
+    failedToken = captured.token
+  }
+
+  assert.notEqual(current, null, 'the selection is NOT retired')
+  assert.equal(current?.promptId, P1)
+  assert.equal(failedToken, captured.token)
+  assert.equal(confirmationApplies({ failedToken, pending: current }), true, 'and it warns')
+  // AND IT IS NOT SHOWN AS SAVED.
+  assert.equal(promptBadgeFor({ promptId: P1, savedPromptId: null, pending: current }), 'pending')
+})
+
+test('confirm: a LATER SUCCESS clears the warning for that same selection', () => {
+  const choose = counter()
+  let current: PendingPrompt | null = choose(P1)
+  let failedToken: number | null = current.token
+
+  // The deliberate retry sends the same pending selection, and this time the
+  // snapshot is readable.
+  const captured = current
+  const saved = savedPromptFromResponse(savedBody())
+  assert.notEqual(saved, null)
+  if (saved !== null && samePendingPrompt(current, captured)) {
+    current = null
+    if (failedToken === captured.token) failedToken = null
+  }
+  assert.equal(current, null, 'retired')
+  assert.equal(failedToken, null, 'and the warning is spent')
+  assert.equal(confirmationApplies({ failedToken, pending: current }), false)
+})
+
+test('confirm: A FAILURE FOR A DOES NOT BECOME B’S PROBLEM', () => {
+  const choose = counter()
+  const a = choose(P1)
+  const failedToken: number | null = a.token
+  // The applicant chooses B. The component clears the warning on a new
+  // and even if it did not, confirmationApplies would refuse to show it.
+  const b = choose(P2)
+  assert.equal(confirmationApplies({ failedToken, pending: b }), false)
+  assert.equal(promptBadgeFor({ promptId: P2, savedPromptId: null, pending: b }), 'pending')
 })
 
 // ----------------------------------------------- the conflict-reload notice
@@ -728,12 +907,58 @@ test('component: wording is ESCAPED REACT TEXT, never raw HTML', () => {
   assert.match(PICKER, /whitespace-pre-wrap[^\n]*>\s*\n?\s*\{saved\.promptText\}/)
 })
 
-test('component: a preview is LABELLED as not attached, every time', () => {
+test('component: THREE BADGES, and a preview is never shown as attached', () => {
+  // Retargeted: the attach action works now, so the invariant is no longer
+  // "nothing is ever attached" but "the three states are distinguishable and a
+  // chosen-but-unconfirmed prompt never reads as saved".
   assert.match(PICKER, /Preview — not attached to your draft/)
-  assert.match(PICKER, /previewIsSaved\(\{/)
-  // The attach action exists only as a disabled placeholder.
-  assert.match(PICKER, /disabled\n\s*title="Attaching a prompt to a draft is not available yet\."/)
-  assert.match(PICKER, /coming soon/)
+  // "not yet saved" rather than "saving with your next change": choosing a
+  // prompt already dispatches `edited` and schedules the save, so telling the
+  // applicant to make another change would be false.
+  assert.match(PICKER, /Chosen — not yet saved/)
+  assert.equal(PICKER.includes('saving with your next change'), false)
+  assert.equal(PICKER.includes('next change'), false)
+  assert.match(PICKER, /Already your draft&rsquo;s prompt/)
+  // All three come from ONE decision, so they cannot overlap or both appear.
+  assert.match(PICKER, /promptBadgeFor\(\{/)
+  assert.match(PICKER, /previewBadge === 'saved'/)
+  assert.match(PICKER, /previewBadge === 'pending'/)
+  assert.match(PICKER, /previewBadge === 'preview'/)
+  // And `pending` beats `saved` inside promptBadgeFor -- asserted on the pure
+  // function above, which is what makes the UI claim safe.
+  assert.equal(
+    promptBadgeFor({ promptId: P1, savedPromptId: P1, pending: nextPendingPrompt(0, P1) }),
+    'pending'
+  )
+})
+
+test('component: the ATTACH BUTTON is enabled only when it would change something', () => {
+  assert.match(PICKER, /disabled=\{!canUsePreview\}/)
+  assert.match(PICKER, /onClick=\{\(\) => onUsePrompt\(preview\.id\)\}/)
+  assert.match(PICKER, /const canUsePreview = preview !== null && needsPromptWrite\(\{/)
+  // The placeholder is gone, and so is its title.
+  assert.equal(PICKER.includes('coming soon'), false)
+  assert.equal(PICKER.includes('not available yet'), false)
+  // ONLY THE ID LEAVES. No school, no wording, no limit, no cycle.
+  assert.equal(PICKER.includes('onUsePrompt(preview)'), false)
+  assert.equal(PICKER.includes('onUsePrompt(choice)'), false)
+  for (const field of ['schoolId', 'promptText', 'statedMaxWords', 'applicationCycle']) {
+    assert.equal(PICKER.includes(`onUsePrompt(${field}`), false)
+  }
+  // And still no request of its own: one fetch, and it is the catalog GET.
+  assert.equal((PICKER.match(/await fetch\(/g) ?? []).length, 1)
+  assert.equal(PICKER.includes("method: 'PATCH'"), false)
+})
+
+test('component: the CONFIRMATION WARNING is shown with a deliberate retry', () => {
+  assert.match(PICKER, /confirmationApplies\(\{ failedToken: confirmFailedToken, pending \}\)/)
+  assert.match(PICKER, /PICKER_MESSAGES\.confirmationFailed/)
+  assert.match(PICKER, /onClick=\{onRetryPromptSave\}/)
+  assert.match(PICKER, /PICKER_MESSAGES\.retryPromptSave/)
+  assert.match(PICKER, /role="alert"/)
+  // The retry is a BUTTON the applicant presses. Nothing schedules it.
+  assert.equal(PICKER.includes('setTimeout'), false)
+  assert.equal(PICKER.includes('setInterval'), false)
 })
 
 test('component: no second save path, and no new PATCH field', () => {

@@ -81,6 +81,19 @@ export const PICKER_MESSAGES = {
    */
   selectionDiscarded:
     'Your unsaved prompt selection was not kept. Choose it again if you still want to use it.',
+  /**
+   * A 200 whose canonical prompt fields could not be read.
+   *
+   * THE ESSAY IS SAFE AND THE PROMPT IS NOT CONFIRMED, and the sentence says
+   * both because both are true: the revision came back, so the document was
+   * written, but the four prompt fields did not arrive in a form this
+   * application can trust -- so claiming the selection was saved would be a
+   * guess. The selection stays pending and the applicant is given a button.
+   */
+  confirmationFailed:
+    'Your essay was saved, but we couldn’t confirm your prompt selection. Please try saving the prompt again.',
+  /** The deliberate retry. Nothing automatic ever triggers it. */
+  retryPromptSave: 'Try saving prompt again',
 } as const
 
 /** What a stated maximum reads as, including when a school states none. */
@@ -351,16 +364,20 @@ export interface PendingPrompt {
 }
 
 /**
- * The next selection after whatever is pending now.
+ * The next selection, given the LAST TOKEN EVER ISSUED.
  *
- * DERIVED FROM THE PREVIOUS ONE rather than from a module-level counter, so
- * this stays pure and two editors on one page cannot share a sequence.
+ * NOT DERIVED FROM WHAT IS PENDING NOW, and that correction matters. A pending
+ * selection is retired on every success and discarded on every reload, so
+ * counting from it would restart at 1 each time -- and a response for the first
+ * token 1 could then retire a brand new token 1 issued after the next success.
+ * The caller keeps a counter that NEVER RESETS for the lifetime of the editor,
+ * so every selection an applicant ever makes has an identity of its own.
+ *
+ * STILL PURE. The counter lives in the component, so two editors on one page
+ * cannot share a sequence and this function can be tested without one.
  */
-export function nextPendingPrompt(
-  previous: PendingPrompt | null,
-  promptId: string | null,
-): PendingPrompt {
-  return { token: (previous === null ? 0 : previous.token) + 1, promptId }
+export function nextPendingPrompt(lastToken: number, promptId: string | null): PendingPrompt {
+  return { token: lastToken + 1, promptId }
 }
 
 /**
@@ -437,6 +454,63 @@ export function needsPromptWrite(input: {
   readonly savedPromptId: string | null
   readonly pending: PendingPrompt | null
 }): boolean {
-  if (input.pending !== null) return true
+  // SOMETHING IS ALREADY PENDING. Compare against THAT, not against what the
+  // server holds: the pending instruction is what the applicant last asked for,
+  // and it may not have landed yet.
+  //
+  //   pending B, chosen A  -> yes. This is the in-flight REVERSAL: the draft may
+  //                          say A and a request attaching B may be in the air,
+  //                          and choosing A again must be honoured or B would
+  //                          silently become the final answer.
+  //   pending <clear>, chosen A -> yes, for the same reason.
+  //   pending A, chosen A  -> no. The instruction is already on its way; a
+  //                          second identical one would be a second write.
+  if (input.pending !== null) return input.pending.promptId !== input.chosenId
+
+  // NOTHING PENDING. Then the server's snapshot is the applicant's intent, and
+  // choosing what the draft already answers is not a change.
   return input.chosenId !== input.savedPromptId
+}
+
+/**
+ * WHICH OF THE THREE THINGS a prompt on screen is.
+ *
+ *   'pending'  the applicant chose it and the server has not confirmed it.
+ *   'saved'    the server's own snapshot says the draft answers it, AND no
+ *              newer choice is waiting that could replace it.
+ *   'preview'  anything else: a question being read, attached to nothing.
+ *
+ * 'pending' WINS OVER 'saved', always. That is the rule that stops a newer
+ * choice looking settled: while anything is pending, the draft's prompt is
+ * unsettled, so even a prompt whose uuid matches the stored one is reported as
+ * pending rather than saved. An older response that happens to confirm the same
+ * id cannot make a newer instruction appear finished.
+ */
+export type PromptBadge = 'saved' | 'pending' | 'preview'
+
+export function promptBadgeFor(input: {
+  readonly promptId: string
+  readonly savedPromptId: string | null
+  readonly pending: PendingPrompt | null
+}): PromptBadge {
+  if (input.pending !== null) {
+    return input.pending.promptId === input.promptId ? 'pending' : 'preview'
+  }
+  return input.savedPromptId === input.promptId ? 'saved' : 'preview'
+}
+
+/**
+ * Whether a confirmation failure still describes what is pending.
+ *
+ * A WARNING BELONGS TO ONE SELECTION. If the applicant has since chosen
+ * something else, the failure recorded for the old one is no longer about
+ * anything on screen -- showing it would blame a newer choice for an older
+ * response. Compared by TOKEN, like every other decision about identity here.
+ */
+export function confirmationApplies(input: {
+  readonly failedToken: number | null
+  readonly pending: PendingPrompt | null
+}): boolean {
+  if (input.failedToken === null || input.pending === null) return false
+  return input.pending.token === input.failedToken
 }
