@@ -120,8 +120,23 @@ export type CreateOutcome =
   | { readonly type: 'created'; readonly id: string; readonly path: string }
   | { readonly type: 'refused'; readonly message: string; readonly retryable: boolean }
 
-/** The request never reached the route. Nothing was created; retrying is safe. */
-export const NETWORK_FAILURE: CreateOutcome = {
+/**
+ * The request never reached the route. Nothing was created; retrying is safe.
+ *
+ * TYPED AS THE `refused` MEMBER, NOT AS THE WHOLE UNION. Annotating it
+ * `CreateOutcome` widened it and threw the discriminant away, so a caller could
+ * not read `.message` or `.retryable` off it -- the value was always a refusal,
+ * but the type had stopped saying so. NewDraftDialog's catch block reads both,
+ * and TS2339 was the result.
+ *
+ * Extract<> rather than a hand-written second type, so there is still exactly
+ * one definition of what a refusal looks like: adding a field to the union
+ * member reaches this constant automatically. The same idiom
+ * lib/statement/draft/save.ts and lib/resume/model/dates.ts already use.
+ *
+ * THE VALUE IS UNCHANGED -- same type, same message, same retryable flag.
+ */
+export const NETWORK_FAILURE: Extract<CreateOutcome, { type: 'refused' }> = {
   type: 'refused',
   message: CREATE_MESSAGES.network,
   retryable: true,
