@@ -1,7 +1,11 @@
 import {
   hasUnsavedWork, nextAction, type AutosaveAction, type AutosaveState,
 } from '../../resume/draft/autosave.ts'
-import { checkDraftUpdate, checkTitle, type DraftRefusal, type DraftUpdateInput } from './validate.ts'
+import {
+  checkDraftUpdate, checkPromptSelection, checkTitle,
+  type DraftRefusal, type DraftUpdateInput,
+  type PromptSelection, type PromptSelectionRefusal,
+} from './validate.ts'
 import { isDraftId } from './http.ts'
 import { draftPromptFrom, parseStoredRevision } from './rows.ts'
 import type { DraftPromptSnapshot } from './rows.ts'
@@ -36,6 +40,32 @@ export const BLOCKED_MESSAGES: Readonly<Record<DraftRefusal, string>> = {
   'invalid-essay': 'This editor can only save text.',
   'essay-too-long': `That is longer than ${MAX_SAVED_CHARS.toLocaleString('en-US')} characters, which is as much as a draft can hold. Shorten it and saving resumes.`,
   'invalid-revision': 'This draft cannot be saved against the version it was opened at. Reload it.',
+}
+
+/**
+ * The one extra thing a save can be blocked on once a prompt may travel with it.
+ *
+ * A SEPARATE CONSTANT, AND BLOCKED_MESSAGES IS UNCHANGED. That map is
+ * Record<DraftRefusal, string>, and 'invalid-prompt' is deliberately not a
+ * member of DraftRefusal -- http.ts keys VALIDATION_MESSAGES and
+ * statusForValidation on the same union, so widening it would change the type
+ * of both for a code only this builder and the PATCH route can produce.
+ * Checkpoint D drew that line; this keeps it.
+ *
+ * AND IT SHOULD NEVER BE SEEN. A prompt id reaching this builder came from the
+ * editor's own state, not from a request, so a refusal here is this
+ * application's bug rather than the applicant's mistake. The words say what to
+ * do about it rather than blaming them for it.
+ */
+export const PROMPT_BLOCKED_MESSAGE =
+  'That prompt selection could not be saved. Reload the page and choose it again.'
+
+/** Every code a save request can be refused with, and what it reads as. */
+export const SAVE_BLOCKED_MESSAGES: Readonly<
+  Record<DraftRefusal | PromptSelectionRefusal, string>
+> = {
+  ...BLOCKED_MESSAGES,
+  'invalid-prompt': PROMPT_BLOCKED_MESSAGE,
 }
 
 /** Statement's own words. The shared engine's describe() is not used. */
@@ -112,10 +142,40 @@ export function statementStatus(state: AutosaveState, blocked: string | null): S
   }
 }
 
+/**
+ * THE PATCH BODY. The document, and -- only when a prompt change is being made
+ * -- one id.
+ *
+ * `promptId` IS OPTIONAL, AND ITS THREE STATES ARE THE SERVER'S THREE STATES:
+ *
+ *   absent            no prompt change. The stored snapshot keeps whatever it
+ *                     holds, and this is what every keystroke sends.
+ *   null              an explicit clear.
+ *   a uuid            select that prompt.
+ *
+ * ABSENT IS NOT undefined. The key is omitted entirely rather than set to
+ * undefined: JSON.stringify would drop such a key anyway, but Object.keys would
+ * report it, so a body that merely looked three-keyed would be four-keyed to
+ * anything inspecting it. promptSelectionOf() on the route reads absence and
+ * null as different instructions, and this is the half of that contract the
+ * editor owns.
+ *
+ * AND ONLY THE ID. The school, the wording and the word limit are canonical --
+ * the server resolves them from the catalog -- so there is no field for them
+ * here and nothing to leave one in.
+ */
+export interface SaveBody extends DraftUpdateInput {
+  readonly promptId?: string | null
+}
+
 /** A saveable document, or why it is not one. */
 export type SaveRequest =
-  | { readonly ok: true; readonly body: DraftUpdateInput }
-  | { readonly ok: false; readonly code: DraftRefusal; readonly message: string }
+  | { readonly ok: true; readonly body: SaveBody }
+  | {
+      readonly ok: false
+      readonly code: DraftRefusal | PromptSelectionRefusal
+      readonly message: string
+    }
 
 /**
  * The exact PATCH body, and the only place it is built.
@@ -123,16 +183,33 @@ export type SaveRequest =
  * checkDraftUpdate() is the SAME function the route validates with, so the
  * editor cannot disagree with the API about what is saveable. Its normalised
  * result is the payload: exactly title, essay and expectedRevision. Nothing
- * here adds an id, a userId, a timestamp, a school or a prompt -- the path
+ * here adds an id, a userId, a timestamp, a school or a word limit -- the path
  * carries the id, the session carries the owner, and the database owns the rest.
  *
+ * THE DOCUMENT IS VALIDATED FIRST, so the refusal order the existing tests pin
+ * -- title, then essay, then revision -- is unchanged, and a body wrong in both
+ * ways still reports the document's code.
+ *
+ * THE PROMPT IS BUILT ON TOP, NOT MERGED IN BY THE VALIDATOR.
+ * checkDraftUpdate() returns exactly three fields and would discard a fourth,
+ * so the body is ASSEMBLED here from its normalised result plus the id. That is
+ * the whole reason this function does not simply forward `checked.input`.
+ *
+ * AN INVALID PROMPT IS A REFUSAL, NEVER A DROPPED FIELD. Silently omitting a
+ * malformed id would turn "save this prompt" into "change nothing" -- a save
+ * that reports success while the selection is quietly gone. checkPromptSelection
+ * is the same validator the route reads bodies with.
+ *
  * THE REVISION IS THE ENGINE'S, passed in from AutosaveState.revision, which is
- * only ever set from a server response. It is never incremented here.
+ * only ever set from a server response. It is never incremented here, and a
+ * prompt change does not add one: it travels inside the same compare-and-swap.
  */
 export function statementSaveRequest(input: {
   title: string
   essay: string
   revision: number
+  /** undefined / absent = no change, null = clear, a uuid = select. */
+  prompt?: unknown
 }): SaveRequest {
   const checked = checkDraftUpdate({
     title: input.title,
@@ -142,7 +219,29 @@ export function statementSaveRequest(input: {
   if (!checked.ok) {
     return { ok: false, code: checked.code, message: BLOCKED_MESSAGES[checked.code] }
   }
-  return { ok: true, body: checked.input }
+
+  const selection = checkPromptSelection(input.prompt)
+  if (!selection.ok) {
+    return { ok: false, code: selection.code, message: SAVE_BLOCKED_MESSAGES[selection.code] }
+  }
+
+  // THE KEY IS OMITTED on 'unchanged', present and null on 'clear', present and
+  // a uuid on 'select'. Spreading {} adds nothing, which is what keeps an
+  // ordinary keystroke's body byte-for-byte the three keys it has always been.
+  return { ok: true, body: { ...checked.input, ...promptKey(selection.selection) } }
+}
+
+/**
+ * The prompt half of a body: no key, a null, or an id.
+ *
+ * TYPED ON PromptSelection, so the three branches are the validator's three
+ * states and the compiler -- not a cast -- is what guarantees `promptId` exists
+ * on the one branch that reads it.
+ */
+function promptKey(selection: PromptSelection): { promptId?: string | null } {
+  if (selection.kind === 'unchanged') return {}
+  if (selection.kind === 'clear') return { promptId: null }
+  return { promptId: selection.promptId }
 }
 
 // ------------------------------------------------- the save snapshot
@@ -173,8 +272,12 @@ export interface SaveSnapshot {
 }
 
 export type SaveAttempt =
-  | { readonly ok: true; readonly body: DraftUpdateInput; readonly snapshot: SaveSnapshot }
-  | { readonly ok: false; readonly code: DraftRefusal; readonly message: string }
+  | { readonly ok: true; readonly body: SaveBody; readonly snapshot: SaveSnapshot }
+  | {
+      readonly ok: false
+      readonly code: DraftRefusal | PromptSelectionRefusal
+      readonly message: string
+    }
 
 /**
  * The request body and the snapshot that belongs to it, built together so they
@@ -187,12 +290,20 @@ export function saveAttemptFor(input: {
   title: string
   essay: string
   revision: number
+  /** Forwarded verbatim to statementSaveRequest. See its three states. */
+  prompt?: unknown
 }): SaveAttempt {
   const request = statementSaveRequest(input)
   if (!request.ok) return request
   return {
     ok: true,
     body: request.body,
+    // THE SNAPSHOT IS UNCHANGED, and deliberately carries NO prompt. It exists
+    // for one job -- deciding what the title field should read once a save has
+    // landed -- and titleAfterSave() compares `raw` against the live title and
+    // nothing else. A prompt in here would be a value nothing reads, and would
+    // invite a future reader to think reconciliation covers it. Which prompt
+    // the draft answers comes back in the save RESPONSE, as it already does.
     snapshot: {
       raw: input.title,
       sent: request.body.title,

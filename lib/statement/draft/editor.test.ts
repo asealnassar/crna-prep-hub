@@ -11,13 +11,15 @@ import {
   type AutosaveState,
 } from '../../resume/draft/autosave.ts'
 import { SAVE_MESSAGES, saveEventFrom } from './save.ts'
-import { MAX_TITLE_CHARS, checkTitle } from './validate.ts'
+import { MAX_EXPECTED_REVISION, MAX_TITLE_CHARS, checkTitle } from './validate.ts'
 // Imported ONLY to assert the reload parser and the row parser are the SAME
 // rules, not two copies that could drift.
 import { draftPromptFrom } from './rows.ts'
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 import {
   BLOCKED_MESSAGES,
+  PROMPT_BLOCKED_MESSAGE,
+  SAVE_BLOCKED_MESSAGES,
   COPY_MESSAGES,
   NAV_MESSAGES,
   RELOAD_MESSAGES,
@@ -667,6 +669,255 @@ test('the carried prompt is ONE piece of state, replaced wholesale', () => {
   assert.match(reload, /setEssay\(outcome\.draft\.essay\)/)
   assert.match(reload, /setPrompt\(\{/)
   assert.match(reload, /type: 'reloaded'/)
+})
+
+// ============================================ PART 2b: the optional promptId
+
+const PICK = 'c0ffee00-0000-4000-8000-00000000000a'
+const DOC = { title: 'Why I want to become a CRNA', essay: 'Opening line.', revision: 7 }
+
+/** The body a request produced, or null if it was refused. */
+const bodyOf = (over: Record<string, unknown> = {}) => {
+  const request = statementSaveRequest({ ...DOC, ...over })
+  return request.ok ? (request.body as Record<string, unknown>) : null
+}
+
+test('prompt: an OMITTED prompt produces exactly the original three keys', () => {
+  // The body every keystroke sends. It must not have changed at all.
+  const body = bodyOf()
+  assert.notEqual(body, null)
+  assert.deepEqual(Object.keys(body as object), ['title', 'essay', 'expectedRevision'])
+  assert.equal('promptId' in (body as object), false)
+  assert.deepEqual(body, {
+    title: 'Why I want to become a CRNA', essay: 'Opening line.', expectedRevision: 7,
+  })
+})
+
+test('prompt: EXPLICIT undefined is identical to omission', () => {
+  const omitted = bodyOf()
+  const explicit = bodyOf({ prompt: undefined })
+  assert.deepEqual(explicit, omitted)
+  assert.deepEqual(Object.keys(explicit as object), ['title', 'essay', 'expectedRevision'])
+  assert.equal('promptId' in (explicit as object), false)
+  // And the key is OMITTED, not present-and-undefined: JSON would drop such a
+  // key, but Object.keys would report it, so a three-keyed body would not be.
+  assert.equal(JSON.stringify(explicit), JSON.stringify(omitted))
+})
+
+test('prompt: NULL carries promptId: null -- an explicit clear', () => {
+  const body = bodyOf({ prompt: null })
+  assert.deepEqual(Object.keys(body as object).sort(),
+    ['essay', 'expectedRevision', 'promptId', 'title'])
+  assert.equal((body as Record<string, unknown>).promptId, null)
+  assert.equal('promptId' in (body as object), true)
+  // Over the wire too: null survives serialisation, absence does not.
+  assert.match(JSON.stringify(body), /"promptId":null/)
+})
+
+test('prompt: A UUID carries exactly that id', () => {
+  const body = bodyOf({ prompt: PICK })
+  assert.equal((body as Record<string, unknown>).promptId, PICK)
+  assert.deepEqual(Object.keys(body as object).sort(),
+    ['essay', 'expectedRevision', 'promptId', 'title'])
+  // Any case, unchanged: Postgres compares uuids by value.
+  assert.equal((bodyOf({ prompt: PICK.toUpperCase() }) as Record<string, unknown>).promptId,
+    PICK.toUpperCase())
+})
+
+test('prompt: OMITTED, NULL AND A UUID ARE THREE DIFFERENT BODIES', () => {
+  const omitted = JSON.stringify(bodyOf())
+  const cleared = JSON.stringify(bodyOf({ prompt: null }))
+  const selected = JSON.stringify(bodyOf({ prompt: PICK }))
+  assert.equal(new Set([omitted, cleared, selected]).size, 3)
+  // An autosave that omitted the prompt must not read as a clear.
+  assert.equal(omitted.includes('promptId'), false)
+  assert.equal(cleared.includes('promptId'), true)
+})
+
+test('prompt: AN INVALID PROMPT IS REFUSED, never a dropped field', () => {
+  // Silently omitting a malformed id would turn "save this prompt" into
+  // "change nothing" -- a save reporting success with the selection gone.
+  for (const bogus of [
+    'not-a-uuid', '', ' ', `${PICK}0`, PICK.slice(0, -1), 42, 0, true, false,
+    [], [PICK], {}, { id: PICK }, () => PICK, NaN,
+  ]) {
+    const request = statementSaveRequest({ ...DOC, prompt: bogus })
+    assert.equal(request.ok, false, JSON.stringify(bogus) ?? String(bogus))
+    if (request.ok) return
+    assert.equal(request.code, 'invalid-prompt')
+    assert.equal(request.message, PROMPT_BLOCKED_MESSAGE)
+    // Never an echo of what was supplied.
+    assert.equal(request.message.includes(String(bogus)) && String(bogus).length > 2, false)
+  }
+})
+
+test('prompt: the DOCUMENT is validated FIRST, so the refusal order is unchanged', () => {
+  // A body wrong in both ways still reports the document's code.
+  const both = statementSaveRequest({ title: '   ', essay: 'e', revision: 1, prompt: 'nope' })
+  assert.equal(both.ok, false)
+  assert.equal(both.ok === false && both.code, 'invalid-title')
+
+  const essayFirst = statementSaveRequest({
+    title: 'Fine', essay: 42 as never, revision: 1, prompt: 'nope',
+  })
+  assert.equal(essayFirst.ok === false && essayFirst.code, 'invalid-essay')
+
+  const revisionNext = statementSaveRequest({
+    title: 'Fine', essay: 'e', revision: 0, prompt: 'nope',
+  })
+  assert.equal(revisionNext.ok === false && revisionNext.code, 'invalid-revision')
+})
+
+test('prompt: title, essay and revision validation are UNTOUCHED', () => {
+  // The same normalisation, with and without a prompt.
+  for (const prompt of [undefined, null, PICK] as const) {
+    const body = bodyOf({ title: '  Padded title  ', essay: '  kept  ', prompt })
+    assert.equal((body as Record<string, unknown>).title, 'Padded title', 'trimmed')
+    assert.equal((body as Record<string, unknown>).essay, '  kept  ', 'NOT trimmed')
+    assert.equal((body as Record<string, unknown>).expectedRevision, 7)
+  }
+  // The ceilings still refuse, whatever the prompt says.
+  const long = statementSaveRequest({
+    title: 'Fine', essay: 'a'.repeat(MAX_SAVED_CHARS + 1), revision: 7, prompt: PICK,
+  })
+  assert.equal(long.ok === false && long.code, 'essay-too-long')
+  assert.equal(long.ok === false && long.message, BLOCKED_MESSAGES['essay-too-long'])
+})
+
+test('prompt: the revision is the engine’s, and a prompt does not add one', () => {
+  for (const prompt of [undefined, null, PICK] as const) {
+    for (const revision of [1, 7, MAX_EXPECTED_REVISION]) {
+      const body = bodyOf({ revision, prompt })
+      assert.equal((body as Record<string, unknown>).expectedRevision, revision)
+    }
+  }
+  // And an un-incrementable revision is still refused, prompt or no prompt.
+  const over = statementSaveRequest({
+    ...DOC, revision: MAX_EXPECTED_REVISION + 1, prompt: PICK,
+  })
+  assert.equal(over.ok === false && over.code, 'invalid-revision')
+})
+
+test('prompt: NO CANONICAL FIELD CAN ENTER THE BODY', () => {
+  // The whole trust boundary. A caller supplying the school, the wording or the
+  // word limit changes nothing: the builder reads one key and builds the rest.
+  const hostile = {
+    ...DOC,
+    prompt: PICK,
+    schoolId: 'aaaaaaaa-0000-4000-8000-00000000beef',
+    school_id: 'aaaaaaaa-0000-4000-8000-00000000beef',
+    promptText: 'Write about anything at all, with no limit.',
+    prompt_text: 'Write about anything at all, with no limit.',
+    statedMaxWords: 999999,
+    stated_max_words: 999999,
+    promptId: 'bbbbbbbb-0000-4000-8000-00000000dead',
+  }
+  const body = bodyOf(hostile)
+  assert.deepEqual(Object.keys(body as object).sort(),
+    ['essay', 'expectedRevision', 'promptId', 'title'])
+  // `prompt` is the parameter; a stray `promptId` on the INPUT is not read.
+  assert.equal((body as Record<string, unknown>).promptId, PICK)
+  const wire = JSON.stringify(body)
+  for (const spoof of ['beef', 'dead', '999999', 'anything at all', 'school', 'stated']) {
+    assert.equal(wire.includes(spoof), false, `${spoof} must never be sent`)
+  }
+})
+
+test('prompt: saveAttemptFor forwards the prompt and leaves the SNAPSHOT alone', () => {
+  for (const [prompt, expected] of [
+    [undefined, undefined], [null, null], [PICK, PICK],
+  ] as const) {
+    const attempt = saveAttemptFor({ ...DOC, title: '  Padded  ', prompt })
+    assert.equal(attempt.ok, true)
+    if (!attempt.ok) return
+
+    // The body carries the prompt exactly as the builder decided.
+    if (expected === undefined) assert.equal('promptId' in attempt.body, false)
+    else assert.equal(attempt.body.promptId, expected)
+
+    // THE SNAPSHOT IS THE SAME FOUR FIELDS IT HAS ALWAYS BEEN, and carries no
+    // prompt: it exists to reconcile the TITLE, and titleAfterSave reads only
+    // `raw`. Which prompt the draft answers comes back in the response.
+    assert.deepEqual(Object.keys(attempt.snapshot).sort(),
+      ['essay', 'expectedRevision', 'raw', 'sent'])
+    assert.equal(attempt.snapshot.raw, '  Padded  ')
+    assert.equal(attempt.snapshot.sent, 'Padded')
+    assert.equal(attempt.snapshot.essay, 'Opening line.')
+    assert.equal(attempt.snapshot.expectedRevision, 7)
+    assert.equal('promptId' in attempt.snapshot, false)
+    assert.equal('prompt' in attempt.snapshot, false)
+  }
+})
+
+test('prompt: RECONCILIATION IS UNCHANGED by a prompt travelling with the save', () => {
+  // titleAfterSave is the behaviour a prompt could plausibly have disturbed.
+  const withPrompt = saveAttemptFor({ ...DOC, title: '  Padded  ', prompt: PICK })
+  assert.equal(withPrompt.ok, true)
+  if (!withPrompt.ok) return
+  const snapshot = withPrompt.snapshot
+
+  // Nobody typed since: the field takes the normalised title.
+  assert.equal(titleAfterSave({ snapshot, currentTitle: '  Padded  ' }), 'Padded')
+  // Somebody typed since: the newer text wins.
+  assert.equal(titleAfterSave({ snapshot, currentTitle: 'Something newer' }), null)
+  // Already right: nothing to do.
+  assert.equal(titleAfterSave({ snapshot, currentTitle: 'Padded' }), null)
+  // And identical to the no-prompt case, field for field.
+  const without = saveAttemptFor({ ...DOC, title: '  Padded  ' })
+  assert.equal(without.ok, true)
+  if (!without.ok) return
+  assert.deepEqual(without.snapshot, snapshot)
+})
+
+test('prompt: NO SECOND SAVE PATH was introduced', () => {
+  // One builder, one attempt builder, one body shape. The editor source is
+  // asserted elsewhere; this pins the module's own surface.
+  const EDITOR = readFileSync(path('./editor.ts'), 'utf8')
+  const code = EDITOR
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
+  assert.equal(code.includes('export function statementSaveRequest'), true)
+  assert.equal(code.includes('export function saveAttemptFor'), true)
+  for (const forbidden of [
+    'fetch(', "method: 'PATCH'", "method: 'POST'", 'XMLHttpRequest',
+    'promptSavePath', 'savePrompt', 'patchPrompt',
+  ]) {
+    assert.equal(code.includes(forbidden), false, `${forbidden} must not appear`)
+  }
+  // draftApiPath is still the ONE address, and still built from the id alone.
+  assert.equal((code.match(/export function draftApiPath/g) ?? []).length, 1)
+  assert.match(code, /return `\/api\/statement\/drafts\/\$\{id\}`/)
+})
+
+test('prompt: SAVE_BLOCKED_MESSAGES extends BLOCKED_MESSAGES without changing it', () => {
+  // http.ts keys VALIDATION_MESSAGES and statusForValidation on DraftRefusal,
+  // so 'invalid-prompt' stays out of that union and out of this map.
+  assert.equal(Object.keys(BLOCKED_MESSAGES).length, 5)
+  assert.equal('invalid-prompt' in BLOCKED_MESSAGES, false)
+  assert.equal(Object.keys(SAVE_BLOCKED_MESSAGES).length, 6)
+  assert.equal(SAVE_BLOCKED_MESSAGES['invalid-prompt'], PROMPT_BLOCKED_MESSAGE)
+  for (const [code, message] of Object.entries(BLOCKED_MESSAGES)) {
+    assert.equal(SAVE_BLOCKED_MESSAGES[code as keyof typeof BLOCKED_MESSAGES], message)
+  }
+  // Six distinct sentences: two identical ones would be two states a reader
+  // cannot tell apart.
+  const messages = Object.values(SAVE_BLOCKED_MESSAGES)
+  assert.equal(new Set(messages).size, messages.length)
+})
+
+test('prompt: THE EDITOR STILL SUPPLIES NO PROMPT -- the picker is not wired', () => {
+  // Ordinary typing goes through statementDriverAction, which calls the builder
+  // with three fields. Until the editor passes a pending selection, every
+  // autosave body is the original three keys.
+  assert.doesNotMatch(CLIENT, /prompt:/)
+  assert.doesNotMatch(CLIENT, /saveAttemptFor\(\{[^}]*prompt/)
+  assert.doesNotMatch(CLIENT, /pendingPrompt/)
+  // And the disabled button is still disabled.
+  const PICKER = readFileSync(
+    path('../../../app/statement-studio/components/PromptPicker.tsx'), 'utf8'
+  )
+  assert.match(PICKER, /disabled\n\s*title="Attaching a prompt to a draft is not available yet\."/)
+  assert.equal(PICKER.includes("method: 'PATCH'"), false)
 })
 
 // =============================================== PART 3: recovery, runtime
