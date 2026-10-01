@@ -336,3 +336,134 @@ export function checkDraftUpdate(input: {
     characters: essay.characters,
   }
 }
+
+// ===========================================================================
+// PROMPT SELECTION
+//
+// Which school prompt a draft answers. THE ONLY PROMPT FIELD A BROWSER MAY
+// SEND IS AN ID, and this section is where that rule is enforced.
+//
+// WHAT IS DELIBERATELY ABSENT, AND MUST STAY ABSENT. There is no check for
+// `schoolId`, `promptText` or `statedMaxWords` anywhere below. Those three are
+// canonical: the server resolves them from public.statement_prompts and
+// snapshots what the DATABASE returned. A validator for them would be the first
+// step towards trusting them, because a field that can be validated is a field
+// something will eventually accept. So they are not validated and refused --
+// they are never read at all, exactly as `userId` and `revision` already are
+// not read by checkDraftCreate.
+//
+// NOTHING HERE IS WIRED INTO A ROUTE YET. checkDraftCreate and
+// checkDraftUpdate are untouched: a prompt selection is not part of
+// DraftCreateInput or DraftUpdateInput at this checkpoint, and no endpoint
+// reads it. This is the validation layer only.
+//
+// AND 'invalid-prompt' IS NOT IN DraftRefusal, on purpose. http.ts builds
+// VALIDATION_MESSAGES as Record<DraftRefusal, string> and switches
+// exhaustively on the same union, so adding a member here would silently
+// require a message and a status for a code no endpoint can yet produce.
+// Folding the two unions together belongs to the checkpoint that wires PATCH.
+// ===========================================================================
+
+/** Everything a prompt selection can refuse. One code: the value is not one. */
+export type PromptSelectionRefusal =
+  /** Neither a uuid, nor null, nor absent. */
+  | 'invalid-prompt'
+
+/**
+ * The uuid shape a prompt id must have.
+ *
+ * DUPLICATED FROM http.ts's UUID, and the duplication is the lesser evil.
+ * http.ts imports DraftRefusal from this file, so importing its regex back
+ * would close a cycle between the two modules; and this file otherwise depends
+ * on nothing but one limits constant, which is what lets the whole validation
+ * layer be read in one sitting. validate.test.ts asserts the two patterns stay
+ * character-for-character identical, so they cannot drift apart unnoticed.
+ *
+ * ANY VERSION, ANY VARIANT, like the draft-id predicate beside it. The column
+ * defaults to gen_random_uuid() and is therefore v4 in practice, but a
+ * validator that refused a v7 id would be refusing a row the database was
+ * perfectly willing to store.
+ */
+const PROMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Whether a value can be a prompt id.
+ *
+ * CHECKED BEFORE ANY QUERY, for the same reason isDraftId is: Postgres casts
+ * the value to uuid, so a malformed id reaching the database is a 22P02 cast
+ * error -- a 500 for what is plainly a bad request.
+ */
+export function isPromptId(value: unknown): value is string {
+  return typeof value === 'string' && PROMPT_ID.test(value)
+}
+
+/**
+ * THREE STATES, and they are three because a request has three things to say.
+ *
+ *   'unchanged'  the request expressed no opinion. Leave the stored prompt
+ *                alone -- all four columns keep whatever they hold.
+ *   'clear'      the applicant deliberately removed the prompt. All four
+ *                columns become NULL and the draft becomes generic again.
+ *   'select'     this prompt, by id. The server resolves the canonical
+ *                school, wording and word limit and snapshots those.
+ *
+ * WHY 'unchanged' AND 'clear' MUST NOT BE ONE STATE. An autosave sends the
+ * whole document every 1.2 seconds. If a body that simply omits the prompt
+ * meant "clear it", every keystroke in the essay would quietly wipe the
+ * applicant's prompt selection. And if an explicit null meant "leave it", there
+ * would be no way to remove a prompt at all. Collapsing them breaks one feature
+ * or the other, so the distinction is load-bearing rather than tidy.
+ */
+export type PromptSelection =
+  | { readonly kind: 'unchanged' }
+  | { readonly kind: 'clear' }
+  | { readonly kind: 'select'; readonly promptId: string }
+
+export type PromptSelectionCheck =
+  | { readonly ok: true; readonly selection: PromptSelection }
+  | { readonly ok: false; readonly code: PromptSelectionRefusal }
+
+/** The key, named once. Anything else in a body is not a prompt selection. */
+export const PROMPT_SELECTION_KEY = 'promptId'
+
+const UNCHANGED: PromptSelectionCheck = { ok: true, selection: { kind: 'unchanged' } }
+const CLEAR: PromptSelectionCheck = { ok: true, selection: { kind: 'clear' } }
+
+/**
+ * One value as a prompt selection, or a refusal.
+ *
+ * `undefined` AND AN ABSENT KEY ARE THE SAME ANSWER, necessarily: reading a
+ * missing property yields undefined, so JavaScript cannot tell the two apart
+ * and neither can this function. Both mean "no opinion", which is the safe
+ * reading -- a request that forgot to mention the prompt must not change it.
+ *
+ * NULL IS NOT FALSY HERE. It is the one value that means something, so it is
+ * matched exactly rather than falling into a truthiness test that would also
+ * swallow '' and 0 and call them a deliberate clear.
+ *
+ * A NON-STRING IS A REFUSAL, NOT A THROW, matching checkTitle: a body carrying
+ * `promptId: 42` or `promptId: { id: '...' }` is a malformed request.
+ */
+export function checkPromptSelection(value: unknown): PromptSelectionCheck {
+  if (value === undefined) return UNCHANGED
+  if (value === null) return CLEAR
+  if (!isPromptId(value)) return { ok: false, code: 'invalid-prompt' }
+  return { ok: true, selection: { kind: 'select', promptId: value } }
+}
+
+/**
+ * A request body's prompt selection: exactly ONE key is read, and it is named
+ * by PROMPT_SELECTION_KEY.
+ *
+ * THIS FUNCTION IS THE NARROW DOOR. It exists so that "the browser may send an
+ * id and nothing else" is a property of one testable function rather than a
+ * habit spread across two routes. A body carrying `schoolId`, `promptText`,
+ * `statedMaxWords`, `school_id`, `prompt_text`, `stated_max_words` or
+ * `prompt_id` reaches nothing: those keys are not read, so they cannot be
+ * forwarded, logged or stored, and a test asserts exactly that.
+ */
+export function promptSelectionOf(
+  body: { readonly [key: string]: unknown },
+): PromptSelectionCheck {
+  return checkPromptSelection(body[PROMPT_SELECTION_KEY])
+}

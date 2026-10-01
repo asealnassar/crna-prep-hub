@@ -3,10 +3,14 @@ import assert from 'node:assert/strict'
 import {
   MAX_TITLE_CHARS, MIN_TITLE_CHARS,
   MAX_EXPECTED_REVISION,
+  PROMPT_SELECTION_KEY,
   checkDraftCreate, checkDraftUpdate, checkEssay, checkExpectedRevision, checkTitle,
+  checkPromptSelection, isPromptId, promptSelectionOf,
 } from './validate.ts'
 // Imported ONLY to assert the deliberate asymmetry between the two ceilings.
 import { parseStoredRevision } from './rows.ts'
+// Imported ONLY to assert the two uuid patterns have not drifted apart.
+import { UUID } from './http.ts'
 import { MAX_SAVED_CHARS } from '../extract/limits.ts'
 import { MAX_STATEMENT_CHARS } from '../limits.ts'
 
@@ -562,4 +566,147 @@ test('characters are UTF-16 code units, which is what the rest of the app measur
   assert.equal(refused.ok, false)
   if (refused.ok) return
   assert.equal(refused.characters, MAX_SAVED_CHARS + 2)
+})
+
+// ======================================================= prompt selection
+
+const PROMPT = 'c0ffee00-0000-4000-8000-000000000001'
+
+test('prompt: a uuid is a selection, carrying the id verbatim', () => {
+  const result = checkPromptSelection(PROMPT)
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.selection, { kind: 'select', promptId: PROMPT })
+})
+
+test('prompt: a uuid in any case is accepted, and is not normalised', () => {
+  const upper = PROMPT.toUpperCase()
+  const result = checkPromptSelection(upper)
+  assert.equal(result.ok, true)
+  if (!result.ok || result.selection.kind !== 'select') return
+  // Postgres compares uuids by value, so case is not this validator's to change.
+  assert.equal(result.selection.promptId, upper)
+})
+
+test('prompt: null is an EXPLICIT CLEAR', () => {
+  assert.deepEqual(checkPromptSelection(null), { ok: true, selection: { kind: 'clear' } })
+})
+
+test('prompt: undefined and an absent key are BOTH "unchanged"', () => {
+  assert.deepEqual(checkPromptSelection(undefined), { ok: true, selection: { kind: 'unchanged' } })
+  // Reading a missing property yields undefined, so these cannot differ -- and
+  // the assertion records that they are meant to be one answer.
+  const absent = {} as { promptId?: unknown }
+  assert.deepEqual(checkPromptSelection(absent.promptId), {
+    ok: true, selection: { kind: 'unchanged' },
+  })
+})
+
+test('prompt: THE THREE STATES ARE DISTINGUISHABLE -- absent is not clear', () => {
+  const unchanged = checkPromptSelection(undefined)
+  const clear = checkPromptSelection(null)
+  const select = checkPromptSelection(PROMPT)
+  assert.equal(unchanged.ok && unchanged.selection.kind, 'unchanged')
+  assert.equal(clear.ok && clear.selection.kind, 'clear')
+  assert.equal(select.ok && select.selection.kind, 'select')
+  // Three distinct kinds, not two. An autosave that omits the prompt must not
+  // wipe it, and an explicit null must not be ignored.
+  assert.equal(new Set(['unchanged', 'clear', 'select']).size, 3)
+})
+
+test('prompt: anything that is not a uuid, null or undefined is invalid-prompt', () => {
+  const refused: readonly unknown[] = [
+    '', ' ', 'not-a-uuid', PROMPT.slice(0, -1), `${PROMPT}0`, ` ${PROMPT}`, `${PROMPT} `,
+    // A uuid with the wrong separators, and one with a non-hex digit.
+    'c0ffee00000040008000000000000001', 'g0ffee00-0000-4000-8000-000000000001',
+    0, 1, -1, NaN, Infinity, true, false, {}, [], [PROMPT], () => PROMPT,
+    Symbol('x'), 0n,
+    // An object that stringifies to a uuid is still not a uuid.
+    { toString: () => PROMPT },
+    new String(PROMPT),
+  ]
+  for (const value of refused) {
+    assert.deepEqual(
+      checkPromptSelection(value),
+      { ok: false, code: 'invalid-prompt' },
+      `${String(value)} must be refused`,
+    )
+  }
+})
+
+test('prompt: a refusal carries no character count and no echo of the value', () => {
+  const result = checkPromptSelection('not-a-uuid-at-all')
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.deepEqual(Object.keys(result).sort(), ['code', 'ok'])
+  assert.equal(JSON.stringify(result).includes('not-a-uuid'), false)
+})
+
+test('prompt: isPromptId is the predicate, and refuses every non-string', () => {
+  assert.equal(isPromptId(PROMPT), true)
+  for (const value of [null, undefined, 0, {}, [], true]) {
+    assert.equal(isPromptId(value), false)
+  }
+})
+
+test('prompt: the uuid pattern has NOT drifted from the draft-id pattern', () => {
+  // isPromptId duplicates http.ts's UUID rather than importing it, to keep
+  // validate.ts free of a cycle. This is what stops the copies diverging.
+  const a = 'c0ffee00-0000-4000-8000-000000000001'
+  const b = 'C0FFEE00-0000-7000-9000-000000000001'
+  for (const value of [a, b, '', 'x', `${a}0`]) {
+    assert.equal(isPromptId(value), UUID.test(value), `disagreed about ${value}`)
+  }
+})
+
+test('prompt: the body helper reads exactly one key, named by PROMPT_SELECTION_KEY', () => {
+  assert.equal(PROMPT_SELECTION_KEY, 'promptId')
+  const result = promptSelectionOf({ [PROMPT_SELECTION_KEY]: PROMPT })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.selection, { kind: 'select', promptId: PROMPT })
+})
+
+test('prompt: CANONICAL FIELDS IN A BODY ARE NEVER READ', () => {
+  // The whole rule this checkpoint exists to establish. school, wording and
+  // word limit are the server's to resolve; a browser sending them must change
+  // nothing at all -- not be validated and refused, but be ignored entirely.
+  const hostile = {
+    schoolId: 'aaaaaaaa-0000-4000-8000-000000000001',
+    school_id: 'aaaaaaaa-0000-4000-8000-000000000001',
+    promptText: 'Write about anything you like, with no limit.',
+    prompt_text: 'Write about anything you like, with no limit.',
+    statedMaxWords: 999999,
+    stated_max_words: 999999,
+    prompt_id: PROMPT,
+    prompt: 'not a field either',
+  }
+  // No promptId, so the answer is "unchanged" -- every other key is inert.
+  assert.deepEqual(promptSelectionOf(hostile), { ok: true, selection: { kind: 'unchanged' } })
+
+  // And with a real selection, the result still carries ONLY the id.
+  const withId = promptSelectionOf({ ...hostile, promptId: PROMPT })
+  assert.equal(withId.ok, true)
+  if (!withId.ok) return
+  assert.deepEqual(withId.selection, { kind: 'select', promptId: PROMPT })
+  const wire = JSON.stringify(withId)
+  for (const forbidden of ['999999', 'anything you like', 'aaaaaaaa']) {
+    assert.equal(wire.includes(forbidden), false, `${forbidden} must never survive`)
+  }
+})
+
+test('prompt: NOTHING was wired into create or update at this checkpoint', () => {
+  // checkDraftCreate and checkDraftUpdate must still normalise to exactly the
+  // fields they did before, so a prompt in a body reaches no endpoint yet.
+  const create = checkDraftCreate({ title: 'T', essay: '', promptId: PROMPT } as never)
+  assert.equal(create.ok, true)
+  if (!create.ok) return
+  assert.deepEqual(Object.keys(create.input).sort(), ['essay', 'title'])
+
+  const update = checkDraftUpdate({
+    title: 'T', essay: '', expectedRevision: 1, promptId: PROMPT,
+  } as never)
+  assert.equal(update.ok, true)
+  if (!update.ok) return
+  assert.deepEqual(Object.keys(update.input).sort(), ['essay', 'expectedRevision', 'title'])
 })
