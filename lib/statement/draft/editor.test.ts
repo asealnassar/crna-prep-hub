@@ -515,19 +515,23 @@ test('none of the deferred features crept in', () => {
   )
 })
 
-test('SCHOOL OPTIONS ARRIVE AS A PROP AND ARE NOT YET READ', () => {
-  // The precise invariant replacing the old blanket "no schools anywhere". The
-  // editor accepts the server's list; it does not fetch one and does not render
-  // a control for it.
+test('SCHOOL OPTIONS PASS STRAIGHT THROUGH TO THE PICKER', () => {
+  // Retargeted from "not yet read": the picker exists now and is the only
+  // thing that reads them. The guarantees underneath are unchanged -- the
+  // editor does not fetch a directory, does not hold a Supabase client, and
+  // renders no control of its own.
   assert.match(CLIENT, /schools: readonly SchoolOption\[\]/)
   assert.match(CLIENT, /schoolsUnavailable: boolean/)
   assert.match(CLIENT, /import type \{ SchoolOption \} from '@\/lib\/statement\/draft\/schoolPicker'/)
 
-  // NOT READ YET, and nothing was invented to consume them.
-  assert.doesNotMatch(CLIENT, /schools\./)
-  assert.doesNotMatch(CLIENT, /schools\[/)
-  assert.doesNotMatch(CLIENT, /schoolsUnavailable \?/)
-  assert.doesNotMatch(CLIENT, /schoolsUnavailable &&/)
+  // HANDED OVER, NOT COPIED. A second copy in local state would be a second
+  // thing to keep correct, and the server already read them once.
+  assert.match(CLIENT, /<PromptPicker/)
+  assert.match(CLIENT, /schools=\{schools\}/)
+  assert.match(CLIENT, /schoolsUnavailable=\{schoolsUnavailable\}/)
+  assert.doesNotMatch(CLIENT, /useState<.*SchoolOption/)
+  assert.doesNotMatch(CLIENT, /schools\.map/)
+  assert.doesNotMatch(CLIENT, /schools\.filter/)
   assert.doesNotMatch(CLIENT, /data-school/)
 
   // AND NO BROWSER-SIDE DATABASE QUERY, which is the whole reason the server
@@ -535,8 +539,23 @@ test('SCHOOL OPTIONS ARRIVE AS A PROP AND ARE NOT YET READ', () => {
   for (const forbidden of [/createClient/, /supabase/i, /anon[_-]?key/i, /@supabase/]) {
     assert.doesNotMatch(CLIENT, forbidden, 'the browser must not query the database')
   }
-  // Still exactly the three fetches this editor has always made.
+  // Still exactly the three fetches THIS editor has always made. The picker's
+  // own catalog request lives in its own file -- picker.test.ts owns it.
   assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
+  assert.doesNotMatch(CLIENT, /\/api\/statement\/prompts/)
+})
+
+test('THE PICKER IS HANDED THE SNAPSHOT AND NO WAY TO CHANGE IT', () => {
+  // Browsing must not be able to reach the draft's prompt state. It cannot,
+  // because nothing that could change one is passed down.
+  assert.match(CLIENT, /saved=\{prompt\}/)
+  for (const forbidden of [
+    /setPrompt=\{/, /onPrompt/, /onSelect/, /onSave/, /onChange=\{setPrompt/,
+  ]) {
+    assert.doesNotMatch(CLIENT, forbidden, 'no writer may reach the picker')
+  }
+  // setPrompt is still called in exactly ONE place: the conflict reload.
+  assert.equal((CLIENT.match(/setPrompt\(/g) ?? []).length, 1)
 })
 
 test('PROMPT METADATA IS CARRIED BUT NEVER SENT', () => {

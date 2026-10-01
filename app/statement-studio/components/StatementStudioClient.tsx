@@ -12,6 +12,7 @@ import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
 import { MAX_TITLE_CHARS } from '@/lib/statement/draft/validate'
 import type { DraftPromptSnapshot, StatementDraft } from '@/lib/statement/draft/rows'
 import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
+import PromptPicker from './PromptPicker'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
   ACCEPT_ATTRIBUTE,
@@ -86,11 +87,10 @@ const LIBRARY = '/statement-studio'
 /**
  * WHAT THE SERVER HANDS THIS EDITOR.
  *
- * `schools` and `schoolsUnavailable` ARRIVE BUT ARE NOT YET READ. The picker
- * that will render them is the next checkpoint; they are accepted now so the
- * server read, its sanitisation and its failure state are settled and tested
- * before any control exists. Nothing is invented to consume them -- no hidden
- * element, no attribute, no log line.
+ * `schools` and `schoolsUnavailable` GO STRAIGHT TO PromptPicker, which is the
+ * only thing that reads them. They are not copied into state here: the server
+ * read them once, behind the gate, and a second copy would be a second thing
+ * to keep correct.
  *
  * THE TWO ARE SEPARATE ON PURPOSE. `schools: []` with `schoolsUnavailable:
  * false` means the directory is genuinely empty; the same array with the flag
@@ -824,6 +824,20 @@ export default function StatementStudioClient({
         aria-label="Personal statement"
         placeholder="Write your personal statement here."
         className="mt-4 min-h-[28rem] w-full resize-y whitespace-pre-wrap rounded-xl border border-gray-300 bg-white px-4 py-4 text-sm leading-relaxed text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 read-only:bg-gray-50"
+      />
+
+      {/*
+        THE PICKER READS; IT DOES NOT WRITE. `saved` is the draft's own
+        snapshot, handed down so the panel can show the question this essay
+        answers from the DRAFT rather than from the catalog. No setter and no
+        callback is passed, so browsing cannot reach `setPrompt`, cannot
+        dispatch an autosave event and cannot send a PATCH -- there is nothing
+        here for it to call. Attaching a preview is the next checkpoint.
+      */}
+      <PromptPicker
+        schools={schools}
+        schoolsUnavailable={schoolsUnavailable}
+        saved={prompt}
       />
     </main>
   )
