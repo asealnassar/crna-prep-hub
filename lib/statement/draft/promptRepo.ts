@@ -186,11 +186,15 @@ function parseStatedMaxWords(value: unknown): number | null | undefined {
  * units: that prefix necessarily contains the first ceiling + 1 points, which
  * is all it takes to decide. A corrupt megabyte-long value therefore costs the
  * same as a 10,002-unit one.
+ *
+ * THE CEILING IS A PARAMETER because two columns have one: prompt_text at 5,000
+ * and label at 200. It defaults to prompt_text's, so every existing caller is
+ * unchanged.
  */
-function tooManyCodePoints(value: string): boolean {
-  if (value.length <= MAX_PROMPT_TEXT_CHARS) return false
-  const head = [...value.slice(0, MAX_PROMPT_TEXT_CHARS * 2 + 2)]
-  return head.length > MAX_PROMPT_TEXT_CHARS
+function tooManyCodePoints(value: string, ceiling = MAX_PROMPT_TEXT_CHARS): boolean {
+  if (value.length <= ceiling) return false
+  const head = [...value.slice(0, ceiling * 2 + 2)]
+  return head.length > ceiling
 }
 
 /**
@@ -281,4 +285,198 @@ export async function readActivePrompt(
   if (!snapshot) return integrity('prompt')
   if (snapshot.promptId !== promptId) return integrity('prompt-id-mismatch')
   return { ok: true, value: snapshot }
+}
+
+// ===========================================================================
+// THE PICKER'S LIST
+//
+// A SIBLING OF readActivePrompt, NOT A REUSE OF IT. That function resolves ONE
+// prompt into the four canonical values a draft snapshots; this one lists the
+// prompts a school offers, which needs `label` and `application_cycle` -- the
+// two fields a snapshot deliberately excludes -- and does not need school_id,
+// because the caller supplied it. Two questions, two projections.
+//
+// NOTHING BELOW CHANGES readActivePrompt OR promptSnapshotFromRow. The shared
+// value rules -- the uuid shape, the 5,000-code-point ceiling, the 1..5,000
+// word range -- are called, not copied.
+// ===========================================================================
+
+/** The longest label the catalog's CHECK permits, in CODE POINTS, trimmed. */
+const MAX_LABEL_CHARS = 200
+
+/**
+ * 'YYYY' or 'YYYY-YYYY', anchored at both ends.
+ *
+ * THE SAME PATTERN statement_prompts_cycle_format ENFORCES, repeated here
+ * because a value that reached this application from that column should be
+ * refused if it does not match -- seeing one means the constraint is gone.
+ * Whether the second year must be the first plus one is deliberately NOT
+ * decided, exactly as the migration leaves it: '2026-2031' is accepted.
+ */
+const CYCLE = /^[0-9]{4}(-[0-9]{4})?$/
+
+/**
+ * Columns the LIST projection asks for. Five, named explicitly -- never `*`.
+ *
+ * `school_id` IS FILTERED ON BUT NOT SELECTED: the caller already knows which
+ * school it asked about, so returning it would be returning the question.
+ * `is_active` is the other predicate, and every returned row is active by
+ * construction. `display_order` is the ORDER BY, not a value anything displays.
+ * The timestamps are nobody's business here.
+ */
+const PROMPT_OPTION_COLUMNS = 'id, label, prompt_text, stated_max_words, application_cycle'
+
+/** One row of the list projection, as PostgREST hands it over. */
+export interface StatementPromptOptionRow {
+  id: string | null
+  label: string | null
+  prompt_text: string | null
+  stated_max_words: number | null
+  application_cycle: string | null
+}
+
+/**
+ * One prompt a school offers, as a picker may show it.
+ *
+ * DELIBERATELY NOT A StatementPromptSnapshot. An option is something to choose;
+ * a snapshot is what gets copied onto a draft. An option carries `label` and
+ * `applicationCycle`, which a draft never stores, and carries no `schoolId`,
+ * which a draft must. Making them one type would let a list entry be passed
+ * where a resolved snapshot is required.
+ *
+ * `statedMaxWords` null means the school states no limit -- a real fact,
+ * distinct from zero. `applicationCycle` null means the prompt is not
+ * cycle-specific.
+ */
+export interface StatementPromptOption {
+  readonly id: string
+  readonly label: string
+  readonly promptText: string
+  readonly statedMaxWords: number | null
+  readonly applicationCycle: string | null
+}
+
+/**
+ * One list row as an option, or null when the row cannot be trusted.
+ *
+ * WHAT IS CHECKED, AND WHY EACH ONE, against the committed CHECKs:
+ *
+ *   id                uuid not null            -- a non-uuid means the
+ *                                                 projection or the table moved
+ *   label             btrim 1..200 code points -- a label of spaces is not a
+ *                                                 label, and a picker would
+ *                                                 render an unclickable blank
+ *   prompt_text       btrim >= 1, <= 5,000     -- blank wording is not a
+ *                                                 question; over-length means
+ *                                                 the constraint is gone
+ *   stated_max_words  null, or 1..5,000        -- shared parser
+ *   application_cycle null, or YYYY/YYYY-YYYY  -- anchored both ends
+ *
+ * THE WORDING AND THE LABEL ARE RETURNED VERBATIM. `btrim` decides whether
+ * either is empty; what comes back is the string exactly as stored, because a
+ * school's own indentation and paragraph breaks are part of the question. The
+ * label is MEASURED trimmed, matching its CHECK, but not returned trimmed.
+ *
+ * NOTHING IS REPAIRED. There is no fallback label, no truncated wording and no
+ * default word limit.
+ */
+export function promptOptionFromRow(
+  row: StatementPromptOptionRow | null | undefined,
+): StatementPromptOption | null {
+  if (!row || typeof row !== 'object') return null
+
+  if (!isPromptId(row.id)) return null
+
+  if (typeof row.label !== 'string') return null
+  const trimmedLabel = row.label.trim()
+  if (trimmedLabel.length === 0) return null
+  if (tooManyCodePoints(trimmedLabel, MAX_LABEL_CHARS)) return null
+
+  if (typeof row.prompt_text !== 'string' || row.prompt_text.trim().length === 0) return null
+  if (tooManyCodePoints(row.prompt_text)) return null
+
+  const statedMaxWords = parseStatedMaxWords(row.stated_max_words)
+  if (statedMaxWords === undefined) return null
+
+  const cycle = row.application_cycle
+  if (cycle !== null) {
+    if (typeof cycle !== 'string' || !CYCLE.test(cycle)) return null
+  }
+
+  return {
+    id: row.id,
+    label: row.label,
+    promptText: row.prompt_text,
+    statedMaxWords,
+    applicationCycle: cycle,
+  }
+}
+
+/**
+ * Every ACTIVE prompt one school offers, in a deterministic order. One
+ * statement, and it writes nothing.
+ *
+ * ZERO ROWS IS A SUCCESS, NOT 'not-found'. A school that has published no
+ * prompt yet, and a catalog that is empty because nothing has been seeded, are
+ * both legitimate answers -- and the catalog WAS empty at its last production
+ * check, so this is the common case today. 'not-found' would make the picker
+ * show an error where the honest answer is "none listed". listDrafts draws the
+ * same line. This function therefore never returns 'not-found' at all.
+ *
+ * BUT ZERO ROWS MEANS AN EMPTY ARRAY, AND NOTHING ELSE. A `data` that is null,
+ * or is not an array at all, is 'read-failed' -- see the check below. The two
+ * must not be conflated: "no prompts" is a fact about a school, and "no usable
+ * response" is a fact about this request, and only one of them is safe to show
+ * an applicant as an empty picker.
+ *
+ * ORDER: display_order, THEN label, THEN id. The first is the school's intended
+ * order; the other two exist because no uniqueness is enforced on
+ * display_order -- the migration says ties are the reader's to break -- and an
+ * unbroken tie would let the list shuffle between two renders of the same data.
+ *
+ * ONE MALFORMED ROW FAILS THE WHOLE LIST. Returning the other four would
+ * silently hide a prompt a school published, and an applicant would conclude
+ * the question was not offered. Same discipline as listDrafts.
+ *
+ * RLS IS THE BOUNDARY, NOT THE FILTER. `.eq('is_active', true)` is kept beside
+ * the active-only policy that already makes it redundant, so that a loosened
+ * policy cannot start offering withdrawn questions in a picker.
+ *
+ * THE SCHOOL ID IS NOT REVALIDATED HERE, matching readActivePrompt: the caller
+ * checks it before this is reached, exactly as the draft routes run isDraftId
+ * before reaching draftRepo. An unchecked non-uuid becomes a Postgres 22P02 and
+ * therefore a 'read-failed'.
+ */
+export async function listActivePrompts(
+  db: SupabaseClient,
+  schoolId: string,
+): Promise<PromptRepoResult<StatementPromptOption[]>> {
+  const { data, error } = await db
+    .from(PROMPTS)
+    .select(PROMPT_OPTION_COLUMNS)
+    .eq('school_id', schoolId)
+    .eq('is_active', true)
+    .order('display_order', { ascending: true })
+    .order('label', { ascending: true })
+    .order('id', { ascending: true })
+  if (error) return failure('read-failed', error)
+
+  // AN EMPTY ARRAY IS THE ONLY EMPTY ANSWER. `data` must actually BE an array:
+  // null, undefined, an object or a string are not "this school has no
+  // prompts", they are a response this code did not expect, and reporting one
+  // as an empty catalog would tell an applicant a school asks no questions when
+  // the truth is that something went wrong. There is no `?? []` here on
+  // purpose. createDraft takes the same line on an insert that returns no row,
+  // with the same synthetic code, because PostgREST gave no error to forward.
+  if (!Array.isArray(data)) {
+    return failure('read-failed', { code: 'NO_ROWS', message: 'select returned no array' })
+  }
+
+  const options: StatementPromptOption[] = []
+  for (const row of data as unknown as StatementPromptOptionRow[]) {
+    const option = promptOptionFromRow(row)
+    if (!option) return integrity('prompt-option')
+    options.push(option)
+  }
+  return { ok: true, value: options }
 }
