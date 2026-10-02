@@ -212,3 +212,120 @@ export function draftDay(value: string): string {
   const day = typeof value === 'string' ? value.slice(0, 10) : ''
   return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : value
 }
+
+/* ===========================================================================
+ * Searching and ordering the library.
+ *
+ * WHY THIS IS HERE AND NOT IN THE COMPONENT. Same reason as everything above:
+ * the list is a client component that `node --test` cannot import, so the rules
+ * live in this module where they can be tested against real inputs, and the
+ * component stays thin wiring. It also keeps the list itself free of sorting
+ * code, which is the shape the library's tests already describe.
+ *
+ * THE SERVER'S ORDER IS STILL THE DEFAULT. `listDrafts` returns rows newest
+ * edit first, ordered by the index that serves the query, and 'edited' hands
+ * that array straight back -- same reference, not a re-sorted copy. The browser
+ * only ever reorders because somebody asked it to.
+ * ======================================================================== */
+
+/** The minimum a draft needs to be searched and ordered. */
+interface OrderableDraft {
+  readonly id: string
+  readonly title: string
+  readonly createdAt: string
+}
+
+/** How the applicant may order their drafts. */
+export type DraftOrder = 'edited' | 'started' | 'title'
+
+/** The orders offered, and their wording. The one place both are spelled out. */
+export const DRAFT_ORDERS: readonly { readonly value: DraftOrder; readonly label: string }[] = [
+  { value: 'edited', label: 'Last edited' },
+  { value: 'started', label: 'Recently started' },
+  { value: 'title', label: 'Title A-Z' },
+]
+
+/** Whether a value is an order this module knows. Anything else is not. */
+export function isDraftOrder(value: unknown): value is DraftOrder {
+  return value === 'edited' || value === 'started' || value === 'title'
+}
+
+/** Ids break every tie, so equal keys never shuffle between renders. */
+function compareIds(a: OrderableDraft, b: OrderableDraft): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
+/**
+ * Titles compared as lowercased code points, NOT with localeCompare.
+ *
+ * Same hazard draftDay documents: this list is rendered on the server and then
+ * hydrated in the browser. localeCompare's answer depends on the ICU data of
+ * whoever is asking, so Node and the browser can disagree about two titles and
+ * React reports the difference as a hydration mismatch. A code point comparison
+ * is the same answer everywhere.
+ *
+ * The cost, stated plainly: accented and non-Latin titles sort by code point
+ * rather than by any language's alphabet. Acceptable for an internal library.
+ */
+function compareTitles(a: OrderableDraft, b: OrderableDraft): number {
+  const left = a.title.trim().toLowerCase()
+  const right = b.title.trim().toLowerCase()
+  if (left < right) return -1
+  if (left > right) return 1
+  return compareIds(a, b)
+}
+
+/** Newest start first. Stored timestamps are ISO-8601, so they compare as text. */
+function compareStarts(a: OrderableDraft, b: OrderableDraft): number {
+  if (a.createdAt < b.createdAt) return 1
+  if (a.createdAt > b.createdAt) return -1
+  return compareIds(a, b)
+}
+
+/**
+ * The drafts in the order asked for.
+ *
+ * 'edited' returns the ARRAY IT WAS GIVEN, untouched -- the server already
+ * ordered it and a second opinion here would only be a chance to disagree. The
+ * other two sort a copy, so the caller's array is never mutated out from under
+ * React. An unrecognised order is treated as 'edited' rather than throwing.
+ */
+export function orderDrafts<T extends OrderableDraft>(
+  drafts: readonly T[],
+  order: DraftOrder,
+): readonly T[] {
+  if (order === 'title') return [...drafts].sort(compareTitles)
+  if (order === 'started') return [...drafts].sort(compareStarts)
+  return drafts
+}
+
+/**
+ * The drafts whose title contains the search text.
+ *
+ * TITLES ONLY. A summary carries no statement text, so there is nothing else
+ * here to search; searching the writing itself would mean fetching every
+ * draft's body into the browser, which this page deliberately never does.
+ *
+ * A blank or whitespace-only search returns the array it was given, so typing
+ * and then clearing the box lands exactly back where it started.
+ */
+export function matchDrafts<T extends { readonly title: string }>(
+  drafts: readonly T[],
+  query: string,
+): readonly T[] {
+  const needle = typeof query === 'string' ? query.trim().toLowerCase() : ''
+  if (needle === '') return drafts
+  return drafts.filter((draft) => draft.title.toLowerCase().includes(needle))
+}
+
+/**
+ * The line under "Your drafts", counting what is actually on screen.
+ *
+ * It never says "0 drafts" when the workspace is empty -- an applicant who has
+ * not started yet is told what the page is for instead.
+ */
+export function draftTally(shown: number, total: number): string {
+  if (total === 0) return 'Create and manage your personal statement drafts here.'
+  if (shown === total) return `${total} ${total === 1 ? 'draft' : 'drafts'} in your workspace.`
+  return `${shown} of ${total} drafts match your search.`
+}
