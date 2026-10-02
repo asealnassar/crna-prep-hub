@@ -23,6 +23,7 @@ import {
   type CreatePath,
   type NewDraftStep,
 } from '@/lib/statement/draft/newDraft'
+import { pasteOptionVisible, pasteSubmissionAllowed } from '@/lib/statement/draft/pastePreview'
 import {
   PICKER_MESSAGES,
   directoryNotice,
@@ -74,6 +75,7 @@ export default function NewDraftDialog({
   schools,
   schoolsUnavailable,
   submissionsEnabled = false,
+  pastePreview = false,
 }: {
   open: boolean
   onClose: () => void
@@ -87,6 +89,20 @@ export default function NewDraftDialog({
    * so with this off the dialog offers exactly the two paths it offers today.
    */
   submissionsEnabled?: boolean
+  /**
+   * DEVELOPMENT-ONLY: draw the paste screens without wiring them up.
+   *
+   * SEPARATE FROM submissionsEnabled, AND THAT SEPARATION IS THE SAFETY. This
+   * prop decides what is DRAWN; `submissionsEnabled` decides what may be SENT.
+   * Nothing below reads this one when deciding whether to submit -- the guard
+   * in submit() consults pasteSubmissionAllowed(), which has no parameter
+   * through which a preview could reach it.
+   *
+   * The server grants it only under NODE_ENV === 'development', for an
+   * administrator who has passed the Studio gate, with an explicit query
+   * parameter. Defaults to false, so a page that does not pass it is unchanged.
+   */
+  pastePreview?: boolean
 }) {
   const router = useRouter()
   const [step, setStep] = useState<NewDraftStep>('choice')
@@ -275,6 +291,23 @@ export default function NewDraftDialog({
     // sends two keys and the school path three; neither can behave like the
     // other, and a school path with no prompt is REFUSED rather than quietly
     // creating a blank general draft.
+    // PREVIEW STOPS HERE, BEFORE ANYTHING IS BUILT OR SENT.
+    //
+    // The applicant's wording never reaches a request object, let alone a
+    // fetch: this returns before the builder runs, before the duplicate guard
+    // is taken, and before any network call. And it returns -- it does NOT fall
+    // through to the general builder, because silently creating a blank draft
+    // for somebody who pasted their school's question is the exact accident
+    // this whole feature is shaped to avoid.
+    //
+    // KEYED ON THE ROLLOUT FLAG, NOT ON THE PREVIEW FLAG. pasteSubmissionAllowed
+    // takes only `submissionsEnabled`, so even a preview forced on in a
+    // deployed build could not open this path.
+    if (pasted !== null && !pasteSubmissionAllowed({ submissionsEnabled })) {
+      setMessage(NEW_DRAFT_MESSAGES.previewBlocked)
+      return
+    }
+
     // THREE SHAPES, THREE BUILDERS, AND THE PASTE IS CHECKED FIRST. A pasted
     // prompt must never travel the promptId branch -- that branch means "the
     // catalog vouches for this", and nobody has reviewed this wording yet.
@@ -331,7 +364,7 @@ export default function NewDraftDialog({
 
     inFlight.current = false
     setSubmitting(false)
-  }, [path, title, prompt, pasted, school, retryable, router])
+  }, [path, title, prompt, pasted, school, retryable, router, submissionsEnabled])
 
   if (!open) return null
 
@@ -351,6 +384,10 @@ export default function NewDraftDialog({
         submitting,
         retryable,
       })
+  /** Whether the school being browsed listed any approved prompt. */
+  const hasPrompts = prompts !== null && prompts.length > 0
+  /** A pasted prompt is on screen but the backend that would store it is off. */
+  const previewBlocked = pasted !== null && !pasteSubmissionAllowed({ submissionsEnabled })
   const pasteReady = canCreatePasteNow({
     title: 'placeholder',
     schoolId: school === null ? null : school.id,
@@ -525,14 +562,29 @@ export default function NewDraftDialog({
                   lists two questions may still be missing this year's, so the
                   paste option is not an empty-state fallback -- it sits under
                   the list as a peer of it. */}
-              {!loading && submissionsEnabled && (
-                <button
-                  type="button"
-                  onClick={startPaste}
-                  className="mt-4 block text-sm font-semibold text-blue-700 underline-offset-4 transition hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                >
-                  {NEW_DRAFT_MESSAGES.pastePrompt}
-                </button>
+              {/* THE WEIGHT FOLLOWS THE SITUATION. With prompts listed, the list
+                  is the next step and this is an understated alternative under
+                  it. With nothing listed, pasting IS the next step, so it
+                  looks like one -- and "start a general statement" stays below
+                  it as the secondary way out. */}
+              {!loading && pasteOptionVisible({ submissionsEnabled, pastePreview }) && (
+                hasPrompts ? (
+                  <button
+                    type="button"
+                    onClick={startPaste}
+                    className="mt-4 block text-sm font-semibold text-blue-700 underline-offset-4 transition hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  >
+                    {NEW_DRAFT_MESSAGES.pastePrompt}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startPaste}
+                    className="mt-4 w-full rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                  >
+                    {NEW_DRAFT_MESSAGES.pasteHeading}
+                  </button>
+                )
               )}
               {/* And the general path stays reachable from here, so a school
                   with nothing listed is never a dead end. */}
@@ -540,7 +592,7 @@ export default function NewDraftDialog({
                 <button
                   type="button"
                   onClick={startGeneral}
-                  className="mt-3 block text-sm font-semibold text-slate-600 underline-offset-4 transition hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  className="mt-3 block w-full text-center text-sm font-semibold text-slate-600 underline-offset-4 transition hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   {NEW_DRAFT_MESSAGES.startGeneral}
                 </button>
@@ -558,7 +610,7 @@ export default function NewDraftDialog({
               )}
 
               <label htmlFor={`${headingId}-paste`} className="mb-2 block text-sm font-medium text-slate-700">
-                The school&rsquo;s prompt
+                School prompt <span className="text-rose-600">*</span>
               </label>
               {/* A plain textarea rendering escaped React text. Nothing typed
                   here is ever interpreted as markup, here or in review. */}
@@ -616,7 +668,7 @@ export default function NewDraftDialog({
               </div>
 
               <label htmlFor={`${headingId}-source`} className="mb-1.5 mt-3 block text-xs font-medium text-slate-600">
-                Where you found it <span className="text-slate-400">(optional)</span>
+                Source URL <span className="text-slate-400">(optional)</span>
               </label>
               <input
                 id={`${headingId}-source`}
@@ -730,6 +782,12 @@ export default function NewDraftDialog({
                 </p>
               )}
 
+              {previewBlocked && (
+                <p className="mt-4 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-xs leading-relaxed text-slate-700">
+                  {NEW_DRAFT_MESSAGES.previewExplainer}
+                </p>
+              )}
+
               <div className="mt-6 flex justify-end gap-2">
                 <button
                   type="button"
@@ -741,10 +799,13 @@ export default function NewDraftDialog({
                 </button>
                 <button
                   type="submit"
-                  disabled={!canSubmit}
+                  disabled={!canSubmit || previewBlocked}
+                  title={previewBlocked ? NEW_DRAFT_MESSAGES.previewBlocked : undefined}
                   className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {submitting ? 'Creating…' : 'Create draft'}
+                  {previewBlocked
+                    ? 'Submission unavailable in preview'
+                    : submitting ? 'Creating…' : 'Create draft'}
                 </button>
               </div>
             </form>

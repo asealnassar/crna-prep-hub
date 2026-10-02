@@ -79,6 +79,17 @@ export const NEW_DRAFT_MESSAGES = {
   /** What a draft on a pasted prompt is labelled, everywhere it appears. */
   unverifiedBadge: 'User-provided prompt \u2014 Not yet verified by CRNAPREPHUB',
   pasteIncomplete: 'Add the prompt wording and confirm before creating the draft.',
+  /** Shown on the control itself when the backend for this is not switched on. */
+  previewBlocked: 'Submission unavailable in preview',
+  /**
+   * WHAT PREVIEW IS, IN ONE SENTENCE AN APPLICANT WOULD UNDERSTAND. It says
+   * what will happen once the feature is on -- writing starts immediately,
+   * review happens afterwards -- without claiming any of it happens yet.
+   */
+  previewExplainer:
+    'This is a visual preview, so nothing is saved and no prompt is submitted. Once this '
+    + 'feature is switched on, your draft is created straight away and you can start writing '
+    + 'while your prompt waits to be reviewed.',
   pasteSchoolMissing: 'Choose a school before pasting its prompt.',
   chooseSchool: 'Choose a school',
   choosePrompt: 'Choose a prompt',

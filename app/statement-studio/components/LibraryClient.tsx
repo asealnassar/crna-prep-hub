@@ -57,6 +57,7 @@ export default function LibraryClient({
   schools,
   schoolsUnavailable,
   submissionsEnabled,
+  pastePreview,
 }: {
   drafts: readonly StatementDraftSummary[]
   /** The directory, three columns, read on the server after the gate. */
@@ -65,6 +66,8 @@ export default function LibraryClient({
   schoolsUnavailable: boolean
   /** Whether a prompt the catalog lacks may be pasted. Read on the server. */
   submissionsEnabled: boolean
+  /** Development-only: draw the paste screens without wiring them up. */
+  pastePreview: boolean
 }) {
   const [creating, setCreating] = useState(false)
   const [query, setQuery] = useState('')
@@ -351,6 +354,7 @@ export default function LibraryClient({
         schools={schools}
         schoolsUnavailable={schoolsUnavailable}
         submissionsEnabled={submissionsEnabled}
+        pastePreview={pastePreview}
       />
     </div>
   )

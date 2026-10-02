@@ -907,10 +907,74 @@ test('a paste cannot outlive the school it was typed for', () => {
   assert.match(DIALOG, /if \(browsing\.current !== option\.id\) setPasted\(null\)/)
 })
 
-test('the paste option is gated, and defaults to unavailable', () => {
+test('the paste option is gated, and both gates default to unavailable', () => {
   // Until the submission migrations are applied there is no table to write.
   assert.match(DIALOG, /submissionsEnabled = false/)
-  assert.match(DIALOG, /!loading && submissionsEnabled &&/)
+  assert.match(DIALOG, /pastePreview = false/)
+  // Drawn when the feature is on OR somebody is previewing it in development.
+  assert.match(DIALOG, /pasteOptionVisible\(\{ submissionsEnabled, pastePreview \}\)/)
+})
+
+test('PREVIEW CAN DRAW THE SCREENS BUT NEVER SEND ANYTHING', () => {
+  // The safety property of the whole preview mechanism, as a source fact.
+  //
+  // The submission guard calls pasteSubmissionAllowed, which takes ONLY the
+  // rollout flag -- there is no parameter through which the preview state
+  // could reach it, so a preview forced on in a deployed build still cannot
+  // open this path.
+  assert.match(DIALOG, /pasteSubmissionAllowed\(\{ submissionsEnabled \}\)/)
+  assert.doesNotMatch(DIALOG, /pasteSubmissionAllowed\(\{[^}]*pastePreview/)
+
+  // And it returns rather than falling through. A paste that cannot be sent
+  // must NOT become a blank general draft.
+  const flow = DIALOG.slice(
+    DIALOG.indexOf('const submit = useCallback'),
+    DIALOG.indexOf('if (!open) return null'),
+  )
+  assert.match(flow, /if \(pasted !== null && !pasteSubmissionAllowed\(\{ submissionsEnabled \}\)\) \{[\s\S]*?return\s*\n\s*\}/)
+  assert.doesNotMatch(flow, /pasteSubmissionAllowed[\s\S]{0,200}createRequestFor/,
+    'the block must not fall through to the general builder')
+})
+
+test('the preview block happens before the guard, the builder and the request', () => {
+  // Nothing an applicant typed reaches a request object, let alone a fetch.
+  const flow = DIALOG.slice(
+    DIALOG.indexOf('const submit = useCallback'),
+    DIALOG.indexOf('if (!open) return null'),
+  )
+  const block = flow.indexOf('pasteSubmissionAllowed')
+  const builder = flow.indexOf('newPastedDraftRequest')
+  const guard = flow.indexOf('inFlight.current = true')
+  const request = flow.indexOf('await fetch(')
+  for (const [name, after] of [['builder', builder], ['guard', guard], ['request', request]] as const) {
+    assert.ok(block !== -1 && after !== -1 && block < after, `the block must precede the ${name}`)
+  }
+})
+
+test('a blocked create says so on the control, and explains why', () => {
+  assert.match(DIALOG, /previewBlocked/)
+  assert.match(DIALOG, /disabled=\{!canSubmit \|\| previewBlocked\}/)
+  assert.match(DIALOG, /'Submission unavailable in preview'/)
+  assert.match(DIALOG, /NEW_DRAFT_MESSAGES\.previewExplainer/)
+})
+
+test('preview is decided on the SERVER, after the admin gate', () => {
+  // NODE_ENV is read from the process, so a deployed build cannot be addressed
+  // into preview; the query parameter is the only browser-controlled input and
+  // is never sufficient alone.
+  assert.match(PAGE, /pastePreviewAllowed\(\{/)
+  assert.match(PAGE, /nodeEnv: process\.env\.NODE_ENV/)
+  assert.match(PAGE, /isAdmin: isAdminEmail\(auth\.email\)/)
+  assert.match(PAGE, /requested: pastePreviewRequested\(params\[PASTE_PREVIEW_PARAM\]\)/)
+
+  // Read AFTER the gate has already refused a non-administrator.
+  const refuse = PAGE.indexOf('notFound()')
+  const preview = PAGE.indexOf('pastePreviewAllowed({')
+  assert.ok(refuse !== -1 && preview !== -1 && refuse < preview)
+
+  // And the rollout flag is still what decides the backend, separately.
+  assert.match(PAGE, /submissionsEnabled=\{promptSubmissionsEnabled\(\)\}/)
+  assert.doesNotMatch(PAGE, /submissionsEnabled=\{[^}]*pastePreview/)
 })
 
 test('a pasted prompt is labelled as unverified wherever it is shown', () => {

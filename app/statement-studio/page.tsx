@@ -5,6 +5,9 @@ import { statementStudioAccess, statementStudioMode } from '@/lib/statement/stud
 import { listDrafts } from '@/lib/statement/draft/draftRepo'
 import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
 import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
+import {
+  PASTE_PREVIEW_PARAM, pastePreviewAllowed, pastePreviewRequested,
+} from '@/lib/statement/draft/pastePreview'
 import LibraryClient from './components/LibraryClient'
 
 /**
@@ -46,7 +49,11 @@ export const dynamic = 'force-dynamic'
  */
 const UNREADABLE = 'Your statement drafts could not be loaded.'
 
-export default async function StatementStudioLibraryPage() {
+export default async function StatementStudioLibraryPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const auth = await authenticateRequest()
   const access = statementStudioAccess({
     isAdmin: isAdminEmail(auth?.email),
@@ -96,6 +103,27 @@ export default async function StatementStudioLibraryPage() {
   // knows of no CRNA programmes. `detail` is a Postgres message and is not read.
   const schools = await listSchoolPickerOptions(db)
 
+  // A DEVELOPMENT-ONLY VISUAL PREVIEW of the paste-a-prompt screens.
+  //
+  // READ AFTER THE GATE, deliberately: everything above has already refused a
+  // visitor who is not an administrator, so this cannot be the thing that
+  // admits anybody. It decides only whether some markup is drawn for somebody
+  // the page has already admitted.
+  //
+  // NODE_ENV IS READ FROM THE PROCESS, so a deployed build cannot enter preview
+  // however it is addressed; the query parameter is the only browser-controlled
+  // input and is the one that is not sufficient on its own.
+  //
+  // IT IS NOT PASSED TO THE SUBMISSION PATH. `submissionsEnabled` below is
+  // still the rollout flag and nothing else, so preview changes what is
+  // visible and never what is possible.
+  const params = await searchParams
+  const pastePreview = pastePreviewAllowed({
+    nodeEnv: process.env.NODE_ENV,
+    isAdmin: isAdminEmail(auth.email),
+    requested: pastePreviewRequested(params[PASTE_PREVIEW_PARAM]),
+  })
+
   // Newest edit first, exactly as the repository ordered it. The client does not
   // re-sort: one ordering, decided by the index that serves the query.
   return (
@@ -104,6 +132,7 @@ export default async function StatementStudioLibraryPage() {
       schools={schools.ok ? schools.value : []}
       schoolsUnavailable={!schools.ok}
       submissionsEnabled={promptSubmissionsEnabled()}
+      pastePreview={pastePreview}
     />
   )
 }
