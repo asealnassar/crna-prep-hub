@@ -7,6 +7,8 @@ import {
   pasteSubmissionAllowed,
   pastePreviewAllowed,
   pastePreviewRequested,
+  REVIEW_PREVIEW_VALUE,
+  reviewPreviewRequested,
 } from './pastePreview.ts'
 
 const dev = { nodeEnv: 'development', isAdmin: true, requested: true }
@@ -78,4 +80,26 @@ test('the two gates are separate functions reading separate things', () => {
   const source = pasteSubmissionAllowed.toString()
   assert.equal(source.includes('pastePreview'), false)
   assert.equal(source.includes('preview'), false)
+})
+
+test('the analyser preview is a second VALUE, not a second gate', () => {
+  // The same three conditions decide both; only the screens differ.
+  assert.equal(REVIEW_PREVIEW_VALUE, 'analysis')
+  assert.equal(reviewPreviewRequested(REVIEW_PREVIEW_VALUE), true)
+  for (const other of ['', 'true', PASTE_PREVIEW_VALUE, 'Analysis', ' analysis',
+                       undefined, null, true, {}, ['analysis']]) {
+    assert.equal(reviewPreviewRequested(other), false, String(other))
+  }
+})
+
+test('asking for one preview does not grant the other', () => {
+  assert.equal(pastePreviewRequested(REVIEW_PREVIEW_VALUE), false)
+  assert.equal(reviewPreviewRequested(PASTE_PREVIEW_VALUE), false)
+})
+
+test('the analyser preview still needs development and an administrator', () => {
+  const requested = reviewPreviewRequested('analysis')
+  assert.equal(pastePreviewAllowed({ nodeEnv: 'production', isAdmin: true, requested }), false)
+  assert.equal(pastePreviewAllowed({ nodeEnv: 'development', isAdmin: false, requested }), false)
+  assert.equal(pastePreviewAllowed({ nodeEnv: 'development', isAdmin: true, requested }), true)
 })

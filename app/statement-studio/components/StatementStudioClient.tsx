@@ -18,6 +18,21 @@ import {
   promptForRequest, samePendingPrompt, savedPromptFromResponse, schoolNameFor,
   wordLimitLabel, type PendingPrompt,
 } from '@/lib/statement/draft/picker'
+import {
+  BAND_LABELS, NOT_ASSESSED, RUBRIC, bandFor, eligibilityFor, overLimit,
+} from '@/lib/statement/draft/rubric'
+import { reviewIsStale, type StatementReview } from '@/lib/statement/draft/reviewSchema'
+import {
+  SAMPLE_GENERAL_WORDS, SAMPLE_NOTICE, SAMPLE_SCHOOL_MAX_WORDS, SAMPLE_SCHOOL_WORDS,
+} from '@/lib/statement/draft/reviewSample'
+import {
+  REVIEW_MESSAGES, REVIEW_NETWORK_FAILURE, analyzePath, canAnalyzeNow, provenanceLabel,
+  reviewOutcomeFrom, type ReviewResult,
+} from '@/lib/statement/draft/reviewClient'
+import {
+  ANALYSIS_ACTION_LABELS, ANALYSIS_NO_CACHE_NOTICE, ANALYSIS_TIER_MESSAGE,
+  ANALYSIS_UNAVAILABLE_MESSAGE, type AnalysisAction, type AnalysisAvailability,
+} from '@/lib/statement/draft/reviewAccess'
 import PromptPicker from './PromptPicker'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
@@ -115,6 +130,10 @@ export default function StatementStudioClient({
   schools,
   schoolsUnavailable,
   promptNotice = null,
+  sampleReviews = null,
+  analysisAllowed = false,
+  analysisAvailable = 'unavailable',
+  priorAnalysis = null,
 }: {
   draft: StatementDraft
   schools: readonly SchoolOption[]
@@ -138,6 +157,45 @@ export default function StatementStudioClient({
    * of what the applicant sees.
    */
   promptNotice?: string | null
+  /**
+   * DEVELOPMENT-ONLY: sample results, for reviewing the interface without
+   * paying for an analysis.
+   *
+   * BUILT ON THE SERVER, behind the same gate the paste preview uses, and null
+   * in every environment that is not a developer's own. It is a separate prop
+   * from the real result so that nothing can confuse the two: a sample is
+   * displayed under its own banner and is never written into `review`, so
+   * staleness, Analyze-again and the real result all behave as though it were
+   * not there.
+   */
+  sampleReviews?: { readonly general: StatementReview; readonly school: StatementReview } | null
+  /**
+   * Whether this member's plan includes analysis.
+   *
+   * PRESENTATION ONLY. The endpoint checks the tier again and is the control;
+   * this decides whether to show the button or the reason it is not there, so a
+   * Free member sees an explanation instead of a control that fails. Defaults
+   * to false, so a page that does not pass it offers nothing.
+   */
+  analysisAllowed?: boolean
+  /**
+   * Whether analysis can be offered honestly: with storage, without it on a
+   * developer's machine, or not at all. Defaults to 'unavailable', so a page
+   * that does not pass it offers nothing rather than charging.
+   */
+  analysisAvailable?: AnalysisAvailability
+  /**
+   * An analysis already stored for this draft, and whether it is about exactly
+   * what is on screen.
+   *
+   * null WHENEVER THE CACHE IS OFF, which is every environment today -- the
+   * table does not exist until 20261002_004 is applied. The editor then offers
+   * a fresh analysis, which is the behaviour it has now.
+   */
+  priorAnalysis?: {
+    readonly result: Omit<ReviewResult, 'essay'>
+    readonly action: AnalysisAction
+  } | null
 }) {
   const router = useRouter()
   /** The nav is fixed and out of flow; this is how wide a space it reserves. */
@@ -151,6 +209,20 @@ export default function StatementStudioClient({
    * "look at the options and change your mind" cost nothing.
    */
   const [pickerExpanded, setPickerExpanded] = useState(false)
+  /** The last completed analysis, with the essay it describes. Transient. */
+  const [review, setReview] = useState<ReviewResult | null>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [reviewError, setReviewError] = useState<string | null>(null)
+  const [openCategory, setOpenCategory] = useState<string | null>(null)
+  /** Which sample is on screen, when a developer is previewing the interface. */
+  const [sampleKind, setSampleKind] = useState<'general' | 'school'>('school')
+  /**
+   * THE DUPLICATE GUARD, and a ref for the reason the New Draft dialog's is:
+   * state settles asynchronously, so two clicks in one tick would both read
+   * `analyzing === false` and both start a request -- and an analysis costs
+   * the applicant part of their allowance.
+   */
+  const analyzeInFlight = useRef(false)
 
   /** Read-only, but stateful: a reload may bring a title changed elsewhere. */
   const [title, setTitle] = useState(draft.title)
@@ -776,6 +848,47 @@ export default function StatementStudioClient({
    * CURRENT confirmed revision: no revision is reset or invented and no text is
    * discarded. Nothing retries by itself beyond the engine's own budget.
    */
+  /**
+   * Ask the server to analyse this draft.
+   *
+   * THE REQUEST CARRIES NOTHING BUT THE PATH. The essay, the prompt, the word
+   * limit and the revision are all read on the server from the saved row, so
+   * there is no field here that could misreport what was analysed -- and none
+   * a caller could forge.
+   *
+   * THE ESSAY IS CAPTURED BEFORE THE REQUEST and stored with the result. That
+   * captured string is what staleness is measured against: an applicant may
+   * keep typing while this runs, and what comes back describes what they had
+   * written, not what they have now.
+   *
+   * IT TOUCHES NO DRAFT STATE. No setTitle, no setEssay, no dispatch, no
+   * revision: an analysis reads the draft and returns an opinion about it. The
+   * autosave engine does not know this feature exists.
+   */
+  const analyze = useCallback(async () => {
+    if (analyzeInFlight.current) return
+    analyzeInFlight.current = true
+    setAnalyzing(true)
+    setReviewError(null)
+
+    const analyzed = essay
+    try {
+      const response = await fetch(analyzePath(draft.id), { method: 'POST' })
+      const body = await response.json().catch(() => null)
+      const outcome = reviewOutcomeFrom({ status: response.status, body })
+      if (outcome.type === 'ready') {
+        setReview({ ...outcome.result, essay: analyzed })
+        setOpenCategory(null)
+      } else {
+        setReviewError(outcome.message)
+      }
+    } catch {
+      setReviewError(REVIEW_NETWORK_FAILURE.message)
+    }
+    analyzeInFlight.current = false
+    setAnalyzing(false)
+  }, [draft.id, essay])
+
   const retrySave = useCallback(() => {
     if (!canRetrySave({ state: save, title, essay })) return
     setNotice(null)
@@ -875,6 +988,59 @@ export default function StatementStudioClient({
    * The same predicate the picker renders the warning with decides this, so the
    * two cannot disagree.
    */
+  /** Whether this draft is long enough to analyse, and what it would take. */
+  const eligibility = eligibilityFor({ words, statedMaxWords: prompt.statedMaxWords })
+  const canAnalyze = canAnalyzeNow({
+    words,
+    minimumWords: eligibility.kind === 'prompt-too-short'
+      ? Number.MAX_SAFE_INTEGER
+      : eligibility.minimumWords,
+    running: analyzing,
+    conflicted,
+  })
+  /**
+   * A result that has stopped describing what is on screen.
+   *
+   * Compared against the essay CAPTURED when the request was made, so typing
+   * during an analysis is caught even before autosave moves the revision.
+   */
+  const reviewStale = review !== null && reviewIsStale({
+    analyzedRevision: review.revision,
+    analyzedEssay: review.essay,
+    currentRevision: save.revision,
+    currentEssay: essay,
+  })
+  const essayOverLimit = overLimit({ words, statedMaxWords: prompt.statedMaxWords })
+
+  /**
+   * What the results block renders: the real analysis, or a sample.
+   *
+   * ONE BLOCK, TWO SOURCES, AND THE REAL ONE ALWAYS WINS. A sample is shown
+   * only while there is no real result, so running a genuine analysis replaces
+   * it and nothing can leave a sample on screen beside real feedback. Feeding
+   * the same markup from both is the point of the preview: what the owner
+   * approves is the interface, not a drawing of it.
+   */
+  const sample = sampleReviews === null ? null : {
+    review: sampleKind === 'school' ? sampleReviews.school : sampleReviews.general,
+    revision: save.revision,
+    words: sampleKind === 'school' ? SAMPLE_SCHOOL_WORDS : SAMPLE_GENERAL_WORDS,
+    overLimit: sampleKind === 'school',
+    statedMaxWords: sampleKind === 'school' ? SAMPLE_SCHOOL_MAX_WORDS : null,
+    provenance: (sampleKind === 'school' ? 'catalog' : null) as 'catalog' | null,
+    essay,
+  }
+  /**
+   * What the Analyze control should offer.
+   *
+   * 'view' means an analysis of exactly this essay and prompt is already
+   * stored, so the button opens it rather than paying for it again.
+   */
+  const analysisAction: AnalysisAction = priorAnalysis?.action ?? 'analyze'
+
+  const shown = review ?? sample
+  const showingSample = review === null && sample !== null
+
   const confirmPending = confirmationApplies({
     failedToken: promptConfirmFailed,
     pending: pendingView,
@@ -1173,6 +1339,243 @@ export default function StatementStudioClient({
                   </div>
                 </div>
               )}
+              {/* ================================================= the analysis */}
+              {/*
+                BELOW THE WRITING AREA, NOT BESIDE IT. Feedback is long and
+                wants the full column width; putting it in the reference panel
+                would have squeezed both. Nothing above moves when it appears.
+              */}
+              {shown !== null && (
+                <section aria-labelledby="analysis-heading" className="mt-6">
+                  <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    {/*
+                      SAID PLAINLY, AT THE TOP, BEFORE ANY NUMBER. A reader who
+                      scrolled past this and believed a sample score was theirs
+                      would be the one failure this preview must not have.
+                    */}
+                    {showingSample && (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-2xl border-b border-amber-300 bg-amber-100 px-6 py-3">
+                        <p className="text-xs font-bold text-amber-900">{SAMPLE_NOTICE}</p>
+                        <div className="flex items-center gap-1 rounded-lg bg-white/70 p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setSampleKind('school')}
+                            aria-pressed={sampleKind === 'school'}
+                            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                              sampleKind === 'school' ? 'bg-amber-900 text-white' : 'text-amber-900'
+                            }`}
+                          >
+                            School-specific (7)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSampleKind('general')}
+                            aria-pressed={sampleKind === 'general'}
+                            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                              sampleKind === 'general' ? 'bg-amber-900 text-white' : 'text-amber-900'
+                            }`}
+                          >
+                            General (6)
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
+                      <div className="min-w-0">
+                        <h2 id="analysis-heading" className="text-sm font-bold text-slate-900">
+                          Analysis
+                        </h2>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Revision {shown.revision} &middot; {shown.words.toLocaleString('en-US')} words
+                          {provenanceLabel(shown.provenance) === null
+                            ? ''
+                            : ` \u00b7 ${provenanceLabel(shown.provenance)}`}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-3xl font-bold tracking-tight text-slate-900">
+                          {shown.review.overall}
+                          <span className="text-base font-semibold text-slate-400">/100</span>
+                        </p>
+                        <p className="text-[11px] text-slate-500">weighted score</p>
+                      </div>
+                    </div>
+
+                    {/*
+                      STALE IS LABELLED, NEVER DISCARDED. The feedback was
+                      accurate about the revision it names; it simply is not
+                      about the one on screen, so it is marked and a fresh run
+                      is offered rather than forced.
+                    */}
+                    {!showingSample && reviewStale && (
+                      <p className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-xs text-amber-900">
+                        {REVIEW_MESSAGES.stale}{' '}
+                        <button
+                          type="button"
+                          onClick={() => void analyze()}
+                          disabled={!canAnalyze}
+                          className="font-semibold underline underline-offset-2 disabled:no-underline disabled:opacity-60"
+                        >
+                          Analyze the current draft
+                        </button>
+                      </p>
+                    )}
+
+                    {(shown.overLimit || (!showingSample && essayOverLimit)) && (
+                      <p className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-xs font-medium text-amber-900">
+                        {REVIEW_MESSAGES.overLimit}
+                        {shown.statedMaxWords === null
+                          ? ''
+                          : ` The stated maximum is ${shown.statedMaxWords.toLocaleString('en-US')} words.`}
+                      </p>
+                    )}
+
+                    <div className="px-6 py-5">
+                      <p className="text-sm leading-relaxed text-slate-800">
+                        {shown.review.overallAssessment}
+                      </p>
+
+                      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <h3 className="text-xs font-bold uppercase tracking-wide text-emerald-700">
+                            Strengths
+                          </h3>
+                          <ul className="mt-2 grid gap-1.5">
+                            {shown.review.strengths.map((item) => (
+                              <li key={item} className="text-sm leading-relaxed text-slate-700">{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <h3 className="text-xs font-bold uppercase tracking-wide text-amber-700">
+                            Top priorities
+                          </h3>
+                          <ul className="mt-2 grid gap-1.5">
+                            {shown.review.priorities.map((item) => (
+                              <li key={item} className="text-sm leading-relaxed text-slate-700">{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+
+                      <h3 className="mt-6 text-xs font-bold uppercase tracking-wide text-slate-500">
+                        Next steps
+                      </h3>
+                      <ul className="mt-2 grid gap-1.5">
+                        {shown.review.nextSteps.map((item) => (
+                          <li key={item} className="text-sm leading-relaxed text-slate-700">{item}</li>
+                        ))}
+                      </ul>
+
+                      {/*
+                        PROGRESSIVE DISCLOSURE. Seven categories of evidence,
+                        explanation and recommendation is a great deal of prose;
+                        the scores are all visible at a glance and the detail
+                        opens one at a time.
+                      */}
+                      <h3 className="mt-6 text-xs font-bold uppercase tracking-wide text-slate-500">
+                        Categories
+                      </h3>
+                      <ul className="mt-2 grid gap-2">
+                        {RUBRIC.map((category) => {
+                          const scored = shown.review.categories.find((c) => c.id === category.id)
+                          if (scored === undefined) {
+                            return (
+                              <li key={category.id} className="rounded-xl border border-slate-200 px-4 py-3">
+                                <p className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-sm font-semibold text-slate-500">{category.label}</span>
+                                  <span className="text-xs text-slate-500">{NOT_ASSESSED}</span>
+                                </p>
+                              </li>
+                            )
+                          }
+                          const open = openCategory === category.id
+                          return (
+                            <li key={category.id} className="rounded-xl border border-slate-200">
+                              <button
+                                type="button"
+                                aria-expanded={open}
+                                onClick={() => setOpenCategory(open ? null : category.id)}
+                                className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                              >
+                                <span className="text-sm font-semibold text-slate-900">{category.label}</span>
+                                <span className="flex items-center gap-2">
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                                    scored.band === 'strong' ? 'bg-emerald-100 text-emerald-800'
+                                      : scored.band === 'developing' ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-rose-100 text-rose-800'
+                                  }`}>
+                                    {BAND_LABELS[scored.band]}
+                                  </span>
+                                  <span className="text-sm font-bold tabular-nums text-slate-900">
+                                    {scored.score}/10
+                                  </span>
+                                </span>
+                              </button>
+                              {open && (
+                                <div className="border-t border-slate-200 px-4 py-3">
+                                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                                    {scored.evidenceFound ? 'From your draft' : 'Not found in your draft'}
+                                  </p>
+                                  {/* The model's words, rendered as escaped text. */}
+                                  <p className={`mt-1 whitespace-pre-wrap text-sm leading-relaxed ${
+                                    scored.evidenceFound ? 'text-slate-800 italic' : 'text-slate-600'
+                                  }`}>
+                                    {scored.evidence}
+                                  </p>
+                                  <p className="mt-3 text-sm leading-relaxed text-slate-700">
+                                    {scored.explanation}
+                                  </p>
+                                  {/*
+                                    THE PROMPT'S REQUIREMENTS, ONE BY ONE. This
+                                    is what stops "the prompt is addressed"
+                                    standing in for a judgement: an applicant
+                                    can see which parts of the question their
+                                    draft actually answers.
+                                  */}
+                                  {scored.components.length > 0 && (
+                                    <ul className="mt-3 grid gap-2">
+                                      {scored.components.map((part) => (
+                                        <li key={part.component} className="rounded-lg border border-slate-200 px-3 py-2">
+                                          <p className="flex flex-wrap items-center justify-between gap-2">
+                                            <span className="text-xs font-semibold text-slate-800">
+                                              {part.component}
+                                            </span>
+                                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                                              part.status === 'addressed' ? 'bg-emerald-100 text-emerald-800'
+                                                : part.status === 'weak' ? 'bg-amber-100 text-amber-800'
+                                                : 'bg-rose-100 text-rose-800'
+                                            }`}>
+                                              {part.status}
+                                            </span>
+                                          </p>
+                                          <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+                                            {part.evidence}
+                                          </p>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+
+                                  <p className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm leading-relaxed text-blue-900">
+                                    {scored.recommendation}
+                                  </p>
+                                </div>
+                              )}
+                            </li>
+                          )
+                        })}
+                      </ul>
+
+                      <p className="mt-5 text-[11px] leading-relaxed text-slate-500">
+                        These scores are writing-development indicators, not an admission
+                        probability or a prediction of any committee&rsquo;s decision.
+                      </p>
+                    </div>
+                  </div>
+                </section>
+              )}
             </section>
 
             {/* ------------------------------------------ your school's prompt */}
@@ -1290,21 +1693,91 @@ export default function StatementStudioClient({
               </div>
 
               {/*
-                NOT A BUTTON, BECAUSE THERE IS NOTHING BEHIND IT. An analyser
-                that looked clickable and did nothing would be worse than
-                saying plainly that it is not built.
+                THE REAL ACTION. The placeholder that stood here said "coming
+                soon" because nothing was behind it; this is behind it now.
               */}
-              <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-4">
-                <p className="flex items-center gap-2 text-sm font-bold text-slate-500">
-                  Analyze this draft
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                    Coming soon
-                  </span>
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+                <p className="text-sm font-bold text-slate-900">Analyze this draft</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  {prompt.promptText === null
+                    ? 'Six categories of feedback on your writing. Attach a school prompt to add prompt alignment.'
+                    : 'Seven categories of feedback, including how well this answers your school\u2019s question.'}
                 </p>
-                <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                  Detailed AI feedback on your statement will appear here once the analyzer
-                  is built.
-                </p>
+
+                {/*
+                  THE PLAN, FIRST. A member whose plan does not include this
+                  sees why, not a button that fails when they press it. The
+                  endpoint refuses them regardless; this is the courtesy.
+                */}
+                {!analysisAllowed ? (
+                  <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs leading-relaxed text-slate-600">
+                    {ANALYSIS_TIER_MESSAGE}
+                  </p>
+                ) : analysisAvailable === 'unavailable' ? (
+                  /* No storage: refusing is honest, charging again is not. */
+                  <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs leading-relaxed text-slate-600">
+                    {ANALYSIS_UNAVAILABLE_MESSAGE}
+                  </p>
+                ) : eligibility.kind === 'prompt-too-short' ? (
+                  <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+                    {REVIEW_MESSAGES.promptTooShort}
+                  </p>
+                ) : (
+                  <>
+                    {/*
+                      VIEWING A STORED RESULT MAKES NO REQUEST. That analysis
+                      already happened and was already paid for; opening it is
+                      reading, not analysing, so this branch calls nothing.
+                    */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (analysisAction === 'view' && priorAnalysis !== null) {
+                          setReview({ ...priorAnalysis.result, essay })
+                          setOpenCategory(null)
+                          return
+                        }
+                        void analyze()
+                      }}
+                      disabled={analysisAction === 'view' ? false : !canAnalyze}
+                      className="mt-3 w-full rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {analyzing
+                        ? 'Analyzing\u2026'
+                        : review !== null && analysisAction !== 'reanalyze'
+                          ? 'Analyze again'
+                          : ANALYSIS_ACTION_LABELS[analysisAction]}
+                    </button>
+                    {analysisAction === 'view' && review === null && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        This draft has not changed since it was analyzed.
+                      </p>
+                    )}
+                    {!canAnalyze && !analyzing && eligibility.kind === 'too-short' && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        {words.toLocaleString('en-US')} of {eligibility.minimumWords.toLocaleString('en-US')} words needed.
+                      </p>
+                    )}
+                    {conflicted && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Resolve the conflict above before analyzing.
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {/* LABELLED, AND PROMISING NOTHING ABOUT REUSE. */}
+                {analysisAvailable === 'development-no-cache' && (
+                  <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
+                    {ANALYSIS_NO_CACHE_NOTICE}
+                  </p>
+                )}
+
+                {reviewError !== null && (
+                  <p role="alert" className="mt-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
+                    {reviewError}
+                  </p>
+                )}
               </div>
             </aside>
           </div>

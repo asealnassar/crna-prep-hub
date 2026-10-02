@@ -29,3 +29,32 @@ export function promptSubmissionsEnabled(
 ): boolean {
   return env[PROMPT_SUBMISSIONS_ENV] === 'on'
 }
+
+/**
+ * Whether stored analysis results are switched on.
+ *
+ * A SECOND, INDEPENDENT FLAG. Applicant-submitted prompts and the analysis
+ * cache are different features with different migrations, and tying them to one
+ * variable would mean turning on whichever was ready last.
+ *
+ * OFF MEANS NO QUERY NAMES THE TABLE. 20261002_004 is written but not applied,
+ * so public.statement_analyses and its two functions do not exist; with this
+ * unset the route takes a different path rather than catching an error, which
+ * is what keeps the current editor working against the unmigrated database.
+ *
+ * AND OFF DOES NOT MEAN "ANALYSE REPEATEDLY WITHOUT SAYING SO". With the cache
+ * off every request is a fresh model call, exactly as today -- that is the
+ * behaviour being replaced, not a silent fallback introduced by this feature.
+ * What must never happen is the cache being ON and quietly degrading to repeat
+ * paid calls when a query fails; the route treats that as a failure.
+ *
+ * FAILS CLOSED, like promptSubmissionsEnabled: anything but the exact string
+ * 'on' is off.
+ */
+export const ANALYSIS_CACHE_ENV = 'STATEMENT_ANALYSIS_CACHE'
+
+export function analysisCacheEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env[ANALYSIS_CACHE_ENV] === 'on'
+}

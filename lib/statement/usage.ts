@@ -39,6 +39,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { STATEMENT_RATE_LIMITS, checkStatementRate, statementLedgerWindowMs } from './entitlement.ts'
+import type { RateWindow } from './entitlement.ts'
 import type { RateDecision } from './entitlement.ts'
 
 /**
@@ -135,10 +136,27 @@ export function timestampsFrom(
 export async function statementRateDecision(
   db: SupabaseClient,
   userId: string,
-  options: { readonly selfRecorded?: boolean } = {},
+  options: {
+    readonly selfRecorded?: boolean
+    /**
+     * The windows to judge against. Defaults to STATEMENT_RATE_LIMITS, so
+     * every existing caller behaves exactly as it did.
+     *
+     * IT EXISTS BECAUSE TWO FEATURES SHARE ONE LEDGER AND NEED DIFFERENT
+     * CEILINGS. The legacy analyser's allowance includes a daily cap; Statement
+     * Studio V2 is sold as unlimited for Ultimate, so its windows are burst
+     * protection only. Passing the limits in keeps one ledger read and one
+     * decision function rather than a second copy of both.
+     */
+    readonly limits?: readonly RateWindow[]
+  } = {},
   now: number = Date.now()
 ): Promise<RateDecision> {
-  const since = new Date(now - statementLedgerWindowMs()).toISOString()
+  const limits = options.limits ?? STATEMENT_RATE_LIMITS
+  // The read window follows the LIMITS BEING APPLIED, not the default set --
+  // otherwise a caller with a wider window than the default would judge against
+  // rows that were never fetched.
+  const since = new Date(now - statementLedgerWindowMs(limits)).toISOString()
   const { data, error } = await db
     .from('resume_ai_usage')
     .select('created_at, operation')
@@ -160,7 +178,7 @@ export async function statementRateDecision(
   return checkStatementRate(
     timestampsFrom(data ?? [], options.selfRecorded === true),
     now,
-    STATEMENT_RATE_LIMITS
+    limits
   )
 }
 

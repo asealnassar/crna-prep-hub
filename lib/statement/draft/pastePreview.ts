@@ -35,6 +35,21 @@ export const PASTE_PREVIEW_PARAM = 'preview'
 export const PASTE_PREVIEW_VALUE = 'prompt-paste'
 
 /**
+ * The value that means "draw the analyser's results screens with sample data".
+ *
+ * A SECOND VALUE, NOT A SECOND GATE. pastePreviewAllowed() below decides both,
+ * because the three conditions are the same ones: development, an administrator
+ * who has passed the Studio gate, and an explicit parameter. What differs is
+ * only which screens get drawn.
+ */
+export const REVIEW_PREVIEW_VALUE = 'analysis'
+
+/** Whether the address asked for the analyser preview. Exact value, one of it. */
+export function reviewPreviewRequested(value: unknown): boolean {
+  return value === REVIEW_PREVIEW_VALUE
+}
+
+/**
  * Whether the address asked for preview.
  *
  * EXACTLY ONE VALUE, EXACTLY ONE OCCURRENCE. Next hands a repeated parameter

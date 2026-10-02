@@ -392,9 +392,10 @@ test('the page still gates, still reads server-side, and hands the draft down', 
 })
 
 test('the initial draft comes from props; the only GET is the deliberate reload', () => {
-  // Two requests exist in the whole component and no more: the autosave PATCH,
-  // and the GET that happens ONLY when the applicant clicks Reload.
-  assert.equal(CLIENT.split('fetch(').length - 1, 3)
+  // Four requests exist in the whole component and no more: the autosave
+  // PATCH, the GET that happens ONLY when the applicant clicks Reload, the
+  // extraction POST, and the analysis POST that only a click starts.
+  assert.equal(CLIENT.split('fetch(').length - 1, 4)
   assert.deepEqual([...new Set(CLIENT.match(/method: '[A-Z]+'/g) ?? [])].sort(), [
     "method: 'GET'",
     "method: 'PATCH'",
@@ -469,7 +470,8 @@ test('a title edit takes the SAME path as an essay edit', () => {
   assert.match(onTitle, /type: 'edited', at: Date\.now\(\)/)
   // No second endpoint and no title-only request anywhere.
   assert.doesNotMatch(onTitle, /fetch\(/)
-  assert.equal(CLIENT.split('fetch(').length - 1, 3, 'the PATCH, the reload GET, the extraction POST')
+  assert.equal(CLIENT.split('fetch(').length - 1, 4,
+    'the PATCH, the reload GET, the extraction POST, and the analysis POST')
 })
 
 test('a conflicted editor stays SELECTABLE, and a FAILED one stays editable', () => {
@@ -545,7 +547,8 @@ test('SCHOOL OPTIONS PASS STRAIGHT THROUGH TO THE PICKER', () => {
   }
   // Still exactly the three fetches THIS editor has always made. The picker's
   // own catalog request lives in its own file -- picker.test.ts owns it.
-  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
+  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 4,
+    'the PATCH, the reload GET, the extraction POST, and the analysis POST')
   assert.doesNotMatch(CLIENT, /\/api\/statement\/prompts/)
 })
 
@@ -583,11 +586,18 @@ test('ONLY A PROMPT ID EVER ENTERS A REQUEST', () => {
   // part 2 below is what still guarantees none of it travels outwards.
   for (const field of ['schoolId', 'promptText', 'statedMaxWords']) {
     const uses = [...new Set(CLIENT.match(new RegExp(`[\\w.]*${field}[\\w.]*`, 'g')) ?? [])].sort()
-    assert.deepEqual(
-      uses,
-      [field, `draft.${field}`, `outcome.draft.${field}`, `prompt.${field}`].sort(),
-      field,
-    )
+    // `review.statedMaxWords` JOINED THIS LIST WITH THE ANALYSER: the result
+    // reports which limit it was judged against, and the panel shows it. A
+    // read of this server's own response, for display -- part 2 below is still
+    // what guarantees no canonical value travels outwards in a request.
+    const allowed = [field, `draft.${field}`, `outcome.draft.${field}`, `prompt.${field}`]
+    if (field === 'statedMaxWords') {
+      // The results block reports which limit it was judged against, and
+      // formats it. `shown` is the real result or a development sample; both
+      // are this server's own data, read for display.
+      allowed.push('shown.statedMaxWords', 'shown.statedMaxWords.toLocaleString')
+    }
+    assert.deepEqual(uses, allowed.sort(), field)
   }
 
   // 2. THE ONLY VALUE THAT TRAVELS OUT is promptForRequest(captured) -- a uuid
@@ -1057,7 +1067,8 @@ test('lifecycle: STILL ONE PATCH, ONE BODY, ONE ENGINE', () => {
   assert.equal((CLIENT.match(/method: 'PATCH'/g) ?? []).length, 1)
   assert.equal((CLIENT.match(/JSON\.stringify\(/g) ?? []).length, 1)
   assert.equal(CLIENT.split('body: JSON.stringify(attempt.body)').length - 1, 1)
-  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
+  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 4,
+    'the PATCH, the reload GET, the extraction POST, and the analysis POST')
   // And the engine is used through its public events only -- the same six.
   assert.deepEqual(
     [...new Set((CLIENT.match(/type: '[a-z-]+'/g) ?? []))].sort(),
@@ -2105,16 +2116,23 @@ test('the banner says what is actually built', () => {
   assert.match(CLIENT, /AI analyzer is not built yet/)
 })
 
-test('the analyzer area is a label, not a button', () => {
-  const area = CLIENT.slice(CLIENT.indexOf('Analyze this draft'))
-  assert.match(area.slice(0, 400), /Coming soon/)
-  assert.doesNotMatch(area.slice(0, 400), /<button/, 'nothing clickable with nothing behind it')
-  assert.doesNotMatch(CLIENT, /onAnalyze|analyzeDraft|\/api\/statement\/analyze/)
+test('the analyzer is a real action now, and the placeholder is gone', () => {
+  // This test once required "Coming soon" and NO button, because there was
+  // nothing behind it. There is now: a gated endpoint, a validated result and
+  // a usage ledger entry. The rule it was protecting -- never a control with
+  // nothing behind it -- is what makes the change correct rather than a
+  // loosening.
+  assert.doesNotMatch(CLIENT, /Coming soon/)
+  assert.match(CLIENT, /onClick=\{\(\) => void analyze\(\)\}/)
+  assert.match(CLIENT, /analyzePath\(draft\.id\)/)
+  // And it is still not the LEGACY analyser's endpoint.
+  assert.doesNotMatch(CLIENT, /\/api\/analyze-statement/)
 })
 
 test('the redesign added no request, and no database access', () => {
   // Still exactly the three fetches this editor has always made.
-  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
+  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 4,
+    'the PATCH, the reload GET, the extraction POST, and the analysis POST')
   for (const forbidden of [/createClient/, /supabase/i, /@supabase/]) {
     assert.doesNotMatch(CLIENT, forbidden)
   }
@@ -2190,4 +2208,265 @@ test('opening or closing the controls saves nothing', () => {
   for (const forbidden of [/setPrompt\(/, /dispatch/, /startSave/, /fetch\(/, /choosePrompt/]) {
     assert.doesNotMatch(handler, forbidden, 'the toggle is presentation only')
   }
+})
+
+/* ===========================================================================
+ * THE ANALYSER, IN THE EDITOR.
+ * ======================================================================== */
+
+test('the analysis request carries nothing but the path', () => {
+  // Everything judged is read on the server from the saved row, so there is no
+  // field here that could misreport -- or forge -- what was analysed.
+  assert.match(CLIENT, /fetch\(analyzePath\(draft\.id\), \{ method: 'POST' \}\)/)
+  const flow = CLIENT.slice(CLIENT.indexOf('const analyze = useCallback'),
+                            CLIENT.indexOf('const retrySave = useCallback'))
+  assert.doesNotMatch(flow, /body:/, 'no request body at all')
+  // Scoped to the REQUEST. `essay: analyzed` appears after it, writing the
+  // captured text into local state -- that is what staleness compares against,
+  // not something sent.
+  const request = flow.slice(0, flow.indexOf('await fetch(') + 80)
+  assert.doesNotMatch(request, /essay:|promptText|promptId|revision:/)
+  assert.match(flow, /setReview\(\{ \.\.\.outcome\.result, essay: analyzed \}\)/)
+})
+
+test('a second click cannot start a second analysis', () => {
+  // An analysis costs part of the applicant's allowance, so the guard is a ref
+  // set synchronously -- two clicks in one tick would both read the state.
+  assert.match(CLIENT, /const analyzeInFlight = useRef\(false\)/)
+  const flow = CLIENT.slice(CLIENT.indexOf('const analyze = useCallback'))
+  const check = flow.indexOf('if (analyzeInFlight.current) return')
+  const set = flow.indexOf('analyzeInFlight.current = true')
+  const request = flow.indexOf('await fetch(')
+  assert.ok(check !== -1 && check < set && set < request, 'checked, taken, then sent')
+})
+
+test('ANALYSING TOUCHES NO DRAFT STATE', () => {
+  // It reads the draft and returns an opinion. The autosave engine does not
+  // know this feature exists.
+  const flow = CLIENT.slice(CLIENT.indexOf('const analyze = useCallback'),
+                            CLIENT.indexOf('const retrySave = useCallback'))
+  for (const forbidden of [/setEssay\(/, /setTitle\(/, /dispatch\(/, /startSave\(/, /setPrompt\(/]) {
+    assert.doesNotMatch(flow, forbidden, 'an analysis is not an edit')
+  }
+})
+
+test('the essay is captured before the request, and stored with the result', () => {
+  // That captured string is what staleness is measured against: typing during
+  // an analysis is caught before autosave moves the revision.
+  assert.match(CLIENT, /const analyzed = essay/)
+  assert.match(CLIENT, /setReview\(\{ \.\.\.outcome\.result, essay: analyzed \}\)/)
+  assert.match(CLIENT, /analyzedEssay: review\.essay/)
+  assert.match(CLIENT, /analyzedRevision: review\.revision/)
+})
+
+test('a stale result is LABELLED, not discarded', () => {
+  // It was accurate about the revision it names. Marking it and offering a
+  // fresh run is honest; throwing it away would lose feedback the applicant
+  // may still want.
+  assert.match(CLIENT, /const reviewStale = review !== null && reviewIsStale\(\{/)
+  assert.match(CLIENT, /REVIEW_MESSAGES\.stale/)
+  assert.match(CLIENT, /Analyze the current draft/)
+  assert.doesNotMatch(CLIENT, /if \(reviewStale\) setReview\(null\)/)
+})
+
+test('Analyze is closed while the draft is frozen or too short', () => {
+  assert.match(CLIENT, /canAnalyzeNow\(\{/)
+  assert.match(CLIENT, /running: analyzing/)
+  assert.match(CLIENT, /conflicted,/)
+  assert.match(CLIENT, /disabled=\{!canAnalyze\}/)
+  // A prompt too short for the rubric offers no button at all.
+  assert.match(CLIENT, /eligibility\.kind === 'prompt-too-short'/)
+})
+
+test('the overall score is the server’s computed one, displayed as given', () => {
+  assert.match(CLIENT, /\{shown\.review\.overall\}/)
+  // Nothing in the browser recomputes or adjusts it.
+  assert.doesNotMatch(CLIENT, /overallScore\(|weightsFor\(/)
+})
+
+test('a category with no score reads "not assessed", never zero', () => {
+  assert.match(CLIENT, /\{NOT_ASSESSED\}/)
+  assert.match(CLIENT, /if \(scored === undefined\)/)
+  // The band is the server's; the browser only picks a colour for it.
+  assert.match(CLIENT, /BAND_LABELS\[scored\.band\]/)
+  assert.doesNotMatch(CLIENT, /bandFor\(scored\.score\)/)
+})
+
+test('missing evidence is labelled differently from weak evidence', () => {
+  assert.match(CLIENT, /scored\.evidenceFound \? 'From your draft' : 'Not found in your draft'/)
+})
+
+test('model prose is rendered as escaped text, never as markup', () => {
+  for (const rendered of [/\{scored\.evidence\}/, /\{scored\.explanation\}/,
+                          /\{scored\.recommendation\}/, /\{shown\.review\.overallAssessment\}/]) {
+    assert.match(CLIENT, rendered)
+  }
+  assert.doesNotMatch(CLIENT, /dangerouslySetInnerHTML/)
+})
+
+test('the feedback opens one category at a time', () => {
+  assert.match(CLIENT, /const \[openCategory, setOpenCategory\] = useState<string \| null>\(null\)/)
+  assert.match(CLIENT, /aria-expanded=\{open\}/)
+  assert.match(CLIENT, /setOpenCategory\(open \? null : category\.id\)/)
+})
+
+test('the over-limit warning is shown and never blocks', () => {
+  assert.match(CLIENT, /REVIEW_MESSAGES\.overLimit/)
+  assert.match(CLIENT, /shown\.overLimit \|\| \(!showingSample && essayOverLimit\)/)
+  // Eligibility does not consider it.
+  assert.doesNotMatch(CLIENT, /overLimit[^\n]*canAnalyze|canAnalyze[^\n]*overLimit/)
+})
+
+test('the disclaimer travels with the score', () => {
+  assert.match(CLIENT, /writing-development indicators/)
+  assert.match(CLIENT, /not an admission\s*\n?\s*probability/)
+})
+
+test('the results sit BELOW the writing area, not beside it', () => {
+  // Feedback is long and wants the full column; the reference panel would have
+  // squeezed both. Nothing above it moves when it appears.
+  const results = CLIENT.indexOf('aria-labelledby="analysis-heading"')
+  const textarea = CLIENT.indexOf('<textarea')
+  const aside = CLIENT.indexOf('aria-labelledby="prompt-heading"')
+  assert.ok(textarea !== -1 && results !== -1 && aside !== -1)
+  assert.ok(textarea < results, 'after the writing area')
+  assert.ok(results < aside, 'and still inside the left column')
+})
+
+/* ===========================================================================
+ * THE SAMPLE PREVIEW.
+ * ======================================================================== */
+
+test('A SAMPLE NEVER CALLS ANYTHING', () => {
+  // The whole safety property. The samples arrive as a prop built on the
+  // server; nothing in the browser requests, charges or writes to show one.
+  const derived = CLIENT.slice(CLIENT.indexOf('const sample = sampleReviews === null'),
+                               CLIENT.indexOf('const shown = review ?? sample'))
+  assert.ok(derived.length > 0)
+  for (const forbidden of [/fetch\(/, /analyze\(/, /analyzePath/, /setReview\(/]) {
+    assert.doesNotMatch(derived, forbidden, 'a sample is data, not an action')
+  }
+})
+
+test('the real result always wins, so a sample cannot sit beside real feedback', () => {
+  assert.match(CLIENT, /const shown = review \?\? sample/)
+  assert.match(CLIENT, /const showingSample = review === null && sample !== null/)
+})
+
+test('the sample prop defaults to null, so production renders none', () => {
+  assert.match(CLIENT, /sampleReviews = null/)
+  assert.match(CLIENT, /sampleReviews\?: \{ readonly general: StatementReview/)
+})
+
+test('the preview says what it is BEFORE any number', () => {
+  const card = CLIENT.slice(CLIENT.indexOf('aria-labelledby="analysis-heading"'))
+  const notice = card.indexOf('SAMPLE_NOTICE')
+  const score = card.indexOf('shown.review.overall')
+  assert.ok(notice !== -1 && score !== -1 && notice < score,
+    'a reader must not meet a sample score before the label')
+  assert.match(CLIENT, /\{SAMPLE_NOTICE\}/)
+})
+
+test('both sample shapes are reachable from the preview', () => {
+  assert.match(CLIENT, /setSampleKind\('school'\)/)
+  assert.match(CLIENT, /setSampleKind\('general'\)/)
+  assert.match(CLIENT, /School-specific \(7\)/)
+  assert.match(CLIENT, /General \(6\)/)
+  assert.match(CLIENT, /aria-pressed=\{sampleKind === 'school'\}/)
+})
+
+test('a sample is never stale, because staleness is about a real result', () => {
+  assert.match(CLIENT, /\{!showingSample && reviewStale && \(/)
+})
+
+test('the preview is decided on the SERVER, after the gate', () => {
+  assert.match(PAGE, /pastePreviewAllowed\(\{/)
+  assert.match(PAGE, /nodeEnv: process\.env\.NODE_ENV/)
+  assert.match(PAGE, /requested: reviewPreviewRequested\(/)
+  // With the flag off nothing is even constructed.
+  assert.match(PAGE, /analysisPreview\s*\n?\s*\? \{ general: generalSample\(\), school: schoolSample\(\) \}\s*\n?\s*: null/)
+  const refuse = PAGE.indexOf('notFound()')
+  const preview = PAGE.indexOf('pastePreviewAllowed({')
+  assert.ok(refuse !== -1 && preview !== -1 && refuse < preview)
+})
+
+test('the page builds samples without touching a model or the ledger', () => {
+  for (const forbidden of [/openai/i, /recordStatementAttempt/, /settleStatementUsage/,
+                           /analyzePath/, /statementRateDecision/]) {
+    assert.doesNotMatch(PAGE, forbidden)
+  }
+})
+
+test('the prompt’s requirements are shown one by one', () => {
+  // What stops "the prompt is addressed" standing in for a judgement: the
+  // applicant sees which parts of the question their draft actually answers.
+  assert.match(CLIENT, /scored\.components\.length > 0 &&/)
+  assert.match(CLIENT, /scored\.components\.map\(\(part\) =>/)
+  assert.match(CLIENT, /\{part\.component\}/)
+  assert.match(CLIENT, /\{part\.status\}/)
+  assert.match(CLIENT, /\{part\.evidence\}/)
+  // Three statuses, three treatments, so a gap is visible at a glance.
+  assert.match(CLIENT, /part\.status === 'addressed'/)
+  assert.match(CLIENT, /part\.status === 'weak'/)
+})
+
+/* ===========================================================================
+ * THE PLAN, AND NOT PAYING TWICE.
+ * ======================================================================== */
+
+test('a member without the plan sees the reason, not a failing button', () => {
+  assert.match(CLIENT, /analysisAllowed = false/, 'and it defaults to withheld')
+  assert.match(CLIENT, /\{!analysisAllowed \? \(/)
+  assert.match(CLIENT, /\{ANALYSIS_TIER_MESSAGE\}/)
+  // The server refuses them regardless; this is the courtesy, not the control.
+  assert.match(PAGE, /canAnalyzeStatement\(auth\.tier\)/)
+})
+
+test('VIEWING A STORED RESULT MAKES NO REQUEST', () => {
+  // That analysis already happened and was already paid for.
+  const handler = CLIENT.slice(CLIENT.indexOf("if (analysisAction === 'view' && priorAnalysis !== null)"))
+  const branch = handler.slice(0, handler.indexOf('void analyze()'))
+  assert.ok(branch.length > 0)
+  assert.match(branch, /setReview\(\{ \.\.\.priorAnalysis\.result, essay \}\)/)
+  assert.match(branch, /return/, 'and it returns before analyze() is reached')
+  assert.doesNotMatch(branch, /fetch\(|analyzePath/)
+})
+
+test('the label follows the action, so a rename does not read as "analyze again"', () => {
+  assert.match(CLIENT, /ANALYSIS_ACTION_LABELS\[analysisAction\]/)
+  assert.match(CLIENT, /const analysisAction: AnalysisAction = priorAnalysis\?\.action \?\? 'analyze'/)
+  assert.match(CLIENT, /This draft has not changed since it was analyzed/)
+})
+
+test('the prior analysis is decided on the SERVER, and gated', () => {
+  assert.match(PAGE, /analysisFingerprint\(\{/)
+  assert.match(PAGE, /analysisActionFor\(\{/)
+  assert.match(PAGE, /analysisCacheEnabled\(\)/)
+  // The title is not an input to the fingerprint, which is what makes a rename
+  // reuse the stored result.
+  const call = PAGE.slice(PAGE.indexOf('analysisFingerprint({'), PAGE.indexOf('let priorAnalysis'))
+  assert.doesNotMatch(call, /title/)
+  assert.doesNotMatch(call, /revision/)
+})
+
+test('with the cache off the editor offers a fresh analysis, as it does today', () => {
+  assert.match(PAGE, /let priorAnalysis = null/)
+  assert.match(PAGE, /if \(analysisAllowed && analysisCacheEnabled\(\)\) \{/)
+  assert.match(CLIENT, /priorAnalysis = null/)
+})
+
+test('without storage the editor refuses rather than offering a paid repeat', () => {
+  assert.match(CLIENT, /analysisAvailable = 'unavailable'/, 'and that is the default')
+  assert.match(CLIENT, /analysisAvailable === 'unavailable' \? \(/)
+  assert.match(CLIENT, /\{ANALYSIS_UNAVAILABLE_MESSAGE\}/)
+  assert.match(PAGE, /analysisAvailability\(\{/)
+  assert.match(PAGE, /nodeEnv: process\.env\.NODE_ENV/)
+})
+
+test('the development path is labelled and promises no reuse', () => {
+  assert.match(CLIENT, /analysisAvailable === 'development-no-cache' &&/)
+  assert.match(CLIENT, /\{ANALYSIS_NO_CACHE_NOTICE\}/)
+  // "View previous analysis" comes from the stored action only, which is null
+  // whenever nothing is stored.
+  assert.match(CLIENT, /priorAnalysis\?\.action \?\? 'analyze'/)
 })

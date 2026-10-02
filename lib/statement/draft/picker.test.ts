@@ -966,9 +966,10 @@ test('component: no second save path, and no new PATCH field', () => {
   // The editor still has exactly one body expression, built by the validator.
   assert.equal(CLIENT.split('body: JSON.stringify(attempt.body)').length - 1, 1)
   assert.equal((CLIENT.match(/JSON\.stringify\(/g) ?? []).length, 1)
-  // Three fetches in the editor, one in the picker: four in all, and the new
-  // one is a GET to the catalog.
-  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
+  // Four fetches in the editor -- the autosave PATCH, the reload GET, the
+  // extraction POST and the analysis POST -- and one in the picker, which is
+  // the catalog GET this test is about.
+  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 4)
   assert.equal((PICKER.match(/await fetch\(/g) ?? []).length, 1)
 })
 

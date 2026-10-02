@@ -8,6 +8,18 @@ import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
 import { readDraftPromptStatus } from '@/lib/statement/draft/submissionRepo'
 import { originOf, promptStatusLabel } from '@/lib/statement/draft/promptSubmission'
 import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
+import {
+  PASTE_PREVIEW_PARAM, pastePreviewAllowed, reviewPreviewRequested,
+} from '@/lib/statement/draft/pastePreview'
+import { generalSample, schoolSample } from '@/lib/statement/draft/reviewSample'
+import {
+  analysisActionFor, analysisAvailability, canAnalyzeStatement,
+} from '@/lib/statement/draft/reviewAccess'
+// SERVER ONLY: this module imports node:crypto. A server component may use it;
+// nothing a client component imports may.
+import { analysisFingerprint } from '@/lib/statement/draft/analysisFingerprint'
+import { analysisFor } from '@/lib/statement/draft/analysisRepo'
+import { analysisCacheEnabled } from '@/lib/statement/draft/rollout'
 import StatementStudioClient from '../components/StatementStudioClient'
 
 /**
@@ -57,8 +69,10 @@ const UNREADABLE = 'This draft could not be opened.'
 
 export default async function StatementStudioPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const auth = await authenticateRequest()
   const access = statementStudioAccess({
@@ -153,6 +167,79 @@ export default async function StatementStudioPage({
     }
   }
 
+  // A DEVELOPMENT-ONLY VISUAL PREVIEW of the analyser's results.
+  //
+  // READ AFTER THE GATE, exactly as the paste preview is: everything above has
+  // already refused a visitor who is not an administrator, and NODE_ENV comes
+  // from the process, so a deployed build cannot be addressed into it.
+  //
+  // THE SAMPLES ARE BUILT HERE AND ONLY HERE. With the flag off nothing is
+  // constructed and nothing is sent to the browser -- and either way no model
+  // is called, no draft is written and the usage ledger is never touched,
+  // because building a sample is three constants and a validator.
+  const params_ = await searchParams
+  const analysisPreview = pastePreviewAllowed({
+    nodeEnv: process.env.NODE_ENV,
+    isAdmin: isAdminEmail(auth.email),
+    requested: reviewPreviewRequested(params_[PASTE_PREVIEW_PARAM]),
+  })
+
+  // ---- what the analyser may offer, decided on the server -----------------
+  //
+  // THE PLAN IS CHECKED HERE ONLY TO DECIDE WHAT TO SHOW. The endpoint checks it
+  // again and is the actual control; this exists so a Free member sees why the
+  // button is unavailable instead of a button that fails.
+  const analysisAllowed = canAnalyzeStatement(auth.tier)
+
+  // WHAT CAN HONESTLY BE OFFERED. Without storage there is no deduplication,
+  // so outside development the analyser is refused rather than silently
+  // charging again for identical work.
+  const analysisAvailable = analysisAvailability({
+    cacheEnabled: analysisCacheEnabled(),
+    nodeEnv: process.env.NODE_ENV,
+  })
+
+  // AND WHETHER THIS EXACT WORK IS ALREADY DONE. Content-addressed: the
+  // fingerprint covers the essay and the saved prompt snapshot and not the
+  // title, so a rename offers "View previous analysis" and an edit offers
+  // "Analyze updated draft".
+  //
+  // GATED. With the cache off nothing queries statement_analyses -- the table
+  // does not exist until 20261002_004 is applied -- and the editor offers a
+  // fresh analysis, which is exactly today's behaviour.
+  const currentFingerprint = analysisFingerprint({
+    essay: draft.essay,
+    promptText: draft.promptText,
+    schoolId: draft.schoolId,
+    promptId: draft.promptId,
+    statedMaxWords: draft.statedMaxWords,
+  })
+  let priorAnalysis = null
+  if (analysisAllowed && analysisCacheEnabled()) {
+    // ASKED FOR BY FINGERPRINT, so restoring previously analysed content finds
+    // its own result rather than the most recent one. Analyse A, edit to B,
+    // analyse B, undo back to A: this returns A's analysis, which was paid for
+    // and is still stored.
+    const stored = await analysisFor(db, draft.id, currentFingerprint)
+    if (stored.ok && stored.value !== null) {
+      priorAnalysis = {
+        result: {
+          review: stored.value.review,
+          revision: stored.value.revision,
+          words: stored.value.words,
+          overLimit: stored.value.overLimit,
+          statedMaxWords: stored.value.statedMaxWords,
+          provenance: stored.value.provenance,
+        },
+        // 'view' when the stored work is about exactly what is on screen.
+        action: analysisActionFor({
+          storedFingerprint: stored.value.fingerprint,
+          currentFingerprint,
+        }),
+      }
+    }
+  }
+
   // The persisted draft, in full, straight into the editor. Its `revision` is
   // what seeds autosave -- the client never invents one.
   return (
@@ -161,6 +248,12 @@ export default async function StatementStudioPage({
       schools={schools.ok ? schools.value : []}
       schoolsUnavailable={!schools.ok}
       promptNotice={promptNotice}
+      analysisAllowed={analysisAllowed}
+      analysisAvailable={analysisAvailable}
+      priorAnalysis={priorAnalysis}
+      sampleReviews={analysisPreview
+        ? { general: generalSample(), school: schoolSample() }
+        : null}
     />
   )
 }

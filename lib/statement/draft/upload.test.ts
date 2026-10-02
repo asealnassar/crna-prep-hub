@@ -438,7 +438,8 @@ test('only one extraction can be in flight, and none retries itself', () => {
   assert.match(handler, /uploadRef\.current !== token/, 'a superseded reply is dropped')
   assert.match(handler, /if \(uploadRef\.current === token\) uploadRef\.current = null/)
   assert.doesNotMatch(handler, /setTimeout|setInterval|attempts|retry/i)
-  assert.equal(CLIENT.split('fetch(').length - 1, 3, 'PATCH, reload GET, extraction POST')
+  assert.equal(CLIENT.split('fetch(').length - 1, 4,
+    'PATCH, reload GET, extraction POST, analysis POST')
 })
 
 test('an import is an EDIT, not a second persistence path', () => {
