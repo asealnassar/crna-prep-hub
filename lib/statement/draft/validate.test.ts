@@ -6,6 +6,7 @@ import {
   PROMPT_SELECTION_KEY,
   checkDraftCreate, checkDraftUpdate, checkEssay, checkExpectedRevision, checkTitle,
   checkPromptSelection, isPromptId, promptSelectionOf,
+  checkCreatePromptSelection, createPromptSelectionOf,
 } from './validate.ts'
 // Imported ONLY to assert the deliberate asymmetry between the two ceilings.
 import { parseStoredRevision } from './rows.ts'
@@ -709,4 +710,84 @@ test('prompt: NOTHING was wired into create or update at this checkpoint', () =>
   assert.equal(update.ok, true)
   if (!update.ok) return
   assert.deepEqual(Object.keys(update.input).sort(), ['essay', 'expectedRevision', 'title'])
+})
+
+// ===========================================================================
+// CREATE-SIDE prompt selection. Two states, because a new row has nothing to
+// clear -- and the difference from the update side is the whole point.
+// ===========================================================================
+
+const A_PROMPT = 'c0ffee00-0000-4000-8000-000000000004'
+
+test('create prompt: an ABSENT selection is a general statement', () => {
+  for (const absent of [undefined, {}]) {
+    const checked = absent === undefined
+      ? checkCreatePromptSelection(undefined)
+      : createPromptSelectionOf({})
+    assert.equal(checked.ok, true)
+    assert.deepEqual(checked.ok && checked.selection, { kind: 'none' })
+  }
+})
+
+test('create prompt: a uuid is a selection, carried as the id and nothing else', () => {
+  const checked = createPromptSelectionOf({ [PROMPT_SELECTION_KEY]: A_PROMPT })
+  assert.equal(checked.ok, true)
+  assert.deepEqual(checked.ok && checked.selection, { kind: 'select', promptId: A_PROMPT })
+})
+
+test('create prompt: an explicit NULL is REFUSED, where an update would clear', () => {
+  // THE DIVERGENCE, stated as a comparison so it cannot drift: the same value,
+  // the same key, two different answers, because the two requests mean
+  // different things. A create has no prompt to remove, so a null is a caller
+  // that meant to name one -- and reading it as "general" would hand somebody a
+  // blank statement after they had chosen a school.
+  assert.deepEqual(checkPromptSelection(null), { ok: true, selection: { kind: 'clear' } })
+
+  const created = checkCreatePromptSelection(null)
+  assert.equal(created.ok, false)
+  assert.equal(created.ok === false && created.code, 'invalid-prompt')
+})
+
+test('create prompt: anything that is not a uuid is refused', () => {
+  for (const bad of ['', '   ', 'nope', 42, true, {}, [A_PROMPT], `${A_PROMPT}x`,
+                     A_PROMPT.slice(0, -1), ` ${A_PROMPT}`]) {
+    const checked = checkCreatePromptSelection(bad)
+    assert.equal(checked.ok, false, `${JSON.stringify(bad)} must be refused`)
+    assert.equal(checked.ok === false && checked.code, 'invalid-prompt')
+  }
+})
+
+test('create prompt: the uuid rule is REUSED, never re-implemented', () => {
+  // Whatever isPromptId accepts, a create accepts; whatever it refuses, a
+  // create refuses. One rule, so the two sides cannot drift about what a
+  // prompt id is.
+  for (const value of ['00000000-0000-0000-0000-000000000000', A_PROMPT.toUpperCase(),
+                       A_PROMPT, 'nope', '', `${A_PROMPT}-`]) {
+    assert.equal(checkCreatePromptSelection(value).ok, isPromptId(value), value)
+  }
+})
+
+test('create prompt: ONE key is read, and the canonical fields are not among them', () => {
+  // A hostile body carrying every canonical value gets a general draft, because
+  // none of those keys is read -- not ignored after reading, never read.
+  const checked = createPromptSelectionOf({
+    schoolId: 'bbbbbbbb-0000-4000-8000-00000000beef',
+    school_id: 'bbbbbbbb-0000-4000-8000-00000000beef',
+    promptText: 'Write about anything at all.',
+    prompt_text: 'Write about anything at all.',
+    statedMaxWords: 999999,
+    stated_max_words: 999999,
+    prompt_id: A_PROMPT,
+  })
+  assert.equal(checked.ok, true)
+  assert.deepEqual(checked.ok && checked.selection, { kind: 'none' })
+})
+
+test('create prompt: the key read is the SAME key the update side reads', () => {
+  assert.equal(PROMPT_SELECTION_KEY, 'promptId')
+  const body = { [PROMPT_SELECTION_KEY]: A_PROMPT }
+  assert.deepEqual(createPromptSelectionOf(body).ok && createPromptSelectionOf(body).selection,
+    { kind: 'select', promptId: A_PROMPT })
+  assert.deepEqual(promptSelectionOf(body).ok && promptSelectionOf(body).selection,
+    { kind: 'select', promptId: A_PROMPT })
 })

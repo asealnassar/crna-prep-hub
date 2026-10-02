@@ -490,7 +490,7 @@ test('write: a failed follow-up read with a prompt change is NOT a conflict', as
   assert.notEqual(result.reason, 'conflict')
 })
 
-test('write: createDraft is UNCHANGED -- three columns, no prompt metadata', async () => {
+test('write: a GENERAL createDraft is unchanged -- three columns, no prompt metadata', async () => {
   const { db, log } = fakeDb([ok(row())])
   await createDraft(db, USER, { title: 'Draft one', essay: 'Opening line.' })
 
@@ -499,8 +499,69 @@ test('write: createDraft is UNCHANGED -- three columns, no prompt metadata', asy
   for (const forbidden of [...PROMPT_KEYS, 'revision', 'id', 'created_at', 'updated_at']) {
     assert.equal(forbidden in payload, false, `insert must not carry ${forbidden}`)
   }
-  // createDraft takes no prompt parameter at all: a draft is born generic.
-  assert.equal(createDraft.length, 3)
+  // The snapshot parameter is OPTIONAL. Three arguments is a whole call, and it
+  // produces the payload it produced before a prompt could be attached at all:
+  // promptColumns(undefined) spreads {}, so there is nothing extra to drop.
+  assert.equal(createDraft.length, 4, 'the fourth parameter exists')
+})
+
+test('write: a SCHOOL-SPECIFIC createDraft writes the snapshot in the SAME insert', async () => {
+  const { db, log } = fakeDb([ok(row({
+    school_id: SCHOOL, prompt_id: PROMPT,
+    prompt_text: SNAPSHOT.promptText, stated_max_words: SNAPSHOT.statedMaxWords,
+  }))])
+  const result = await createDraft(db, USER, { title: 'Draft one', essay: '' }, SNAPSHOT)
+  assert.equal(result.ok, true)
+
+  // ONE STATEMENT. Not an insert followed by an update: there is no moment at
+  // which the row exists without the question it was started for, and no second
+  // revision is consumed on the way.
+  assert.equal(calls(log, 'insert').length, 1)
+  assert.equal(calls(log, 'update').length, 0, 'no PATCH follows a create')
+
+  const payload = calls(log, 'insert')[0][1] as Record<string, unknown>
+  assert.deepEqual(Object.keys(payload).sort(), [
+    'essay', 'prompt_id', 'prompt_text', 'school_id', 'stated_max_words', 'title', 'user_id',
+  ])
+  // The canonical values, exactly as the resolver handed them over.
+  assert.equal(payload.school_id, SCHOOL)
+  assert.equal(payload.prompt_id, PROMPT)
+  assert.equal(payload.prompt_text, SNAPSHOT.promptText)
+  assert.equal(payload.stated_max_words, SNAPSHOT.statedMaxWords)
+  // And still nothing the caller does not own.
+  for (const forbidden of ['revision', 'id', 'created_at', 'updated_at']) {
+    assert.equal(forbidden in payload, false, `insert must not carry ${forbidden}`)
+  }
+})
+
+test('write: a school-specific create maps the SAME columns an update would', async () => {
+  // One mapper, so a created draft and an edited one cannot disagree about
+  // which column holds which half of a snapshot.
+  const { db: cdb, log: clog } = fakeDb([ok(row())])
+  await createDraft(cdb, USER, { title: 't', essay: '' }, SNAPSHOT)
+  const { db: udb, log: ulog } = fakeDb([ok(row({ revision: 2 }))])
+  await updateDraft(udb, ID, { title: 't', essay: '', expectedRevision: 1 }, SNAPSHOT)
+
+  const inserted = calls(clog, 'insert')[0][1] as Record<string, unknown>
+  const updated = calls(ulog, 'update')[0][1] as Record<string, unknown>
+  for (const column of PROMPT_KEYS) {
+    assert.equal(inserted[column], updated[column], `${column} must map identically`)
+  }
+})
+
+test('write: an unusable fourth argument refuses BEFORE any insert', async () => {
+  // NULL IS REFUSED TOO, and that is the difference from updateDraft: a row
+  // being created holds no prompt, so null is not "clear it" -- it is a caller
+  // that meant to name a prompt. The outcome that must not follow is a generic
+  // draft existing anyway.
+  for (const bad of [null, {}, { promptId: PROMPT }, 'snapshot', 0, []]) {
+    const { db, log } = fakeDb([ok(row())])
+    const result = await createDraft(db, USER, { title: 't', essay: '' }, bad as never)
+
+    assert.equal(result.ok, false, `${JSON.stringify(bad)} must be refused`)
+    assert.equal(result.ok === false && result.reason, 'data-integrity')
+    assert.equal(calls(log, 'insert').length, 0, 'no draft may be left behind')
+  }
 })
 
 test('write: THIS MODULE NEVER RESOLVES A PROMPT', async () => {

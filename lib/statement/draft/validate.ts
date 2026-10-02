@@ -467,3 +467,85 @@ export function promptSelectionOf(
 ): PromptSelectionCheck {
   return checkPromptSelection(body[PROMPT_SELECTION_KEY])
 }
+
+// ===========================================================================
+// CREATING a draft that already answers a prompt.
+//
+// A CREATE HAS NO 'clear' STATE, and that is the whole difference from the
+// update side. A row that does not exist yet holds no prompt, so there is
+// nothing to remove and `promptId: null` cannot mean "remove it". It is
+// REFUSED rather than read as "no prompt", because the two requests an
+// applicant can make are "a general statement" and "this school's question",
+// and a null is neither: it is a browser that meant to name a prompt and sent
+// an empty variable instead. Quietly creating a general draft there would hand
+// somebody a blank statement when they had chosen a school -- the exact
+// accident this file exists to prevent -- and they would not find out until
+// they opened the editor.
+//
+// SO A GENERAL CREATE OMITS THE KEY ENTIRELY. That is not a convention this
+// module hopes callers follow; it is the only way to say it.
+//
+// NOTHING BELOW RE-IMPLEMENTS THE UUID RULE. checkPromptSelection does the
+// reading and PROMPT_ID does the matching, exactly as they do for PATCH, and
+// this function only decides what to do with the three answers it gets back.
+// ===========================================================================
+
+/**
+ * What a create request says about the prompt. TWO states, not three.
+ *
+ * 'none'    no prompt was named. A general statement.
+ * 'select'  this prompt, by id. The server resolves the school, the wording
+ *           and the word limit, and snapshots those onto the new row.
+ */
+export type CreatePromptSelection =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'select'; readonly promptId: string }
+
+export type CreatePromptSelectionCheck =
+  | { readonly ok: true; readonly selection: CreatePromptSelection }
+  | { readonly ok: false; readonly code: PromptSelectionRefusal }
+
+const NO_PROMPT: CreatePromptSelectionCheck = { ok: true, selection: { kind: 'none' } }
+const UNUSABLE: CreatePromptSelectionCheck = { ok: false, code: 'invalid-prompt' }
+
+/**
+ * One value as a create's prompt selection, or a refusal.
+ *
+ * ABSENT IS THE ONLY WAY TO ASK FOR A GENERAL DRAFT. undefined and a missing
+ * key are the same answer here for the same reason they are in
+ * checkPromptSelection -- reading a missing property yields undefined and
+ * JavaScript cannot tell them apart -- and that answer is 'none'.
+ *
+ * EVERYTHING ELSE THAT IS NOT A UUID IS A REFUSAL, null included.
+ */
+export function checkCreatePromptSelection(value: unknown): CreatePromptSelectionCheck {
+  const checked = checkPromptSelection(value)
+  if (!checked.ok) return checked
+
+  const { selection } = checked
+  switch (selection.kind) {
+    case 'unchanged':
+      return NO_PROMPT
+    case 'select':
+      return { ok: true, selection }
+    // An explicit null. The update side calls this 'clear'; a create has
+    // nothing to clear, so it is the one answer that becomes a refusal.
+    case 'clear':
+      return UNUSABLE
+  }
+}
+
+/**
+ * A create body's prompt selection: ONE key is read, the same key PATCH reads.
+ *
+ * THE NARROW DOOR AGAIN, and it is the same door. A body carrying `schoolId`,
+ * `promptText`, `statedMaxWords` or any snake_case spelling of them reaches
+ * nothing, because those keys are not read here and the route has no other way
+ * to learn them. The canonical values come out of the catalog or they do not
+ * exist.
+ */
+export function createPromptSelectionOf(
+  body: { readonly [key: string]: unknown },
+): CreatePromptSelectionCheck {
+  return checkCreatePromptSelection(body[PROMPT_SELECTION_KEY])
+}

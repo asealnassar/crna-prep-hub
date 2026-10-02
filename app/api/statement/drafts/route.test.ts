@@ -774,14 +774,24 @@ test('NEITHER ROUTE NAMES A CANONICAL PROMPT FIELD, anywhere', async () => {
   }
 })
 
-test('the COLLECTION route still has no prompt selection at all', async () => {
-  // POST gains nothing in this checkpoint: a draft is still born generic.
-  for (const forbidden of [
-    'checkPromptSelection', 'promptSelectionOf', 'readActivePrompt',
-    'promptRepo', 'promptId',
-  ]) {
-    assert.equal(COLLECTION_SRC.includes(forbidden), false, `${forbidden} is not POST's`)
-  }
+test('the COLLECTION route resolves through the committed resolver, not its own query', async () => {
+  // POST may now name the CREATE-side validator, the resolver and the id --
+  // and nothing else. The canonical fields stay banned by the test above, so
+  // what grew here is the ability to name ONE id, not to author a prompt.
+  assert.equal(COLLECTION_SRC.includes('createPromptSelectionOf'), true)
+  assert.equal(COLLECTION_SRC.includes('readActivePrompt'), true)
+
+  // AND IT MUST NOT USE THE UPDATE SIDE'S READER. promptSelectionOf treats an
+  // explicit null as a deliberate clear, which is right for a PATCH and wrong
+  // for a create: on a create it would turn a browser that meant to name a
+  // prompt into a silent general draft. (Note the capital P in the create-side
+  // name, so this is a real absence rather than a substring that cannot match.)
+  assert.equal(COLLECTION_SRC.includes('promptSelectionOf('), false, 'the update reader is not POST\'s')
+  assert.equal(COLLECTION_SRC.includes('checkPromptSelection'), false)
+
+  // It still issues no query of its own and builds no snapshot of its own.
+  assert.equal(COLLECTION_SRC.includes('promptSnapshotFromRow'), false)
+  assert.equal(COLLECTION_SRC.includes('listActivePrompts'), false)
 })
 
 test('the ITEM route resolves through the committed resolver, not its own query', async () => {
@@ -1223,23 +1233,169 @@ test('PATCH prompt: a 409 exposes no prompt wording or id', async () => {
   assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ['code', 'error', 'storedRevision'])
 })
 
-test('POST: prompt selection is IGNORED on creation -- a draft is born generic', async () => {
+/** POST with a body, returning the response. */
+async function post(body: Record<string, unknown>): Promise<Response> {
+  return (await collection(true)).POST(jsonRequest('POST', body))
+}
+
+test('POST general: an ABSENT promptId reads no catalog and passes THREE arguments', async () => {
   repoReplies.createDraft = { ok: true, value: draft() }
-  const res = await (await collection(true)).POST(jsonRequest('POST', {
-    title: 'Draft one', essay: '', promptId: PROMPT, ...SPOOFED,
-  }))
+  const res = await post({ title: 'Draft one', essay: '' })
   assert.equal(res.status, 201)
 
-  assert.equal(called('readActivePrompt').length, 0, 'POST resolves nothing')
-  // Still exactly two validated fields, and three arguments.
+  // The path every existing draft was made by, unchanged: no catalog read, no
+  // fourth argument, and exactly the two validated fields.
+  assert.equal(called('readActivePrompt').length, 0, 'a general create resolves nothing')
   const [, , input] = called('createDraft')[0].args as [unknown, string, Record<string, unknown>]
   assert.deepEqual(Object.keys(input).sort(), ['essay', 'title'])
   assert.equal(called('createDraft')[0].args.length, 3)
-  // And the new draft is generic over the wire.
+
   const { draft: returned } = await res.json()
   for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
-    assert.equal(returned[key], null, `${key} must be null on a new draft`)
+    assert.equal(returned[key], null, `${key} must be null on a general draft`)
   }
+})
+
+test('POST school: a valid promptId is RESOLVED and snapshotted into the create', async () => {
+  repoReplies.readActivePrompt = { ok: true, value: SNAPSHOT }
+  repoReplies.createDraft = { ok: true, value: draft({
+    schoolId: SCHOOL, promptId: PROMPT,
+    promptText: SNAPSHOT.promptText, statedMaxWords: SNAPSHOT.statedMaxWords,
+  }) }
+  const res = await post({ title: 'My Rutgers Statement', essay: '', promptId: PROMPT })
+  assert.equal(res.status, 201)
+
+  // Resolved ONCE, by id, with the caller's own client.
+  const resolves = called('readActivePrompt')
+  assert.equal(resolves.length, 1)
+  assert.equal(resolves[0].args[1], PROMPT)
+
+  // And the SNAPSHOT -- not the body -- is the fourth argument.
+  const created = called('createDraft')[0]
+  assert.equal(created.args.length, 4)
+  assert.deepEqual(created.args[3], SNAPSHOT)
+
+  // The 201 carries the canonical snapshot back, so nothing has to re-fetch it.
+  const { draft: returned } = await res.json()
+  assert.equal(returned.schoolId, SCHOOL)
+  assert.equal(returned.promptId, PROMPT)
+  assert.equal(returned.promptText, SNAPSHOT.promptText)
+  assert.equal(returned.statedMaxWords, SNAPSHOT.statedMaxWords)
+})
+
+test('POST school: CANONICAL WORDING COMES FROM THE SERVER, never from the body', async () => {
+  repoReplies.readActivePrompt = { ok: true, value: SNAPSHOT }
+  repoReplies.createDraft = { ok: true, value: draft({
+    schoolId: SCHOOL, promptId: PROMPT,
+    promptText: SNAPSHOT.promptText, statedMaxWords: SNAPSHOT.statedMaxWords,
+  }) }
+  const res = await post({ title: 'Draft one', essay: '', promptId: PROMPT, ...SPOOFED })
+  assert.equal(res.status, 201)
+
+  // Every spoofed value was present in the request and reached nothing.
+  const created = called('createDraft')[0]
+  assert.deepEqual(created.args[3], SNAPSHOT)
+  // args[0] is the Supabase client, which is circular; the rest is what the
+  // route chose to pass, which is what this is actually about.
+  const sent = JSON.stringify(created.args.slice(1))
+  for (const spoofed of Object.values(SPOOFED)) {
+    assert.equal(sent.includes(String(spoofed)), false, `${spoofed} must not reach the repository`)
+  }
+  const { draft: returned } = await res.json()
+  assert.equal(returned.promptText, SNAPSHOT.promptText)
+  assert.equal(returned.statedMaxWords, SNAPSHOT.statedMaxWords)
+})
+
+test('POST school: a MALFORMED promptId is a 400, and nothing is read or written', async () => {
+  // The call counts below are asserted as ZERO, so they hold cumulatively and
+  // need no per-iteration reset: not one of these bodies may read or write.
+  for (const bad of ['nope', '', '  ', 42, true, {}, [PROMPT], `${PROMPT}x`]) {
+    const res = await post({ title: 'Draft one', essay: '', promptId: bad })
+    assert.equal(res.status, 400, `${JSON.stringify(bad)} must be refused`)
+    assert.equal((await res.json()).code, 'invalid-prompt')
+    assert.equal(called('readActivePrompt').length, 0, 'the catalog must not be read')
+    assert.equal(called('createDraft').length, 0, 'no draft may be created')
+  }
+})
+
+test('POST school: an explicit promptId NULL is REFUSED, not read as a general draft', async () => {
+  // THE ACCIDENT THIS PREVENTS: a browser that meant to name a prompt and sent
+  // an empty variable would otherwise be handed a blank general statement, and
+  // would not find out until the editor opened with no question on it.
+  const res = await post({ title: 'Draft one', essay: '', promptId: null })
+
+  assert.equal(res.status, 400)
+  assert.equal((await res.json()).code, 'invalid-prompt')
+  assert.equal(called('readActivePrompt').length, 0)
+  assert.equal(called('createDraft').length, 0, 'no general draft may be left behind')
+})
+
+test('POST school: an UNKNOWN or INACTIVE prompt is a 422, and NO draft is created', async () => {
+  // One answer for both, because the catalog gives one answer for both: an
+  // inactive prompt is invisible rather than refused.
+  repoReplies.readActivePrompt = { ok: false, reason: 'not-found', detail: '' }
+  const res = await post({ title: 'Draft one', essay: '', promptId: PROMPT })
+
+  assert.equal(res.status, 422)
+  assert.equal((await res.json()).code, 'prompt-not-found')
+  assert.equal(called('readActivePrompt').length, 1)
+  assert.equal(called('createDraft').length, 0, 'the applicant asked for a school question')
+  // NOT 404: a 404 is what this whole family says when the Studio is hidden.
+  assert.notEqual(res.status, 404)
+})
+
+test('POST school: a resolver READ FAILURE is a safe generic 500, and creates nothing', async () => {
+  repoReplies.readActivePrompt = {
+    ok: false, reason: 'read-failed',
+    detail: '08006 connection failure to statement_prompts',
+  }
+  const res = await post({ title: 'Draft one', essay: '', promptId: PROMPT })
+
+  assert.equal(res.status, 500)
+  const body = await res.json()
+  assert.equal(body.code, 'server-error')
+  assert.equal(called('createDraft').length, 0)
+  const text = JSON.stringify(body)
+  for (const leak of ['08006', 'connection failure', 'statement_prompts']) {
+    assert.equal(text.includes(leak), false, `${leak} must never be sent`)
+  }
+})
+
+test('POST school: a resolver DATA-INTEGRITY failure is a safe generic 500, creating nothing', async () => {
+  repoReplies.readActivePrompt = {
+    ok: false, reason: 'data-integrity', detail: 'unusable stored row (prompt)',
+  }
+  const res = await post({ title: 'Draft one', essay: '', promptId: PROMPT })
+
+  assert.equal(res.status, 500)
+  assert.equal((await res.json()).code, 'server-error')
+  assert.equal(called('createDraft').length, 0)
+})
+
+test('POST: a repository failure leaks no database diagnostics', async () => {
+  repoReplies.readActivePrompt = { ok: true, value: SNAPSHOT }
+  repoReplies.createDraft = {
+    ok: false, reason: 'create-failed',
+    detail: '23514 new row violates check constraint "statement_drafts_title_len"',
+  }
+  const res = await post({ title: 'Draft one', essay: '', promptId: PROMPT })
+
+  assert.equal(res.status, 500)
+  const text = JSON.stringify(await res.json())
+  for (const leak of ['23514', 'check constraint', 'statement_drafts_title_len']) {
+    assert.equal(text.includes(leak), false, `${leak} must never be sent`)
+  }
+})
+
+test('POST: the TITLE’s refusal still wins, and costs no catalog read', async () => {
+  // The existing refusal order is unchanged: a body wrong in two ways reports
+  // the code it always did, and a prompt is not resolved for a doomed create.
+  const res = await post({ title: '   ', essay: '', promptId: 'nope' })
+
+  assert.equal(res.status, 400)
+  assert.equal((await res.json()).code, 'invalid-title')
+  assert.equal(called('readActivePrompt').length, 0, 'not even resolved')
+  assert.equal(called('createDraft').length, 0)
 })
 
 test('PATCH: hostile timestamps and ids never reach the repository input', async () => {

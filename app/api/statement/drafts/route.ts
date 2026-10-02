@@ -4,12 +4,14 @@ import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAut
 import {
   STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
 } from '@/lib/statement/studioGate'
-import { checkDraftCreate } from '@/lib/statement/draft/validate'
+import { checkDraftCreate, createPromptSelectionOf } from '@/lib/statement/draft/validate'
 import { createDraft, listDrafts } from '@/lib/statement/draft/draftRepo'
+import type { StatementPromptSnapshot } from '@/lib/statement/draft/promptRepo'
+import { readActivePrompt } from '@/lib/statement/draft/promptRepo'
 import {
   MALFORMED_JSON_BODY, NOT_AN_OBJECT_BODY, SERVER_ERROR_BODY, UNAUTHENTICATED_BODY,
-  checkBodyShape, isServerFault, publicDraft, statusForRepo, statusForValidation,
-  validationBody,
+  checkBodyShape, isServerFault, promptRefusalBody, publicDraft, statusForPrompt,
+  statusForRepo, statusForValidation, validationBody,
 } from '@/lib/statement/draft/http'
 
 /**
@@ -128,6 +130,60 @@ function failed(reason: Parameters<typeof statusForRepo>[0]): NextResponse {
   return NextResponse.json(SERVER_ERROR_BODY, { status })
 }
 
+/**
+ * What this create says about the prompt, ALREADY RESOLVED -- or a response
+ * refusing it.
+ *
+ * THE ONLY FIELD READ IS promptId, and it is not read here:
+ * createPromptSelectionOf() reads it, by the one key name validate.ts owns.
+ * The canonical school, wording and word limit are never taken from a body --
+ * they come out of the catalog under the caller's own client, or the create
+ * does not happen. A browser naming them is naming keys nothing reads.
+ *
+ *   absent    a general statement. No catalog read at all, and createDraft is
+ *             called with three arguments exactly as it always was.
+ *   a uuid    this prompt. Resolved through the prompt repository, whose
+ *             active-only filter decides what may still be chosen.
+ *   anything  refused, null included: a create has no prompt to clear, so a
+ *   else      null is a browser that meant to name one. Refusing is what stops
+ *             a school-specific intention becoming a blank general draft.
+ *
+ * ONE READ AT MOST, and only for a real selection.
+ */
+async function createPromptFor(
+  db: SupabaseClient,
+  body: { readonly [key: string]: unknown },
+): Promise<StatementPromptSnapshot | undefined | NextResponse> {
+  const selection = createPromptSelectionOf(body)
+  if (!selection.ok) {
+    return NextResponse.json(
+      promptRefusalBody(selection.code),
+      { status: statusForPrompt(selection.code) },
+    )
+  }
+
+  if (selection.selection.kind === 'none') return undefined
+
+  const resolved = await readActivePrompt(db, selection.selection.promptId)
+  if (resolved.ok) return resolved.value
+
+  // UNKNOWN AND WITHDRAWN ARE ONE ANSWER, and 422 rather than 404: the request
+  // was well formed and it is the selection that cannot be honoured. NO DRAFT
+  // IS CREATED -- the caller asked for this school's question and would
+  // otherwise be handed a blank statement they did not ask for.
+  if (resolved.reason === 'not-found') {
+    return NextResponse.json(
+      promptRefusalBody('prompt-not-found'),
+      { status: statusForPrompt('prompt-not-found') },
+    )
+  }
+
+  // read-failed and data-integrity: this site failing, not the caller erring.
+  // The existing generic answer, and `detail` -- a Postgres code and message --
+  // is neither logged nor sent.
+  return failed(resolved.reason)
+}
+
 /** Lists the caller's drafts. Metadata only -- no essay bodies leave here. */
 export async function GET(): Promise<NextResponse> {
   const caller = await admit()
@@ -166,8 +222,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     )
   }
 
+  // THE PROMPT IS RESOLVED AFTER THE TITLE, cheapest first and matching the
+  // gate order above: a body that could never be saved costs no catalog read.
+  const prompt = await createPromptFor(caller.db, shape.body)
+  if (prompt instanceof NextResponse) return prompt
+
   // The user id is the SESSION's, never the body's.
-  const created = await createDraft(caller.db, caller.userId, checked.input)
+  //
+  // A GENERAL CREATE TAKES THE PATH IT TOOK BEFORE ANY OF THIS EXISTED --
+  // three arguments, no fourth -- so there is no new way for an ordinary draft
+  // to go wrong. The same arrangement the item route uses for PATCH.
+  const created = prompt === undefined
+    ? await createDraft(caller.db, caller.userId, checked.input)
+    : await createDraft(caller.db, caller.userId, checked.input, prompt)
   if (!created.ok) return failed(created.reason)
 
   return NextResponse.json({ draft: publicDraft(created.value) }, { status: 201 })

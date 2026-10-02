@@ -1,4 +1,4 @@
-import { MAX_TITLE_CHARS, checkTitle } from './validate.ts'
+import { MAX_TITLE_CHARS, checkTitle, isPromptId } from './validate.ts'
 import { isDraftId } from './http.ts'
 
 /**
@@ -54,6 +54,19 @@ export const CREATE_MESSAGES = {
   server: 'That draft could not be created. Please try again.',
   /** The request never arrived. */
   network: 'Could not reach the server. Please try again.',
+  /**
+   * The chosen prompt was withdrawn or made inactive between the moment it was
+   * listed and the moment Create was pressed. NOTHING WAS CREATED -- the server
+   * refuses the whole request rather than quietly making a general draft -- so
+   * the applicant has lost only the choice, not the title they typed.
+   */
+  promptGone: 'That prompt is no longer available. Choose another and try again.',
+  /**
+   * The prompt id this client sent was not a usable one. An applicant cannot
+   * type a prompt id, so this is a bug on this side rather than a mistake on
+   * theirs, and the wording asks for the one thing that can clear it.
+   */
+  promptUnusable: 'That prompt selection could not be used. Choose the prompt again.',
   /**
    * CREATED, BUT UNREADABLE. The POST succeeded, so a draft exists; the
    * response just could not be understood well enough to open it. This is the
@@ -146,6 +159,13 @@ export const NETWORK_FAILURE: Extract<CreateOutcome, { type: 'refused' }> = {
 const CODE_MESSAGES: Readonly<Record<string, string>> = {
   'invalid-title': CREATE_MESSAGES.title,
   'title-too-long': CREATE_MESSAGES.tooLong,
+  // The prompt refusals, keyed the same way. Both are RETRYABLE: neither
+  // created a row, so pressing Create again cannot make a second draft. They
+  // are listed here rather than left to fall through to the generic server
+  // message because "please try again" is wrong advice for both -- retrying
+  // the same prompt will fail the same way, and what is needed is a new choice.
+  'prompt-not-found': CREATE_MESSAGES.promptGone,
+  'invalid-prompt': CREATE_MESSAGES.promptUnusable,
 }
 
 function fieldOf(value: unknown, key: string): unknown {
@@ -328,4 +348,57 @@ export function draftTally(shown: number, total: number): string {
   if (total === 0) return 'Create and manage your personal statement drafts here.'
   if (shown === total) return `${total} ${total === 1 ? 'draft' : 'drafts'} in your workspace.`
   return `${shown} of ${total} drafts match your search.`
+}
+
+/**
+ * A title and a chosen prompt, or the reason they may not be sent.
+ *
+ * A SEPARATE BUILDER, not a wider NewDraftRequest. The general path is the one
+ * every existing draft was made by, and its body is still built with exactly
+ * two keys that nothing can add a third to; widening that object would have put
+ * an optional prompt key into the request that creates an ordinary statement,
+ * where it has no business being.
+ */
+export type NewSchoolDraftRequest =
+  | {
+      readonly ok: true
+      readonly body: {
+        readonly title: string
+        readonly essay: string
+        readonly promptId: string
+      }
+    }
+  | { readonly ok: false; readonly message: string }
+
+/**
+ * The request that creates a draft already answering a school's question.
+ *
+ * THE ID AND NOTHING ELSE CROSSES THE BOUNDARY. There is no schoolId, no
+ * promptText and no statedMaxWords in this object, and not because they are
+ * omitted -- because the three keys are not written anywhere in this function,
+ * so there is nothing to forget to remove. The server reads the catalog for
+ * them. A browser that could state the wording could state different wording.
+ *
+ * THE ID IS CHECKED BEFORE IT IS SENT, with the same predicate the server
+ * validates it with, so a selection this client has mangled is caught here
+ * rather than spending a round trip to earn a 400.
+ *
+ * TITLE FIRST, matching newDraftRequest: an applicant who typed nothing is told
+ * about the title, which is the field they can actually act on.
+ */
+export function newSchoolDraftRequest(
+  rawTitle: unknown,
+  promptId: unknown,
+): NewSchoolDraftRequest {
+  const checked = checkTitle(rawTitle)
+  if (!checked.ok) {
+    return {
+      ok: false,
+      message: checked.code === 'title-too-long' ? CREATE_MESSAGES.tooLong : CREATE_MESSAGES.title,
+    }
+  }
+  if (!isPromptId(promptId)) {
+    return { ok: false, message: CREATE_MESSAGES.promptUnusable }
+  }
+  return { ok: true, body: { title: checked.title, essay: '', promptId } }
 }

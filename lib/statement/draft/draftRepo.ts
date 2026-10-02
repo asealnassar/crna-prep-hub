@@ -210,10 +210,28 @@ export async function createDraft(
   db: SupabaseClient,
   userId: string,
   input: DraftCreateInput,
+  prompt?: StatementPromptSnapshot,
 ): Promise<DraftRepoResult<StatementDraft>> {
+  // BEFORE THE STATEMENT IS BUILT, for the reason updateDraft gives: a fourth
+  // argument that is neither absent nor a snapshot is an internal error, and
+  // the one outcome that must not follow from it is a draft existing anyway.
+  // Refusing here means no row is inserted at all.
+  if (!isCreatePrompt(prompt)) return badArgument('prompt')
+
   const { data, error } = await db
     .from(DRAFTS)
-    .insert({ user_id: userId, title: input.title, essay: input.essay })
+    // ONE INSERT, AND THE SNAPSHOT RIDES IT. A school-specific draft is born
+    // answering its prompt rather than created generic and patched a moment
+    // later: no second statement, no second revision, and no window in which
+    // the row exists without the question it was started for. On a general
+    // create promptColumns() spreads {}, so the payload is byte-for-byte the
+    // three columns it has always been.
+    .insert({
+      user_id: userId,
+      title: input.title,
+      essay: input.essay,
+      ...promptColumns(prompt),
+    })
     .select(DRAFT_COLUMNS)
     .maybeSingle()
   if (error) return failure('create-failed', error)
@@ -323,6 +341,19 @@ function isSnapshot(value: unknown): value is StatementPromptSnapshot {
  */
 function isPromptWrite(value: unknown): value is PromptWrite | undefined {
   return value === undefined || value === null || isSnapshot(value)
+}
+
+/**
+ * Whether a fourth argument to createDraft is one of its TWO valid states.
+ *
+ * TWO, NOT THREE. updateDraft has a third -- an explicit null, meaning "remove
+ * the prompt this row holds". A row being created holds nothing, so null is not
+ * an instruction a create can carry and is refused here exactly as a malformed
+ * object would be. validate.ts refuses the same value on the request side, so
+ * a null is stopped twice: once as a request, once as an argument.
+ */
+function isCreatePrompt(value: unknown): value is StatementPromptSnapshot | undefined {
+  return value === undefined || isSnapshot(value)
 }
 
 /**

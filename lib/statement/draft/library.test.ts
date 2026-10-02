@@ -16,6 +16,7 @@ import {
   isDraftOrder,
   matchDrafts,
   newDraftRequest,
+  newSchoolDraftRequest,
   orderDrafts,
   type DraftOrder,
 } from './library.ts'
@@ -640,4 +641,117 @@ test('every section shares one centred container', () => {
   assert.equal(countOf(LIST, /max-w-7xl/g), 1, 'exactly one content container')
   assert.match(LIST, /mx-auto w-full max-w-7xl/, 'centred inside the reserved workspace')
   assert.match(LIST, /px-4 pb-16 pt-6 sm:px-6 lg:px-10/, 'with real padding at every width')
+})
+
+// ===========================================================================
+// THE SCHOOL-SPECIFIC CREATE REQUEST. One id crosses the boundary, and the
+// general builder is left exactly as it was.
+// ===========================================================================
+
+const PICKED = 'c0ffee00-0000-4000-8000-000000000004'
+
+test('the general builder is untouched: two keys, and no prompt among them', () => {
+  const request = newDraftRequest('My statement')
+  assert.equal(request.ok, true)
+  assert.deepEqual(request.ok && Object.keys(request.body).sort(), ['essay', 'title'])
+  assert.equal(request.ok && 'promptId' in request.body, false, 'a general create names no prompt')
+})
+
+test('the school builder emits exactly title, essay and the prompt id', () => {
+  const request = newSchoolDraftRequest('  My Rutgers Statement  ', PICKED)
+  assert.equal(request.ok, true)
+  assert.deepEqual(request.ok && request.body, {
+    title: 'My Rutgers Statement',
+    essay: '',
+    promptId: PICKED,
+  })
+})
+
+test('ONLY the prompt id crosses the boundary', () => {
+  // The canonical three are absent because they are never written, so there is
+  // no code path on which one could be included by accident.
+  const request = newSchoolDraftRequest('A title', PICKED)
+  const sent = JSON.stringify(request.ok && request.body)
+  for (const canonical of ['schoolId', 'school_id', 'promptText', 'prompt_text',
+                           'statedMaxWords', 'stated_max_words']) {
+    assert.equal(sent.includes(canonical), false, `${canonical} must not be sent`)
+  }
+})
+
+test('the school builder refuses a title exactly as the general one does', () => {
+  for (const raw of ['', '   ', '\t\n', null, undefined, 42, {}]) {
+    const school = newSchoolDraftRequest(raw, PICKED)
+    const general = newDraftRequest(raw)
+    assert.equal(school.ok, false)
+    assert.equal(school.ok === false && school.message, general.ok === false && general.message)
+  }
+  const long = 'x'.repeat(MAX_TITLE_CHARS + 1)
+  assert.equal(newSchoolDraftRequest(long, PICKED).ok, false)
+})
+
+test('the school builder refuses a prompt id this client has mangled', () => {
+  for (const bad of ['', '   ', 'nope', null, undefined, 42, {}, `${PICKED}x`]) {
+    const request = newSchoolDraftRequest('A title', bad)
+    assert.equal(request.ok, false, `${JSON.stringify(bad)} must be refused`)
+    assert.equal(request.ok === false && request.message, CREATE_MESSAGES.promptUnusable)
+  }
+})
+
+test('the title is reported first when both the title and the prompt are wrong', () => {
+  // The applicant can act on the title. They cannot act on a prompt id.
+  const request = newSchoolDraftRequest('   ', 'nope')
+  assert.equal(request.ok, false)
+  assert.equal(request.ok === false && request.message, CREATE_MESSAGES.title)
+})
+
+test('a withdrawn prompt is its own outcome, not the generic server message', () => {
+  // The server refuses the WHOLE create, so nothing was made and a deliberate
+  // retry is safe -- but "please try again" would be wrong advice, because the
+  // same prompt will fail the same way. A new choice is what is needed.
+  const outcome = createOutcomeFrom({
+    status: 422,
+    body: { error: 'anything at all', code: 'prompt-not-found' },
+  })
+  assert.equal(outcome.type, 'refused')
+  assert.equal(outcome.type === 'refused' && outcome.message, CREATE_MESSAGES.promptGone)
+  assert.equal(outcome.type === 'refused' && outcome.retryable, true)
+  assert.notEqual(outcome.type === 'refused' && outcome.message, CREATE_MESSAGES.server)
+})
+
+test('a prompt id the server refuses is its own outcome too', () => {
+  const outcome = createOutcomeFrom({
+    status: 400,
+    body: { error: 'anything at all', code: 'invalid-prompt' },
+  })
+  assert.equal(outcome.type, 'refused')
+  assert.equal(outcome.type === 'refused' && outcome.message, CREATE_MESSAGES.promptUnusable)
+  assert.equal(outcome.type === 'refused' && outcome.retryable, true)
+})
+
+test('neither prompt refusal renders the server’s own words', () => {
+  // The same rule every other refusal follows: the message is ours, keyed on
+  // the code, so PostgREST text or a CHECK message quoting a value cannot
+  // reach an applicant.
+  for (const code of ['prompt-not-found', 'invalid-prompt']) {
+    const outcome = createOutcomeFrom({
+      status: 422,
+      body: { error: '23514 violates check constraint "statement_prompts_text_len"', code },
+    })
+    assert.equal(outcome.type, 'refused')
+    const message = outcome.type === 'refused' ? outcome.message : ''
+    for (const leak of ['23514', 'check constraint', 'statement_prompts']) {
+      assert.equal(message.includes(leak), false, `${leak} must never be shown`)
+    }
+  }
+})
+
+test('a created school draft still opens at the path the id gives', () => {
+  // Creation's success path is unchanged: the 201 carries a draft id and that
+  // is the only thing navigation is built from.
+  const outcome = createOutcomeFrom({
+    status: 201,
+    body: { draft: { id: 'aaaaaaaa-0000-4000-8000-000000000001', promptId: PICKED } },
+  })
+  assert.equal(outcome.type, 'created')
+  assert.equal(outcome.type === 'created' && outcome.path, draftPath('aaaaaaaa-0000-4000-8000-000000000001'))
 })
