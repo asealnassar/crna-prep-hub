@@ -56,12 +56,15 @@ export default function LibraryClient({
   drafts,
   schools,
   schoolsUnavailable,
+  submissionsEnabled,
 }: {
   drafts: readonly StatementDraftSummary[]
   /** The directory, three columns, read on the server after the gate. */
   schools: readonly SchoolOption[]
   /** The directory could not be READ. Not the same as it being empty. */
   schoolsUnavailable: boolean
+  /** Whether a prompt the catalog lacks may be pasted. Read on the server. */
+  submissionsEnabled: boolean
 }) {
   const [creating, setCreating] = useState(false)
   const [query, setQuery] = useState('')
@@ -119,27 +122,18 @@ export default function LibraryClient({
                 you&rsquo;re applying to.
               </p>
 
-              <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-4">
-                <button
-                  type="button"
-                  onClick={() => setCreating(true)}
-                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-950/40 transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
-                >
-                  <PlusIcon />
-                  New draft
-                </button>
-                {/* A real in-page anchor, not an ornament: it moves the reader to
-                    the section below and works with JavaScript switched off. */}
-                <a
-                  href="#how-it-works"
-                  className="inline-flex items-center gap-2.5 text-sm font-semibold text-slate-200 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
-                >
-                  <span className="flex h-8 w-8 items-center justify-center rounded-full border border-white/25">
-                    <PlayIcon />
-                  </span>
-                  Learn how it works
-                </a>
-              </div>
+              {/* ONE ACTION. A "learn how" link lived here and pointed at the
+                  three cards immediately below, which the reader reaches by
+                  scrolling anyway -- a second control that competed with the
+                  only thing there is to do on this screen. */}
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className="mt-8 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-950/40 transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+              >
+                <PlusIcon />
+                New draft
+              </button>
             </div>
 
             <figure className="absolute bottom-8 right-8 hidden w-56 rounded-2xl border border-white/10 bg-slate-950/60 p-5 backdrop-blur-sm xl:block">
@@ -179,10 +173,18 @@ export default function LibraryClient({
                   key={step.title}
                   className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-blue-200 hover:shadow-md"
                 >
-                  <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                  <span
+                    className={`flex h-14 w-14 items-center justify-center rounded-2xl ${
+                      step.available ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-400'
+                    }`}
+                  >
                     <step.Icon />
                   </span>
-                  <p className="mt-5 text-xs font-bold tracking-[0.18em] text-blue-600">
+                  <p
+                    className={`mt-5 text-xs font-bold tracking-[0.18em] ${
+                      step.available ? 'text-blue-600' : 'text-slate-400'
+                    }`}
+                  >
                     0{index + 1}
                   </p>
                   <p className="mt-1.5 text-lg font-bold text-slate-900">{step.title}</p>
@@ -348,6 +350,7 @@ export default function LibraryClient({
         onClose={() => setCreating(false)}
         schools={schools}
         schoolsUnavailable={schoolsUnavailable}
+        submissionsEnabled={submissionsEnabled}
       />
     </div>
   )
@@ -356,30 +359,41 @@ export default function LibraryClient({
 /**
  * The three steps, as data rather than as repeated markup.
  *
- * THE WORDING IS CHECKED AGAINST WHAT IS BUILT. Writing and upload are
- * implemented; choosing a school prompt is implemented; the analyser is not,
- * and its line says so in the future tense rather than describing a button that
- * is not there.
+ * THESE DESCRIBE THE CREATION FLOW THAT EXISTS. The first card is the dialog's
+ * first screen, which offers a school and a general statement as two equal
+ * choices -- so the wording is "or start a general statement", not an
+ * instruction to pick a school. An applicant writing one statement for several
+ * programmes is not doing it wrong, and a card that said "choose your school"
+ * would tell them they were.
+ *
+ * `available` IS WHAT SEPARATES TODAY FROM LATER. Drafting and upload are
+ * built; the analyser is not. Rather than say "coming soon" twice, the third
+ * card's own sentence says it and its icon tile is muted, so the difference is
+ * legible before the sentence is read.
  */
 const STEPS: readonly {
   readonly title: string
   readonly body: string
+  readonly available: boolean
   readonly Icon: () => ReactElement
 }[] = [
   {
-    title: 'Write',
-    body: 'Start a statement or upload a document you have already written.',
+    title: 'Choose your path',
+    body: 'Select a CRNA school and its prompt, or start a general statement.',
+    available: true,
+    Icon: PathIcon,
+  },
+  {
+    title: 'Write your story',
+    body: 'Create your draft, write your personal statement, or upload an existing document.',
+    available: true,
     Icon: PenIcon,
   },
   {
-    title: 'Personalize',
-    body: 'Choose a CRNA school and the personal statement prompt you are answering.',
-    Icon: CapIcon,
-  },
-  {
-    title: 'Improve',
-    body: 'Receive detailed AI feedback when the new analyzer becomes available.',
-    Icon: ChartIcon,
+    title: 'Analyze & improve',
+    body: 'Get personalized AI feedback to strengthen your statement. Coming soon.',
+    available: false,
+    Icon: FeedbackIcon,
   },
 ]
 
@@ -511,20 +525,25 @@ function PenIcon() {
   )
 }
 
-function CapIcon() {
+/** Two ways forward, neither of them the main one: the card offers a choice. */
+function PathIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-7 w-7">
-      <path d="M12 4 2 9l10 5 10-5-10-5Z" />
-      <path d="M6 11.5V16c0 1.4 2.7 2.8 6 2.8s6-1.4 6-2.8v-4.5" />
-      <path d="M21 9.5v5" />
+      <path d="M12 21v-6" />
+      <path d="M12 15c0-3 -2-4 -4-5S5 7 5 5" />
+      <path d="M12 15c0-3 2-4 4-5s3-3 3-5" />
+      <path d="M3 5h4v-2" />
+      <path d="M21 5h-4v-2" />
     </svg>
   )
 }
 
-function ChartIcon() {
+/** Notes written back on a draft: feedback, not analytics. */
+function FeedbackIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-7 w-7">
-      <path d="M4 20V11M10 20V5M16 20v-6M22 20H2" />
+      <path d="M20 14a2 2 0 0 1-2 2H8l-4 3.5V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z" />
+      <path d="M8 8h8M8 11.5h5" />
     </svg>
   )
 }
@@ -533,14 +552,6 @@ function PlusIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" className="h-4 w-4">
       <path d="M12 5v14M5 12h14" />
-    </svg>
-  )
-}
-
-function PlayIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" className="h-3 w-3">
-      <path d="M8 5.5v13l11-6.5-11-6.5Z" />
     </svg>
   )
 }

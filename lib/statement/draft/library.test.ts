@@ -577,9 +577,15 @@ test('the list delegates searching and ordering rather than doing either', () =>
   assert.doesNotMatch(LIST, /localeCompare/, 'it would disagree across a hydration boundary')
 })
 
-test('Learn how it works points at something that exists', () => {
-  assert.match(LIST, /href="#how-it-works"/)
-  assert.match(LIST, /id="how-it-works"/, 'a link to a missing anchor is an ornament')
+test('the hero carries one action, and no in-page link beside it', () => {
+  // A "learn how it works" link used to sit here pointing at the three cards
+  // directly below it. It competed with the only thing there is to do on this
+  // screen, and the cards are reached by scrolling regardless.
+  assert.doesNotMatch(LIST, /href="#/, 'no in-page anchor remains')
+  assert.doesNotMatch(LIST, /Learn how it works|PlayIcon/, 'and neither does its icon')
+  // The section heading keeps its id: the section is labelled by it.
+  assert.match(LIST, /id="how-it-works"/)
+  assert.match(LIST, /aria-labelledby="how-it-works"/)
 })
 
 test('a card still reads only the fields a summary carries', () => {
@@ -603,7 +609,9 @@ test('the notice no longer claims that upload is unwired', () => {
 
 test('the three steps are data, and every icon is decorative', () => {
   assert.match(LIST, /STEPS\.map\(/)
-  for (const step of [/title: 'Write'/, /title: 'Personalize'/, /title: 'Improve'/]) {
+  for (const step of [
+    /title: 'Choose your path'/, /title: 'Write your story'/, /title: 'Analyze & improve'/,
+  ]) {
     assert.match(LIST, step)
   }
   // Every drawing repeats adjacent text, so every one is hidden from assistive
@@ -851,13 +859,68 @@ test('neither path is preselected', () => {
   assert.equal(DIALOG.split("setPath('general')").length - 1, 2, 'the choice, and the dead-end exit')
 })
 
-test('the dialog authors no canonical prompt value, anywhere', () => {
-  // The whole trust boundary, as a property of the source: a field it cannot
-  // name is a field it cannot send.
-  for (const canonical of ['schoolId', 'school_id', 'promptText:', 'prompt_text',
-                           'statedMaxWords:', 'stated_max_words']) {
-    assert.equal(DIALOG.includes(canonical), false, `the dialog must not name ${canonical}`)
+test('the dialog authors no canonical value on the APPROVED path', () => {
+  // THIS GUARANTEE NARROWED WHEN PASTING ARRIVED, and the narrowing is the
+  // feature rather than a weakening of it.
+  //
+  // Before, the dialog could name no prompt wording at all, because the only
+  // school-specific path was "choose a prompt the catalog already holds" and
+  // on that path the wording is the server's to resolve. That is still true
+  // and still asserted below: the approved request carries an id and nothing
+  // else.
+  //
+  // A PASTED PROMPT IS DIFFERENT IN KIND. The applicant is typing their
+  // school's question, so the browser necessarily authors it -- and what keeps
+  // that safe is not that the words never appear here, but WHERE THEY GO: into
+  // statement_prompt_submissions with status 'pending', under a nested
+  // `promptSubmission` key, never into the catalog and never into the draft's
+  // prompt_id. The database enforces the last part with a CHECK.
+  //
+  // The approved path still sends an id and nothing more.
+  assert.match(DIALOG, /createRequestFor\(\{ path, title, promptId:/)
+  const approved = DIALOG.slice(DIALOG.indexOf('createRequestFor({ path, title'))
+  assert.doesNotMatch(approved.slice(0, 200), /promptText|statedMaxWords/)
+
+  // DATABASE COLUMN NAMES STAY BANNED OUTRIGHT. A browser spelling a column is
+  // a browser shaping a row, and no path here has any business doing that.
+  for (const column of ['school_id', 'prompt_text', 'stated_max_words', 'prompt_id',
+                        'prompt_submission_id', 'is_active']) {
+    assert.equal(DIALOG.includes(column), false, `the dialog must not name ${column}`)
   }
+
+  // Everything the applicant types is nested under one key by the builder, so
+  // no pasted value can arrive at the top level of a create body.
+  assert.match(DIALOG, /newPastedDraftRequest\(title, school === null \? null : school\.id, pasted\)/)
+  assert.doesNotMatch(DIALOG, /promptSubmission:/, 'the body is built by the builder, not here')
+})
+
+test('a pasted prompt never travels the approved-prompt branch', () => {
+  // The paste is tested FIRST, so a request carrying one can never fall
+  // through to the branch that means "the catalog vouches for this".
+  assert.match(DIALOG, /const request = pasted !== null\s*\n\s*\? newPastedDraftRequest/)
+  // Choosing a listed prompt clears any paste, and pasting clears any choice.
+  assert.match(DIALOG, /setPasted\(null\); setPrompt\(choice\)/)
+  assert.match(DIALOG, /setPrompt\(null\)\s*\n\s*setPasted\(EMPTY_PASTE\)/)
+})
+
+test('a paste cannot outlive the school it was typed for', () => {
+  assert.match(DIALOG, /if \(browsing\.current !== option\.id\) setPasted\(null\)/)
+})
+
+test('the paste option is gated, and defaults to unavailable', () => {
+  // Until the submission migrations are applied there is no table to write.
+  assert.match(DIALOG, /submissionsEnabled = false/)
+  assert.match(DIALOG, /!loading && submissionsEnabled &&/)
+})
+
+test('a pasted prompt is labelled as unverified wherever it is shown', () => {
+  assert.match(DIALOG, /NEW_DRAFT_MESSAGES\.unverifiedBadge/)
+  assert.match(DIALOG, /NEW_DRAFT_MESSAGES\.pasteNotice/)
+  assert.match(DIALOG, /NEW_DRAFT_MESSAGES\.pasteConfirm/)
+  // Consent is a real checkbox bound to state, not a sentence beside a button.
+  assert.match(DIALOG, /checked=\{pasted\.confirmed\}/)
+  // The wording is rendered as escaped text, never as markup.
+  assert.doesNotMatch(DIALOG, /dangerouslySetInnerHTML/)
 })
 
 test('the prompt wording is rendered as escaped text, never as markup', () => {
@@ -875,4 +938,33 @@ test('the dialog is still a modal with a focus trap', () => {
   // Back is a navigation, not a close: only Cancel and Escape reach onClose.
   const back = DIALOG.slice(DIALOG.indexOf('const goBack'), DIALOG.indexOf('const submit'))
   assert.doesNotMatch(back, /onClose/)
+})
+
+test('the first card offers a general statement as an equal choice', () => {
+  // The dialog's first screen presents a school and a general statement side by
+  // side, and this card has to say the same thing. An applicant writing one
+  // statement for several programmes is not doing it wrong, and a card reading
+  // "choose your school" would tell them they were.
+  assert.match(LIST, /or start a general statement/)
+  assert.doesNotMatch(LIST, /You must (choose|select) a school|Choose your school first/)
+})
+
+test('the third card is marked as not built yet, in words and in styling', () => {
+  // Two signals, because the sentence is the last thing read on the card.
+  assert.match(LIST, /Coming soon\./, 'the sentence says so')
+  assert.match(LIST, /available: false/, 'and the card is flagged as unbuilt')
+  assert.match(LIST, /step\.available \? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-400'/)
+
+  // Exactly one of the three is unbuilt: drafting and upload both ship today.
+  assert.equal(countOf(LIST, /available: true/g), 2)
+  assert.equal(countOf(LIST, /available: false/g), 1)
+})
+
+test('the cards describe the creation flow, not the one that preceded it', () => {
+  // The old wording described a Write/Personalize order that the guided dialog
+  // reversed: a path is chosen before anything is written.
+  for (const stale of [/title: 'Write',/, /title: 'Personalize'/, /title: 'Improve'/]) {
+    assert.doesNotMatch(LIST, stale)
+  }
+  assert.match(LIST, /upload an existing document/, 'upload is still described, and still real')
 })
