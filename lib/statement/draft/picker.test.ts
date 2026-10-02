@@ -9,6 +9,7 @@ import {
   promptForRequest,
   promptListFrom, promptsPath, samePendingPrompt, savedPromptFromResponse, schoolLabel,
   wordLimitLabel,
+  schoolNameFor,
 } from './picker.ts'
 import type { PendingPrompt } from './picker.ts'
 // Imported ONLY to build the three request bodies this lifecycle produces.
@@ -982,4 +983,48 @@ test('component: accessible, and usable on a phone', () => {
   assert.equal((PICKER.match(/type="button"/g) ?? []).length >= 4, true)
   // Wrapping rows rather than fixed widths.
   assert.match(PICKER, /flex-wrap/)
+})
+
+test('a saved snapshot can be given its school’s name', () => {
+  const schools = [
+    { id: 'aaaaaaaa-0000-4000-8000-000000000001', name: 'Duke University', locationState: 'NC' },
+    { id: 'aaaaaaaa-0000-4000-8000-000000000002', name: 'Rutgers', locationState: null },
+  ]
+  assert.equal(schoolNameFor(schools, schools[0].id), 'Duke University — NC')
+  // The null-state case goes through schoolLabel, so there is no dangling dash.
+  assert.equal(schoolNameFor(schools, schools[1].id), 'Rutgers')
+})
+
+test('an unknown school id gets NULL, never an invented name', () => {
+  // A draft can outlive a directory entry. The saved WORDING is on screen
+  // either way, which is the part that matters.
+  const schools = [{ id: 'aaaaaaaa-0000-4000-8000-000000000001', name: 'Duke', locationState: 'NC' }]
+  assert.equal(schoolNameFor(schools, 'aaaaaaaa-0000-4000-8000-00000000beef'), null)
+  assert.equal(schoolNameFor(schools, null), null)
+  assert.equal(schoolNameFor(schools, '' as never), null)
+  assert.equal(schoolNameFor([], 'aaaaaaaa-0000-4000-8000-000000000001'), null)
+})
+
+test('the picker can omit the saved panel the parent already shows', () => {
+  // A presentation prop only. The markup is unchanged and still rendered
+  // whenever the component is used on its own.
+  assert.match(PICKER, /savedShownByParent = false/, 'and it defaults to showing it')
+  assert.match(PICKER, /savedShownByParent \? null : savedVisible \? \(/)
+  assert.match(PICKER, /\{!savedShownByParent && \(/, 'the heading goes with it')
+  // Still there, still whitespace-preserving, for every other caller.
+  assert.match(PICKER, /whitespace-pre-wrap[^\n]*>\s*\n?\s*\{saved\.promptText\}/)
+})
+
+test('NO RULE, GUARD OR REQUEST IS CONDITIONAL ON THE PRESENTATION PROP', () => {
+  // The confirmation warning in particular is still rendered: an unconfirmed
+  // save must stay visible wherever this component appears.
+  const warning = PICKER.slice(PICKER.indexOf('confirmationApplies({'))
+  assert.doesNotMatch(warning.slice(0, 200), /savedShownByParent/)
+  for (const rule of ['fetch(promptsPath(', 'mayApplyPrompts(', 'needsPromptWrite(',
+                      'promptBadgeFor(', 'browsingRef.current']) {
+    const at = PICKER.indexOf(rule)
+    assert.notEqual(at, -1, rule)
+    assert.doesNotMatch(PICKER.slice(Math.max(0, at - 160), at), /savedShownByParent/,
+      `${rule} must not depend on presentation`)
+  }
 })

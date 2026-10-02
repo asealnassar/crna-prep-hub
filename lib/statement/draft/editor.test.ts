@@ -33,6 +33,8 @@ import {
   statementSaveRequest,
   statementStatus,
   titleAfterSave,
+  wordCount,
+  wordLimitProgress,
 } from './editor.ts'
 
 /**
@@ -573,9 +575,19 @@ test('ONLY A PROMPT ID EVER ENTERS A REQUEST', () => {
   // browser-authored, and the id must only ever come from the picker.
 
   // 1. The canonical three are READ from the server and written nowhere else.
+  //
+  // `prompt.<field>` JOINED THIS LIST WITH THE TWO-COLUMN EDITOR, and it is a
+  // read rather than a write: `prompt` is the draft's own saved snapshot, seeded
+  // from draft.* and replaced only from outcome.draft.* -- both server values --
+  // and the reference panel renders it. That is the point of a snapshot, and
+  // part 2 below is what still guarantees none of it travels outwards.
   for (const field of ['schoolId', 'promptText', 'statedMaxWords']) {
     const uses = [...new Set(CLIENT.match(new RegExp(`[\\w.]*${field}[\\w.]*`, 'g')) ?? [])].sort()
-    assert.deepEqual(uses, [field, `draft.${field}`, `outcome.draft.${field}`].sort(), field)
+    assert.deepEqual(
+      uses,
+      [field, `draft.${field}`, `outcome.draft.${field}`, `prompt.${field}`].sort(),
+      field,
+    )
   }
 
   // 2. THE ONLY VALUE THAT TRAVELS OUT is promptForRequest(captured) -- a uuid
@@ -1977,4 +1989,205 @@ test('arbitrary server prose can never reach the title field', () => {
   const attempt = saveAttemptFor({ title: PADDED, essay: doc.essay, revision: 7 })
   assert.equal(attempt.ok && attempt.snapshot.sent, TRIMMED)
   assert.doesNotMatch(CLIENT, /body\.draft\.title|body\.title/)
+})
+
+/* ===========================================================================
+ * THE WRITING WORKSPACE.
+ *
+ * The counters RUN; the layout assertions read the component's source, which
+ * node --test cannot import. Neither is a browser, and none of this says how
+ * anything looks.
+ * ======================================================================== */
+
+test('a word count is words, and an empty page is zero', () => {
+  assert.equal(wordCount(''), 0)
+  assert.equal(wordCount('   \n\n\t '), 0, 'whitespace is not a word')
+  assert.equal(wordCount('one'), 1)
+  assert.equal(wordCount('  one  '), 1, 'the ends do not count')
+  assert.equal(wordCount('one two three'), 3)
+  // A paragraph break is one separator, not an extra word.
+  assert.equal(wordCount('one two\n\n\nthree   four'), 4)
+  assert.equal(wordCount('line one\nline two'), 4)
+})
+
+test('hyphens and apostrophes stay inside one word', () => {
+  assert.equal(wordCount("evidence-based practice"), 2)
+  assert.equal(wordCount("I'm a nurse"), 3)
+})
+
+test('the word count is display only and refuses nothing', () => {
+  // The stored ceiling is MAX_SAVED_CHARS, counted in characters. A word count
+  // that could block a save would be a second limit nobody agreed to.
+  assert.equal(wordCount(42 as never), 0, 'a non-string is zero, never a throw')
+  assert.doesNotMatch(CLIENT, /wordCount\([^)]*\)\s*>\s*\d/, 'no save decision reads it')
+  assert.doesNotMatch(CLIENT, /blocked.*wordCount|wordCount.*blocked/)
+})
+
+test('a school that stated no limit gets no progress at all', () => {
+  // NULL IS NOT ZERO. A school that published no limit has not published a
+  // limit of nothing, and an empty bar would read as "none of your allowance".
+  assert.equal(wordLimitProgress({ words: 100, statedMaxWords: null }), null)
+  assert.equal(wordLimitProgress({ words: 100, statedMaxWords: 0 }), null)
+  assert.equal(wordLimitProgress({ words: 100, statedMaxWords: -5 }), null)
+})
+
+test('progress reports going over without clamping the truth', () => {
+  const under = wordLimitProgress({ words: 250, statedMaxWords: 500 })
+  assert.deepEqual(under, { words: 250, limit: 500, ratio: 0.5, over: false, remaining: 250 })
+
+  const over = wordLimitProgress({ words: 600, statedMaxWords: 500 })
+  assert.equal(over?.over, true)
+  assert.equal(over?.remaining, -100, 'the overshoot is reported honestly')
+  // The RATIO is clamped so a bar stays inside its track; the numbers are not.
+  assert.equal(over?.ratio, 1)
+
+  const empty = wordLimitProgress({ words: 0, statedMaxWords: 500 })
+  assert.equal(empty?.ratio, 0)
+  assert.equal(empty?.over, false)
+})
+
+test('the editor reserves the fixed nav, exactly as the library does', () => {
+  // Without it, mx-auto centres against the viewport and the nav covers the
+  // left of the result. The width is read from the shared context so the
+  // editor reflows when the nav is collapsed.
+  assert.match(CLIENT, /useSidebarCollapsed/)
+  assert.match(CLIENT, /sidebarCollapsed \? 'lg:ml-20' : 'lg:ml-64'/)
+  assert.match(CLIENT, /min-w-0 flex-1/, 'a flex item must be allowed to shrink')
+  assert.match(CLIENT, /pt-16 lg:pt-0/, 'the floating menu button needs clearing below lg')
+  assert.equal(
+    (CLIENT.match(/ml-64/g) ?? []).length, (CLIENT.match(/lg:ml-64/g) ?? []).length,
+    'the offset is lg-only',
+  )
+})
+
+test('two columns on desktop, one on everything smaller', () => {
+  assert.match(CLIENT, /lg:grid-cols-12/)
+  assert.match(CLIENT, /lg:col-span-8/, 'the statement takes two thirds')
+  assert.match(CLIENT, /lg:col-span-4/, 'the prompt takes one')
+  // Nothing is a column below lg, so the sections stack.
+  assert.doesNotMatch(CLIENT, /(?<!lg:)grid-cols-12/)
+})
+
+test('the prompt panel sticks without covering anything or trapping scroll', () => {
+  assert.match(CLIENT, /lg:sticky lg:top-5 lg:self-start/)
+  // self-start keeps it at content height: a stretched grid item has nowhere
+  // to stick. Its own max-height and overflow keep a long question inside it.
+  assert.match(CLIENT, /lg:max-h-\[calc\(100vh-2\.5rem\)\] lg:overflow-y-auto/)
+  assert.match(CLIENT, /lg:overscroll-contain/, 'scrolling the panel must not chain to the page')
+  assert.match(CLIENT, /items-start/, 'and the row must not stretch its children')
+})
+
+test('the writing area is still a textarea, and still refuses to truncate', () => {
+  assert.match(CLIENT, /<textarea/)
+  assert.match(CLIENT, /value=\{essay\}/)
+  assert.match(CLIENT, /readOnly=\{conflicted\}/)
+  assert.doesNotMatch(CLIENT, /maxLength/)
+  assert.doesNotMatch(CLIENT, /\.slice\(0,|substring\(/)
+  // No rich-text editor arrived wearing a layout change's clothes.
+  assert.doesNotMatch(CLIENT, /contentEditable|dangerouslySetInnerHTML|execCommand/)
+  assert.match(CLIENT, /min-h-\[32rem\]/, 'and it is generous before anything is typed')
+})
+
+test('the import control is still reachable by keyboard', () => {
+  // sr-only, NOT hidden: a display:none input is not focusable, so the label
+  // would be unreachable without a mouse.
+  const input = CLIENT.slice(CLIENT.indexOf('ref={fileInput}'))
+  assert.match(input.slice(0, 320), /className="sr-only"/)
+  assert.doesNotMatch(input.slice(0, 320), /className="hidden"/)
+  assert.match(CLIENT, /accept=\{ACCEPT_ATTRIBUTE\}/)
+})
+
+test('the banner says what is actually built', () => {
+  // Import shipped; the analyser did not. The old wording claimed the opposite
+  // about upload.
+  assert.doesNotMatch(CLIENT, /not wired up/i)
+  assert.match(CLIENT, /Drafting and document import are available/)
+  assert.match(CLIENT, /AI analyzer is not built yet/)
+})
+
+test('the analyzer area is a label, not a button', () => {
+  const area = CLIENT.slice(CLIENT.indexOf('Analyze this draft'))
+  assert.match(area.slice(0, 400), /Coming soon/)
+  assert.doesNotMatch(area.slice(0, 400), /<button/, 'nothing clickable with nothing behind it')
+  assert.doesNotMatch(CLIENT, /onAnalyze|analyzeDraft|\/api\/statement\/analyze/)
+})
+
+test('the redesign added no request, and no database access', () => {
+  // Still exactly the three fetches this editor has always made.
+  assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 3)
+  for (const forbidden of [/createClient/, /supabase/i, /@supabase/]) {
+    assert.doesNotMatch(CLIENT, forbidden)
+  }
+  // And no write of any kind for a counter or a layout preference.
+  assert.doesNotMatch(CLIENT, /localStorage|sessionStorage/)
+})
+
+test('the saved snapshot is what is rendered, never the catalog', () => {
+  assert.match(CLIENT, /\{prompt\.promptText\}/)
+  assert.match(CLIENT, /saved=\{prompt\}/)
+  // The school NAME is looked up, which is a label for an id the draft already
+  // holds -- not a second source for the wording.
+  assert.match(CLIENT, /schoolNameFor\(schools, prompt\.schoolId\)/)
+  assert.doesNotMatch(CLIENT, /schools\.map|schools\.filter/)
+})
+
+/* ===========================================================================
+ * ONE PROMPT ON SCREEN, AND CONTROLS THAT STAY OUT OF THE WAY.
+ * ======================================================================== */
+
+test('the saved prompt is rendered once, by the panel, not twice', () => {
+  // The editor shows the snapshot; the picker is told the parent has it and
+  // omits its own copy. Two renderings of one question on one screen is the
+  // thing this removes.
+  assert.match(CLIENT, /savedShownByParent/)
+  assert.match(CLIENT, /\{prompt\.promptText\}/)
+  assert.equal((CLIENT.match(/\{prompt\.promptText\}/g) ?? []).length, 1)
+  // And the panel keeps everything the applicant needs beside it.
+  assert.match(CLIENT, /schoolNameFor\(schools, prompt\.schoolId\)/)
+  assert.match(CLIENT, /wordLimitLabel\(prompt\.statedMaxWords\)/)
+  assert.match(CLIENT, /\{promptNotice\}/)
+})
+
+test('the controls are collapsed once a prompt is attached, and reachable', () => {
+  assert.match(CLIENT, /const \[pickerExpanded, setPickerExpanded\] = useState\(false\)/)
+  assert.match(CLIENT, /Change school or prompt/)
+  assert.match(CLIENT, /aria-expanded=\{pickerOpen\}/)
+  assert.match(CLIENT, /aria-controls="statement-prompt-controls"/)
+  assert.match(CLIENT, /id="statement-prompt-controls"/)
+  // A general draft opens on the picker: it is the whole point of that panel.
+  assert.match(CLIENT, /const pickerOpen = !hasPrompt \|\| pickerExpanded \|\| confirmPending/)
+})
+
+test('AN UNCONFIRMED PROMPT SAVE CANNOT BE COLLAPSED AWAY FROM', () => {
+  // The warning and its deliberate retry live inside the picker. A draft whose
+  // prompt save came back unreadable must never leave the applicant believing
+  // it was saved, so while that warning applies the panel is forced open and
+  // the toggle is withdrawn.
+  assert.match(CLIENT, /const confirmPending = confirmationApplies\(\{/)
+  assert.match(CLIENT, /failedToken: promptConfirmFailed/)
+  assert.match(CLIENT, /pending: pendingView/)
+  assert.match(CLIENT, /\{hasPrompt && !confirmPending && \(/, 'no toggle while it applies')
+})
+
+test('collapsing hides without unmounting, so nothing is thrown away', () => {
+  // `hidden` removes the subtree from layout, tab order and the accessibility
+  // tree while the component keeps its state -- a search in progress survives,
+  // and a reply still in flight lands on a component that is still mounted.
+  assert.match(CLIENT, /hidden=\{!pickerOpen\}/)
+  assert.doesNotMatch(CLIENT, /\{pickerOpen && <PromptPicker/, 'unmounting would discard state')
+})
+
+test('opening or closing the controls saves nothing', () => {
+  // The toggle writes one boolean and touches no draft state, no engine event
+  // and no request.
+  // Sliced to the button's CLOSING TAG, not to the first '>': the arrow
+  // function in onClick contains one, and cutting there would read nothing.
+  const from = CLIENT.indexOf('aria-expanded={pickerOpen}')
+  assert.notEqual(from, -1, 'the toggle was not found')
+  const handler = CLIENT.slice(from, CLIENT.indexOf('</button>', from))
+  assert.ok(handler.length > 0)
+  assert.match(handler, /setPickerExpanded\(\(open\) => !open\)/)
+  for (const forbidden of [/setPrompt\(/, /dispatch/, /startSave/, /fetch\(/, /choosePrompt/]) {
+    assert.doesNotMatch(handler, forbidden, 'the toggle is presentation only')
+  }
 })

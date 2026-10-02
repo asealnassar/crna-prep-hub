@@ -9,14 +9,15 @@ import {
   type AutosaveState,
 } from '@/lib/resume/draft/autosave'
 import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
+import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { MAX_TITLE_CHARS, isPromptId } from '@/lib/statement/draft/validate'
 import type { DraftPromptSnapshot, StatementDraft } from '@/lib/statement/draft/rows'
 import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
 import {
   PICKER_MESSAGES, confirmationApplies, needsPromptWrite, nextPendingPrompt,
-  promptForRequest, samePendingPrompt, savedPromptFromResponse,
+  promptForRequest, samePendingPrompt, savedPromptFromResponse, schoolNameFor,
+  wordLimitLabel, type PendingPrompt,
 } from '@/lib/statement/draft/picker'
-import type { PendingPrompt } from '@/lib/statement/draft/picker'
 import PromptPicker from './PromptPicker'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
@@ -43,6 +44,8 @@ import {
   statementSaveRequest,
   statementStatus,
   titleAfterSave,
+  wordCount,
+  wordLimitProgress,
   type SaveSnapshot,
 } from '@/lib/statement/draft/editor'
 
@@ -137,6 +140,17 @@ export default function StatementStudioClient({
   promptNotice?: string | null
 }) {
   const router = useRouter()
+  /** The nav is fixed and out of flow; this is how wide a space it reserves. */
+  const { sidebarCollapsed } = useSidebarCollapsed()
+  /**
+   * Whether the school and prompt controls are showing.
+   *
+   * PRESENTATION ONLY, AND IT SAVES NOTHING. Opening this changes no state the
+   * picker reads, issues no request and dispatches no autosave event -- it is a
+   * class on a wrapper. Closing it is equally inert, which is what makes
+   * "look at the options and change your mind" cost nothing.
+   */
+  const [pickerExpanded, setPickerExpanded] = useState(false)
 
   /** Read-only, but stateful: a reload may bring a title changed elsewhere. */
   const [title, setTitle] = useState(draft.title)
@@ -844,226 +858,458 @@ export default function StatementStudioClient({
   const titleCharacters = title.trim().length
   const canRetry = canRetrySave({ state: save, title, essay })
 
+  /** Display only. Nothing is saved, limited or refused because of these. */
+  const words = wordCount(essay)
+  const limit = wordLimitProgress({ words, statedMaxWords: prompt.statedMaxWords })
+  /** The saved snapshot's school, named from the directory the server sent. */
+  const promptSchool = schoolNameFor(schools, prompt.schoolId)
+  const hasPrompt = prompt.promptText !== null
+  /**
+   * AN UNCONFIRMED PROMPT SAVE FORCES THE PANEL OPEN, and this is the reason
+   * the collapse is not simply a boolean.
+   *
+   * The confirmation warning and its deliberate retry live INSIDE PromptPicker.
+   * A draft whose prompt save came back unreadable must never leave the
+   * applicant believing it was saved -- so while that warning applies, the
+   * controls cannot be collapsed away from it and the toggle is withdrawn.
+   * The same predicate the picker renders the warning with decides this, so the
+   * two cannot disagree.
+   */
+  const confirmPending = confirmationApplies({
+    failedToken: promptConfirmFailed,
+    pending: pendingView,
+  })
+  /** A general draft opens on the picker: it is the whole point of the panel. */
+  const pickerOpen = !hasPrompt || pickerExpanded || confirmPending
+
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
-      <p className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
-        Internal preview. Upload and “Analyze this Draft” are not wired up yet.
-      </p>
-
-      <a
-        href={LIBRARY}
-        onClick={goToLibrary}
-        className="text-sm font-medium text-blue-700 hover:underline"
-      >
-        {leaving ? 'Saving before leaving…' : '← All drafts'}
-      </a>
-
-      <div className="mt-4 flex items-start justify-between gap-4">
-        {/*
-          EDITABLE, and saved with the essay as one document. No maxLength:
-          stopping at the limit would silently shorten a pasted title, which is
-          the one thing the rules say not to do. A long title is refused,
-          visibly, with the count in front of the applicant.
-
-          readOnly (not disabled) while frozen, so a conflicted title stays
-          selectable and copyable alongside the essay.
-        */}
-        <div className="min-w-0 flex-1">
-          <label htmlFor="statement-title" className="sr-only">
-            Draft title
-          </label>
-          <input
-            id="statement-title"
-            type="text"
-            value={title}
-            onChange={(event) => onTitleChange(event.target.value)}
-            readOnly={conflicted}
-            autoComplete="off"
-            spellCheck
-            placeholder="Give this draft a title"
-            className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1 -ml-2 text-2xl font-bold text-slate-900 hover:border-gray-300 focus:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 read-only:hover:border-transparent"
-          />
-        </div>
-        <p
-          role="status"
-          aria-live="polite"
-          className={
-            status.frozen
-              ? 'shrink-0 rounded-lg border border-red-300 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-800'
-              : 'shrink-0 rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-600'
-          }
-        >
-          {status.text}
-        </p>
-      </div>
-
-      <p className="mt-1 text-xs text-slate-500">
-        Revision {save.revision} · title {titleCharacters.toLocaleString('en-US')}/
-        {MAX_TITLE_CHARS.toLocaleString('en-US')}
-        {titleCharacters > MAX_TITLE_CHARS ? ' — too long to save' : ''} · essay{' '}
-        {essay.length.toLocaleString('en-US')} of{' '}
-        {MAX_SAVED_CHARS.toLocaleString('en-US')} characters
-      </p>
-
+    <div className="flex min-h-screen bg-slate-50">
       {/*
-        A real file input, no drag-and-drop. `accept` offers the three formats
-        the route can read; the byte-signature check on the server is the
-        authority, and a renamed file is refused there rather than here.
+        THE NAV IS `fixed`, so it is out of flow and this page would otherwise
+        start at the left edge of the VIEWPORT with the sidebar painted over it.
+        The same reservation the Draft Library makes, read from the same shared
+        context so the editor reflows when the nav is collapsed. `min-w-0` is
+        what stops a long unbroken paste forcing a sideways scroll: a flex item
+        defaults to min-width:auto and would refuse to shrink below its content.
       */}
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <label
-          className={
-            importing || conflicted
-              ? 'cursor-not-allowed rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm font-medium text-slate-400'
-              : 'cursor-pointer rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-gray-50'
-          }
-        >
-          {importing ? 'Reading document…' : 'Import PDF, DOCX or TXT'}
-          <input
-            ref={fileInput}
-            type="file"
-            accept={ACCEPT_ATTRIBUTE}
-            disabled={importing || conflicted}
-            onChange={(event) => void onFileChosen(event.target.files)}
-            className="hidden"
-          />
-        </label>
-        <span className="text-xs text-slate-500">
-          Replaces the essay. The title is left alone.
-        </span>
-      </div>
-
-      {importNotice !== null && (
-        <p
-          role="status"
-          className={
-            importNotice.overLimit
-              ? 'mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900'
-              : 'mt-3 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900'
-          }
-        >
-          {importNotice.text}
-        </p>
-      )}
-
-      {importError !== null && (
-        <p
-          role="alert"
-          className="mt-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"
-        >
-          {importError}
-        </p>
-      )}
-
-      {conflicted && (
-        <div className="mt-4 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-          <p className="text-sm font-semibold text-red-900">
-            This draft changed somewhere else. Saving is paused.
-          </p>
-          <p className="mt-1 text-sm text-red-800">
-            Your version is still here and nothing has been overwritten. Copy it
-            first if you want to keep it, then load the latest saved version —
-            loading will replace what is on screen.
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void copyMine()}
-              className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-900 transition hover:bg-red-100"
+      <div
+        className={`min-w-0 flex-1 transition-all duration-300 ${
+          sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'
+        } pt-16 lg:pt-0`}
+      >
+        {/* ======================================================== header */}
+        {/*
+          COMPACT ON PURPOSE. A writing application's header earns its height in
+          navigation and status, not in decoration, so this is one row on
+          desktop and wraps to two on a phone.
+        */}
+        <header className="border-b border-slate-800 bg-slate-950">
+          <div className="mx-auto w-full max-w-[1600px] px-4 py-3 sm:px-6 lg:px-8">
+            <a
+              href={LIBRARY}
+              onClick={goToLibrary}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
             >
-              Copy my version
-            </button>
-            <button
-              type="button"
-              onClick={() => void reloadLatest()}
-              disabled={reloading}
-              className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60"
+              {leaving ? 'Saving before leaving…' : '← All drafts'}
+            </a>
+
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="min-w-0 flex-1">
+                <label htmlFor="statement-title" className="sr-only">
+                  Draft title
+                </label>
+                {/*
+                  EDITABLE, and saved with the essay as one document. No
+                  maxLength: stopping at the limit would silently shorten a
+                  pasted title, which is the one thing the rules say not to do.
+                  A long title is refused, visibly, with the count in front of
+                  the applicant.
+
+                  readOnly (not disabled) while frozen, so a conflicted title
+                  stays selectable and copyable alongside the essay.
+                */}
+                <input
+                  id="statement-title"
+                  type="text"
+                  value={title}
+                  onChange={(event) => onTitleChange(event.target.value)}
+                  readOnly={conflicted}
+                  autoComplete="off"
+                  spellCheck
+                  placeholder="Give this draft a title"
+                  className="-ml-2 w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-xl font-bold text-white placeholder:text-slate-500 hover:border-slate-700 focus:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 read-only:hover:border-transparent sm:text-2xl"
+                />
+              </div>
+
+              <p
+                role="status"
+                aria-live="polite"
+                className={
+                  status.frozen
+                    ? 'shrink-0 rounded-lg border border-red-400/40 bg-red-500/15 px-2.5 py-1 text-xs font-medium text-red-200'
+                    : 'shrink-0 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-medium text-slate-300'
+                }
+              >
+                {status.text}
+              </p>
+            </div>
+
+            {/* The numbers that matter while writing, in one quiet row. */}
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+              <span className="font-semibold text-slate-300">
+                {words.toLocaleString('en-US')} {words === 1 ? 'word' : 'words'}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>
+                {essay.length.toLocaleString('en-US')} of{' '}
+                {MAX_SAVED_CHARS.toLocaleString('en-US')} characters
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>Revision {save.revision}</span>
+              <span aria-hidden="true">·</span>
+              <span className={titleCharacters > MAX_TITLE_CHARS ? 'text-red-300' : undefined}>
+                title {titleCharacters.toLocaleString('en-US')}/
+                {MAX_TITLE_CHARS.toLocaleString('en-US')}
+                {titleCharacters > MAX_TITLE_CHARS ? ' — too long to save' : ''}
+              </span>
+            </p>
+          </div>
+        </header>
+
+        <div className="mx-auto w-full max-w-[1600px] px-4 pb-16 pt-5 sm:px-6 lg:px-8">
+          {/* ACCURATE ABOUT WHAT IS BUILT. Drafting and document import both
+              work; the analyser does not exist yet. The previous wording said
+              upload was unwired, which stopped being true when upload shipped. */}
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-2.5 text-xs text-slate-700">
+            <span className="font-semibold text-slate-900">Internal preview</span>
+            <span aria-hidden="true" className="text-slate-300">·</span>
+            <span>
+              Drafting and document import are available. The AI analyzer is not built yet.
+            </span>
+          </p>
+
+          {/* ------------------------------------- messages, above both columns */}
+          {importNotice !== null && (
+            <p
+              role="status"
+              className={
+                importNotice.overLimit
+                  ? 'mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900'
+                  : 'mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-900'
+              }
             >
-              {reloading ? 'Loading…' : 'Reload latest version'}
-            </button>
-            {copied === 'done' && (
-              <span className="text-xs font-medium text-red-900">{COPY_MESSAGES.copied}</span>
-            )}
-            {copied === 'failed' && (
-              <span className="text-xs text-red-900">{COPY_MESSAGES.failed}</span>
-            )}
+              {importNotice.text}
+            </p>
+          )}
+
+          {importError !== null && (
+            <p
+              role="alert"
+              className="mt-4 rounded-xl border border-red-300 bg-red-50 px-4 py-2.5 text-sm text-red-800"
+            >
+              {importError}
+            </p>
+          )}
+
+          {conflicted && (
+            <div className="mt-4 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
+              <p className="text-sm font-semibold text-red-900">
+                This draft changed somewhere else. Saving is paused.
+              </p>
+              <p className="mt-1 text-sm text-red-800">
+                Your version is still here and nothing has been overwritten. Copy it
+                first if you want to keep it, then load the latest saved version —
+                loading will replace what is on screen.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyMine()}
+                  className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-900 transition hover:bg-red-100"
+                >
+                  Copy my version
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void reloadLatest()}
+                  disabled={reloading}
+                  className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {reloading ? 'Loading…' : 'Reload latest version'}
+                </button>
+                {copied === 'done' && (
+                  <span className="text-xs font-medium text-red-900">{COPY_MESSAGES.copied}</span>
+                )}
+                {copied === 'failed' && (
+                  <span className="text-xs text-red-900">{COPY_MESSAGES.failed}</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {canRetry && (
+            <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
+              <p className="text-sm text-red-900">
+                The last save did not go through. Your text is still here.
+              </p>
+              <button
+                type="button"
+                onClick={retrySave}
+                className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
+          {notice !== null && (
+            <p
+              role="alert"
+              className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"
+            >
+              {notice}
+            </p>
+          )}
+
+          {/* ====================================================== two columns */}
+          {/*
+            8/12 and 4/12 on desktop, which is the approved two-thirds split.
+            `items-start` is what lets the aside be sticky: a grid item stretches
+            to the row height by default, and a stretched item has nothing to
+            stick within.
+          */}
+          <div className="mt-5 grid items-start gap-6 lg:grid-cols-12">
+            {/* ------------------------------------------- your statement */}
+            <section aria-labelledby="statement-heading" className="min-w-0 lg:col-span-8">
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3">
+                  <h2 id="statement-heading" className="text-sm font-bold text-slate-900">
+                    Your statement
+                  </h2>
+                  {/*
+                    A real file input, no drag-and-drop. `accept` offers the
+                    three formats the route can read; the byte-signature check
+                    on the server is the authority, and a renamed file is
+                    refused there rather than here.
+                  */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label
+                      className={
+                        importing || conflicted
+                          ? 'cursor-not-allowed rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-400'
+                          : 'cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus-within:ring-2 focus-within:ring-blue-500'
+                      }
+                    >
+                      {importing ? 'Reading document…' : 'Import PDF, DOCX or TXT'}
+                      <input
+                        ref={fileInput}
+                        type="file"
+                        accept={ACCEPT_ATTRIBUTE}
+                        disabled={importing || conflicted}
+                        onChange={(event) => void onFileChosen(event.target.files)}
+                        className="sr-only"
+                      />
+                    </label>
+                    <span className="text-[11px] text-slate-500">Replaces the essay.</span>
+                  </div>
+                </div>
+
+                {/*
+                  readOnly, NOT disabled, when frozen. A disabled textarea is not
+                  selectable in most browsers, and the whole point of a frozen
+                  conflict is that the applicant can still read and copy what
+                  they wrote.
+
+                  No maxLength: truncating a pasted statement would be a worse
+                  answer than refusing to save it and saying so.
+
+                  A TEXTAREA, STILL. The stored document is plain text and the
+                  autosave engine sends a string; a rich-text editor would be a
+                  content-format change wearing a layout change's clothes.
+                */}
+                <textarea
+                  value={essay}
+                  onChange={(event) => onEssayChange(event.target.value)}
+                  readOnly={conflicted}
+                  spellCheck
+                  aria-label="Personal statement"
+                  placeholder="Write your personal statement here."
+                  className="block min-h-[32rem] w-full resize-y whitespace-pre-wrap rounded-b-2xl border-0 bg-white px-6 py-6 text-[15px] leading-[1.9] text-slate-800 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 read-only:bg-slate-50 lg:min-h-[38rem] lg:px-8"
+                />
+              </div>
+
+              {/* The school's stated maximum, when it stated one. */}
+              {limit !== null && (
+                <div className="mt-3 rounded-xl border border-slate-200 bg-white px-5 py-3">
+                  <p className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-slate-700">Stated word limit</span>
+                    <span className={limit.over ? 'font-semibold text-amber-700' : 'text-slate-600'}>
+                      {limit.words.toLocaleString('en-US')} /{' '}
+                      {limit.limit.toLocaleString('en-US')}
+                      {limit.over
+                        ? ` — ${Math.abs(limit.remaining).toLocaleString('en-US')} over`
+                        : ` — ${limit.remaining.toLocaleString('en-US')} left`}
+                    </span>
+                  </p>
+                  {/*
+                    GUIDANCE, NOT A LIMIT. Going past a school's stated count
+                    does not stop a save: the stored ceiling is a character
+                    count, and this is the school's own advice.
+                  */}
+                  <div
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={limit.limit}
+                    aria-valuenow={limit.words}
+                    aria-label="Words against the school's stated limit"
+                    className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100"
+                  >
+                    <div
+                      style={{ width: `${Math.round(limit.ratio * 100)}%` }}
+                      className={`h-full rounded-full transition-all ${
+                        limit.over ? 'bg-amber-500' : 'bg-blue-600'
+                      }`}
+                    />
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {/* ------------------------------------------ your school's prompt */}
+            {/*
+              STICKY ONLY FROM lg, AND ONLY AS TALL AS THE VIEWPORT. `self-start`
+              keeps it at its content height so sticky has somewhere to travel;
+              the max-height and its own overflow mean a very long question
+              scrolls inside the panel instead of running past the footer. Below
+              lg it is an ordinary block above the writing area.
+            */}
+            <aside
+              aria-labelledby="prompt-heading"
+              className="min-w-0 lg:col-span-4 lg:sticky lg:top-5 lg:self-start lg:max-h-[calc(100vh-2.5rem)] lg:overflow-y-auto lg:overscroll-contain"
+            >
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-5 py-3">
+                  <h2 id="prompt-heading" className="text-sm font-bold text-slate-900">
+                    Your school&rsquo;s prompt
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {hasPrompt
+                      ? 'The question this draft answers.'
+                      : 'Attaching a school prompt is optional — a general statement needs none.'}
+                  </p>
+                </div>
+
+                <div className="px-5 py-4">
+                  {/* THE SAVED SNAPSHOT, not the catalog's current wording. */}
+                  {hasPrompt && (
+                    <div className="mb-4">
+                      {promptSchool !== null && (
+                        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                          {promptSchool}
+                        </p>
+                      )}
+                      <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                        {prompt.promptText}
+                      </p>
+                      <p className="mt-2 text-xs text-slate-500">
+                        {wordLimitLabel(prompt.statedMaxWords)}
+                      </p>
+                    </div>
+                  )}
+
+                  {/*
+                    WHERE THE WORDING CAME FROM. Worded on the server, where the
+                    submission can actually be resolved, and null for a catalog
+                    prompt and for a general draft -- which is every draft while
+                    the submission feature is switched off. Rendered as escaped
+                    text, never as markup.
+                  */}
+                  {promptNotice !== null && (
+                    <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-xs font-medium text-amber-900">
+                      {promptNotice}
+                    </p>
+                  )}
+
+                  {/*
+                    THE CONTROLS, COLLAPSED BY DEFAULT ONCE A PROMPT IS
+                    ATTACHED. An applicant who has chosen their question does
+                    not need a search box open beneath it, and the right column
+                    is shorter for it.
+
+                    HIDDEN, NOT UNMOUNTED. `hidden` takes the subtree out of the
+                    layout, the tab order and the accessibility tree, while the
+                    component keeps its state -- so closing the panel does not
+                    throw away a search in progress, and a reply still in flight
+                    lands on a component that is still mounted and still guarded
+                    by its own stale-response check.
+                  */}
+                  {hasPrompt && !confirmPending && (
+                    <button
+                      type="button"
+                      aria-expanded={pickerOpen}
+                      aria-controls="statement-prompt-controls"
+                      onClick={() => setPickerExpanded((open) => !open)}
+                      className="mb-4 w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    >
+                      {pickerOpen ? 'Hide school and prompt options' : 'Change school or prompt'}
+                    </button>
+                  )}
+
+                  <div
+                    id="statement-prompt-controls"
+                    hidden={!pickerOpen}
+                  >
+                  {/*
+                    WHAT THE PICKER CAN AND CANNOT DO.
+
+                    `saved` is the draft's own snapshot, so the panel shows the
+                    question this essay answers from the DRAFT rather than from
+                    the catalog. `pending` and `confirmFailedToken` let it tell
+                    saved from chosen from merely previewed.
+
+                    AND THE TWO CALLBACKS CARRY NO POWER OF THEIR OWN.
+                    `onUsePrompt` takes a uuid and `onRetryPromptSave` takes
+                    nothing; both land in handlers above that write an
+                    instruction and dispatch the engine's `edited` event. The
+                    picker still has no setter for the draft's prompt, no
+                    endpoint, and no way to reach startSave except through the
+                    ordinary autosave it shares with typing.
+                  */}
+                  <PromptPicker
+                    schools={schools}
+                    schoolsUnavailable={schoolsUnavailable}
+                    saved={prompt}
+                    pending={pendingView}
+                    confirmFailedToken={promptConfirmFailed}
+                    onUsePrompt={choosePrompt}
+                    onRetryPromptSave={retryPromptSave}
+                    savedShownByParent
+                  />
+                  </div>
+                </div>
+              </div>
+
+              {/*
+                NOT A BUTTON, BECAUSE THERE IS NOTHING BEHIND IT. An analyser
+                that looked clickable and did nothing would be worse than
+                saying plainly that it is not built.
+              */}
+              <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-4">
+                <p className="flex items-center gap-2 text-sm font-bold text-slate-500">
+                  Analyze this draft
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    Coming soon
+                  </span>
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Detailed AI feedback on your statement will appear here once the analyzer
+                  is built.
+                </p>
+              </div>
+            </aside>
           </div>
         </div>
-      )}
-
-      {canRetry && (
-        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-          <p className="text-sm text-red-900">
-            The last save did not go through. Your text is still here.
-          </p>
-          <button
-            type="button"
-            onClick={retrySave}
-            className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800"
-          >
-            Try again
-          </button>
-        </div>
-      )}
-
-      {notice !== null && (
-        <p
-          role="alert"
-          className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
-        >
-          {notice}
-        </p>
-      )}
-
-      {/*
-        readOnly, NOT disabled, when frozen. A disabled textarea is not
-        selectable in most browsers, and the whole point of a frozen conflict is
-        that the applicant can still read and copy what they wrote.
-
-        No maxLength: truncating a pasted statement would be a worse answer than
-        refusing to save it and saying so.
-      */}
-      <textarea
-        value={essay}
-        onChange={(event) => onEssayChange(event.target.value)}
-        readOnly={conflicted}
-        spellCheck
-        aria-label="Personal statement"
-        placeholder="Write your personal statement here."
-        className="mt-4 min-h-[28rem] w-full resize-y whitespace-pre-wrap rounded-xl border border-gray-300 bg-white px-4 py-4 text-sm leading-relaxed text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 read-only:bg-gray-50"
-      />
-
-      {/*
-        WHAT THE PICKER CAN AND CANNOT DO.
-
-        `saved` is the draft's own snapshot, so the panel shows the question this
-        essay answers from the DRAFT rather than from the catalog. `pending` and
-        `confirmFailedToken` let it tell saved from chosen from merely previewed.
-
-        AND THE TWO CALLBACKS CARRY NO POWER OF THEIR OWN. `onUsePrompt` takes a
-        uuid and `onRetryPromptSave` takes nothing; both land in handlers above
-        that write an instruction and dispatch the engine's `edited` event. The
-        picker still has no setter for the draft's prompt, no endpoint, and no
-        way to reach startSave except through the ordinary autosave it shares
-        with typing.
-      */}
-      {/* Shown above the picker because it is about the question already
-          attached, not about choosing another. Rendered as escaped text. */}
-      {promptNotice !== null && (
-        <p className="mx-auto mt-6 max-w-3xl rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-xs font-medium text-amber-900">
-          {promptNotice}
-        </p>
-      )}
-
-      <PromptPicker
-        schools={schools}
-        schoolsUnavailable={schoolsUnavailable}
-        saved={prompt}
-        pending={pendingView}
-        confirmFailedToken={promptConfirmFailed}
-        onUsePrompt={choosePrompt}
-        onRetryPromptSave={retryPromptSave}
-      />
-    </main>
+      </div>
+    </div>
   )
 }

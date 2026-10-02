@@ -143,6 +143,29 @@ export function schoolLabel(school: SchoolOption): string {
   return `${school.name} — ${state}`
 }
 
+/**
+ * One school's label by id, or null when the directory does not list it.
+ *
+ * FOR A SAVED SNAPSHOT, which carries a schoolId and no name. The editor shows
+ * the question a draft already answers, and "Duke University - NC" is what an
+ * applicant recognises; the uuid is not.
+ *
+ * NULL RATHER THAN A PLACEHOLDER when the id is unknown. A draft can outlive a
+ * directory entry, and inventing a name for one would be worse than saying
+ * nothing -- the caller decides what to show, and the saved WORDING is on
+ * screen regardless, which is the part that matters.
+ */
+export function schoolNameFor(
+  schools: readonly SchoolOption[],
+  schoolId: string | null,
+): string | null {
+  if (typeof schoolId !== 'string') return null
+  for (const school of schools) {
+    if (school.id === schoolId) return schoolLabel(school)
+  }
+  return null
+}
+
 /** What to say when there is no list to show. null means "show the list". */
 export function directoryNotice(input: {
   readonly unavailable: boolean

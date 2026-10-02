@@ -59,6 +59,7 @@ export default function PromptPicker({
   confirmFailedToken,
   onUsePrompt,
   onRetryPromptSave,
+  savedShownByParent = false,
 }: {
   schools: readonly SchoolOption[]
   schoolsUnavailable: boolean
@@ -76,6 +77,22 @@ export default function PromptPicker({
   onUsePrompt: (promptId: string) => void
   /** A deliberate re-attempt after a confirmation failure. */
   onRetryPromptSave: () => void
+  /**
+   * PRESENTATION ONLY: the parent is already showing the draft's saved prompt.
+   *
+   * The editor's reference panel renders the snapshot itself -- school name,
+   * wording, word limit and provenance -- so this component's own copy of it
+   * would be the same question twice on one screen. When this is set, the
+   * heading, the lead sentence and the stored-prompt panel are omitted and what
+   * remains is the part only this component has: the search, the list, the
+   * preview and Use this prompt.
+   *
+   * IT CHANGES NOTHING ELSE. No state, no fetch, no selection rule and no
+   * guard is conditional on it -- the confirmation warning in particular is
+   * still rendered, because an unconfirmed save must stay visible wherever this
+   * component appears.
+   */
+  savedShownByParent?: boolean
 }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -177,12 +194,22 @@ export default function PromptPicker({
   })
 
   return (
-    <section className="mt-6 rounded-xl border border-gray-300 bg-white px-4 py-4">
-      <h2 className="text-sm font-semibold text-slate-900">Your school&rsquo;s prompt</h2>
-      <p className="mt-1 text-xs text-slate-500">
-        Find your programme to read its personal statement question. Browsing here does not
-        change your draft.
-      </p>
+    <section
+      className={
+        savedShownByParent
+          ? 'mt-0'
+          : 'mt-6 rounded-xl border border-gray-300 bg-white px-4 py-4'
+      }
+    >
+      {!savedShownByParent && (
+        <>
+          <h2 className="text-sm font-semibold text-slate-900">Your school&rsquo;s prompt</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Find your programme to read its personal statement question. Browsing here does not
+            change your draft.
+          </p>
+        </>
+      )}
 
       {/* ---------------------------------------------- the draft's own prompt */}
       {/*
@@ -208,7 +235,9 @@ export default function PromptPicker({
         </div>
       ) : null}
 
-      {savedVisible ? (
+      {/* OMITTED WHEN THE PARENT SHOWS IT. The markup is unchanged and still
+          rendered whenever this component is used on its own. */}
+      {savedShownByParent ? null : savedVisible ? (
         <div className="mt-4 rounded-lg border border-blue-300 bg-blue-50 px-3 py-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-900">
             The prompt your draft answers

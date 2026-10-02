@@ -563,3 +563,70 @@ export function canRetrySave(input: {
     revision: input.state.revision,
   }).ok
 }
+
+/**
+ * How many words are on screen.
+ *
+ * A DISPLAY VALUE, AND NOTHING ELSE. Nothing is saved, limited, refused or
+ * sent because of this number: the stored ceiling is MAX_SAVED_CHARS and it is
+ * counted in characters, which is what the database constraint measures. A word
+ * count that could block a save would be a second limit nobody agreed to.
+ *
+ * WHITESPACE RUNS ARE ONE SEPARATOR, so a line break between paragraphs does
+ * not invent a word, and leading or trailing space does not either. An empty or
+ * whitespace-only essay is zero rather than one, which is what `filter` is for:
+ * ''.split(/\s+/) yields [''], and counting that as a word would show "1 word"
+ * over an empty page.
+ *
+ * COUNTED THE WAY A SCHOOL WOULD COUNT. Hyphenated and apostrophised forms stay
+ * one word, because they are one word; this deliberately does not try to be
+ * cleverer than the person reading the statement.
+ */
+export function wordCount(text: string): number {
+  if (typeof text !== 'string') return 0
+  const trimmed = text.trim()
+  if (trimmed.length === 0) return 0
+  return trimmed.split(/\s+/).length
+}
+
+/** Where a draft stands against a stated limit, for a progress indicator. */
+export interface WordLimitProgress {
+  readonly words: number
+  readonly limit: number
+  /** 0..1, clamped, so a bar cannot overflow its track. */
+  readonly ratio: number
+  readonly over: boolean
+  readonly remaining: number
+}
+
+/**
+ * Progress towards the school's stated maximum, or null when it stated none.
+ *
+ * NULL IS THE COMMON ANSWER and must stay distinguishable from zero: a school
+ * that published no limit is not a school that published a limit of nothing.
+ * The caller shows no bar at all in that case rather than an empty one, which
+ * would read as "you have used none of your allowance".
+ *
+ * OVER THE LIMIT IS REPORTED, NOT PREVENTED. Going past a school's word count
+ * is the applicant's business and their draft still saves normally -- the
+ * stored limit is a character ceiling, and this is a school's guidance. The
+ * ratio is clamped so the indicator stays inside its track while `over` and a
+ * negative `remaining` say what is actually true.
+ */
+export function wordLimitProgress(input: {
+  readonly words: number
+  readonly statedMaxWords: number | null
+}): WordLimitProgress | null {
+  const { words, statedMaxWords } = input
+  if (statedMaxWords === null || !Number.isFinite(statedMaxWords) || statedMaxWords <= 0) {
+    return null
+  }
+  const ratio = Math.min(1, Math.max(0, words / statedMaxWords))
+  return {
+    words,
+    limit: statedMaxWords,
+    ratio,
+    over: words > statedMaxWords,
+    remaining: statedMaxWords - words,
+  }
+}
