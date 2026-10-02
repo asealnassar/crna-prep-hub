@@ -5,6 +5,9 @@ import { statementStudioAccess, statementStudioMode } from '@/lib/statement/stud
 import { isDraftId } from '@/lib/statement/draft/http'
 import { readDraft } from '@/lib/statement/draft/draftRepo'
 import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
+import { readDraftPromptStatus } from '@/lib/statement/draft/submissionRepo'
+import { originOf, promptStatusLabel } from '@/lib/statement/draft/promptSubmission'
+import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
 import StatementStudioClient from '../components/StatementStudioClient'
 
 /**
@@ -126,6 +129,30 @@ export default async function StatementStudioPage({
    */
   const schools = await listSchoolPickerOptions(db)
 
+  // WHERE THIS DRAFT'S QUESTION CAME FROM, worded on the server.
+  //
+  // GATED, AND SKIPPED ENTIRELY WHEN OFF: until the submission migrations are
+  // applied there is no prompt_submission_id column to select, so with the flag
+  // unset not one extra query is issued and the editor receives null -- exactly
+  // the behaviour it had before this prop existed.
+  //
+  // A FAILED READ IS NOT AN ERROR PAGE. The draft is already in hand and its
+  // snapshot is what the editor renders; losing the badge costs a label, not
+  // the applicant's work, so a refusal degrades to null rather than throwing.
+  let promptNotice: string | null = null
+  if (promptSubmissionsEnabled()) {
+    const status = await readDraftPromptStatus(db, draft.id)
+    if (status.ok) {
+      promptNotice = promptStatusLabel({
+        origin: originOf({
+          promptId: draft.promptId,
+          promptSubmissionId: status.value === null ? null : status.value.submissionId,
+        }),
+        status: status.value === null ? null : status.value.status,
+      })
+    }
+  }
+
   // The persisted draft, in full, straight into the editor. Its `revision` is
   // what seeds autosave -- the client never invents one.
   return (
@@ -133,6 +160,7 @@ export default async function StatementStudioPage({
       draft={draft}
       schools={schools.ok ? schools.value : []}
       schoolsUnavailable={!schools.ok}
+      promptNotice={promptNotice}
     />
   )
 }

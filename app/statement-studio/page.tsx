@@ -4,6 +4,7 @@ import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAut
 import { statementStudioAccess, statementStudioMode } from '@/lib/statement/studioGate'
 import { listDrafts } from '@/lib/statement/draft/draftRepo'
 import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
+import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
 import LibraryClient from './components/LibraryClient'
 
 /**
@@ -102,6 +103,7 @@ export default async function StatementStudioLibraryPage() {
       drafts={listed.value}
       schools={schools.ok ? schools.value : []}
       schoolsUnavailable={!schools.ok}
+      submissionsEnabled={promptSubmissionsEnabled()}
     />
   )
 }

@@ -9,8 +9,12 @@ import {
   createRequestFor,
   promptWasRefused,
   selectionAfterSchoolChange,
+  canCreatePasteNow,
+  newPastedDraftRequest,
+  pasteIsComplete,
   stepBefore,
   stepForPath,
+  type PastedPrompt,
   type CreatePath,
   type NewDraftStep,
 } from './newDraft.ts'
@@ -238,4 +242,115 @@ test('the empty-catalog wording does not tell a reader a prompt is optional here
   // which is true in the editor and false before anything exists.
   assert.equal(NEW_DRAFT_MESSAGES.noPrompts.includes('keep writing'), false)
   assert.ok(NEW_DRAFT_MESSAGES.startGeneral.length > 0, 'and there is a way forward')
+})
+
+// ===========================================================================
+// THE PASTED PROMPT
+// ===========================================================================
+
+const SCHOOL = 'aaaaaaaa-0000-4000-8000-000000000003'
+
+const paste = (over: Partial<PastedPrompt> = {}): PastedPrompt => ({
+  promptText: 'Describe a clinical experience that shaped you.',
+  statedMaxWords: null,
+  applicationCycle: null,
+  sourceUrl: null,
+  confirmed: true,
+  ...over,
+})
+
+test('the paste screen sits under the prompt list, and Back returns there', () => {
+  assert.equal(stepBefore('paste', 'school'), 'prompt')
+  assert.equal(stepBefore('title', 'school'), 'prompt')
+})
+
+test('a paste needs wording and consent, and nothing else', () => {
+  assert.equal(pasteIsComplete(paste()), true)
+  // The three optional fields stay optional: a school often states none.
+  assert.equal(pasteIsComplete(paste({ statedMaxWords: null, applicationCycle: null })), true)
+  for (const incomplete of [
+    paste({ promptText: '' }),
+    paste({ promptText: '   ' }),
+    paste({ confirmed: false }),
+  ]) {
+    assert.equal(pasteIsComplete(incomplete), false)
+  }
+  assert.equal(pasteIsComplete(null), false)
+  assert.equal(pasteIsComplete(undefined), false)
+})
+
+test('CONSENT IS NOT IMPLIED by anything other than true', () => {
+  for (const notTrue of [false, undefined, null, 'yes', 1]) {
+    assert.equal(pasteIsComplete(paste({ confirmed: notTrue as never })), false)
+  }
+})
+
+test('a pasted request nests everything under one key, and carries NO promptId', () => {
+  const request = newPastedDraftRequest('  My Duke Statement  ', SCHOOL, paste({
+    statedMaxWords: 500, applicationCycle: '2026', sourceUrl: 'https://example.edu/a',
+  }))
+  assert.equal(request.ok, true)
+  assert.deepEqual(request.ok && request.body, {
+    title: 'My Duke Statement',
+    essay: '',
+    promptSubmission: {
+      schoolId: SCHOOL,
+      promptText: paste().promptText,
+      statedMaxWords: 500,
+      applicationCycle: '2026',
+      sourceUrl: 'https://example.edu/a',
+      confirmed: true,
+    },
+  })
+  // THE SHAPE IS THE SAFEGUARD: no promptId at any level, so this body cannot
+  // be mistaken for one that names a catalog prompt.
+  const sent = JSON.stringify(request.ok && request.body)
+  assert.equal(sent.includes('promptId'), false)
+})
+
+test('a pasted request is refused without a school, wording or consent', () => {
+  assert.equal(newPastedDraftRequest('A title', null, paste()).ok, false)
+  assert.equal(newPastedDraftRequest('A title', 'nope', paste()).ok, false)
+  assert.equal(newPastedDraftRequest('A title', SCHOOL, paste({ confirmed: false })).ok, false)
+  assert.equal(newPastedDraftRequest('A title', SCHOOL, paste({ promptText: ' ' })).ok, false)
+  assert.equal(newPastedDraftRequest('A title', SCHOOL, null).ok, false)
+  // And the title is still refused first, as on every other path.
+  const both = newPastedDraftRequest('   ', SCHOOL, paste({ confirmed: false }))
+  assert.equal(both.ok === false && both.message, CREATE_MESSAGES.title)
+})
+
+test('a paste NEVER downgrades to a general or approved request', () => {
+  // The refusal is a refusal. There is no fallback body on this path either.
+  const refused = newPastedDraftRequest('A title', SCHOOL, paste({ confirmed: false }))
+  assert.equal(refused.ok, false)
+  assert.equal('body' in refused, false, 'a refusal carries no request to send')
+})
+
+test('Create for a paste needs a school, wording, consent and a title', () => {
+  const base = { title: 'A title', schoolId: SCHOOL, submitting: false, retryable: true }
+  assert.equal(canCreatePasteNow({ ...base, pasted: paste() }), true)
+  assert.equal(canCreatePasteNow({ ...base, pasted: null }), false)
+  assert.equal(canCreatePasteNow({ ...base, pasted: paste({ confirmed: false }) }), false)
+  assert.equal(canCreatePasteNow({ ...base, schoolId: null, pasted: paste() }), false)
+  assert.equal(canCreatePasteNow({ ...base, title: '  ', pasted: paste() }), false)
+  assert.equal(canCreatePasteNow({ ...base, pasted: paste(), submitting: true }), false)
+  assert.equal(canCreatePasteNow({ ...base, pasted: paste(), retryable: false }), false)
+})
+
+test('the committed school rule is UNCHANGED by pasting', () => {
+  // canCreateNow still means what it meant: a school path with no catalog
+  // prompt id may not create. A paste satisfies a different function.
+  assert.equal(canCreateNow({
+    path: 'school', title: 'A title', promptId: null, submitting: false, retryable: true,
+  }), false)
+})
+
+test('the consent notice says both halves, and promises nothing about verification', () => {
+  const notice = NEW_DRAFT_MESSAGES.pasteNotice
+  assert.ok(notice.includes('reviewed by CRNAPREPHUB'))
+  assert.ok(notice.includes('may be added'), 'may, not will')
+  assert.ok(notice.includes('remain private'), 'the essay is never published')
+  // It must not suggest the prompt has already been checked.
+  assert.equal(/\bverified\b/i.test(notice), false)
+  assert.ok(NEW_DRAFT_MESSAGES.unverifiedBadge.includes('Not yet verified'))
 })

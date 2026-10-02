@@ -9,9 +9,13 @@ import {
   createOutcomeFrom,
 } from '@/lib/statement/draft/library'
 import {
+  EMPTY_PASTE,
   NEW_DRAFT_MESSAGES,
   canCreateNow,
+  canCreatePasteNow,
   createRequestFor,
+  newPastedDraftRequest,
+  type PastedPrompt,
   promptWasRefused,
   selectionAfterSchoolChange,
   stepBefore,
@@ -69,11 +73,20 @@ export default function NewDraftDialog({
   onClose,
   schools,
   schoolsUnavailable,
+  submissionsEnabled = false,
 }: {
   open: boolean
   onClose: () => void
   schools: readonly SchoolOption[]
   schoolsUnavailable: boolean
+  /**
+   * Whether an applicant may paste a prompt the catalog does not have.
+   *
+   * DEFAULTS TO FALSE, and the default is what matters: until the submission
+   * migrations are applied there is no table to write and no function to call,
+   * so with this off the dialog offers exactly the two paths it offers today.
+   */
+  submissionsEnabled?: boolean
 }) {
   const router = useRouter()
   const [step, setStep] = useState<NewDraftStep>('choice')
@@ -81,6 +94,8 @@ export default function NewDraftDialog({
   const [title, setTitle] = useState('')
   const [school, setSchool] = useState<SchoolOption | null>(null)
   const [prompt, setPrompt] = useState<PromptChoice | null>(null)
+  /** What the applicant has typed on the paste screen. null means not pasting. */
+  const [pasted, setPasted] = useState<PastedPrompt | null>(null)
   const [query, setQuery] = useState('')
   const [prompts, setPrompts] = useState<readonly PromptChoice[] | null>(null)
   const [promptNotice, setPromptNotice] = useState<string | null>(null)
@@ -122,6 +137,7 @@ export default function NewDraftDialog({
     setPath(null)
     setSchool(null)
     setPrompt(null)
+    setPasted(null)
     setQuery('')
     setPrompts(null)
     setPromptNotice(null)
@@ -192,6 +208,10 @@ export default function NewDraftDialog({
       browsingId: browsing.current,
       prompt,
     }))
+    // A paste belongs to the school it was typed for, exactly as a chosen
+    // prompt does. Switching schools drops it rather than submitting one
+    // school's question under another's name.
+    if (browsing.current !== option.id) setPasted(null)
     browsing.current = option.id
     setSchool(option)
     setStep('prompt')
@@ -229,7 +249,15 @@ export default function NewDraftDialog({
   const startGeneral = useCallback(() => {
     setPath('general')
     setPrompt(null)
+    setPasted(null)
     setStep('title')
+  }, [])
+
+  /** Open the paste form for the school being browsed. The title is untouched. */
+  const startPaste = useCallback(() => {
+    setPrompt(null)
+    setPasted(EMPTY_PASTE)
+    setStep('paste')
   }, [])
 
   const goBack = useCallback(() => {
@@ -247,7 +275,12 @@ export default function NewDraftDialog({
     // sends two keys and the school path three; neither can behave like the
     // other, and a school path with no prompt is REFUSED rather than quietly
     // creating a blank general draft.
-    const request = createRequestFor({ path, title, promptId: prompt === null ? null : prompt.id })
+    // THREE SHAPES, THREE BUILDERS, AND THE PASTE IS CHECKED FIRST. A pasted
+    // prompt must never travel the promptId branch -- that branch means "the
+    // catalog vouches for this", and nobody has reviewed this wording yet.
+    const request = pasted !== null
+      ? newPastedDraftRequest(title, school === null ? null : school.id, pasted)
+      : createRequestFor({ path, title, promptId: prompt === null ? null : prompt.id })
     if (!request.ok) {
       setMessage(request.message)
       field.current?.focus()
@@ -298,15 +331,30 @@ export default function NewDraftDialog({
 
     inFlight.current = false
     setSubmitting(false)
-  }, [path, title, prompt, retryable, router])
+  }, [path, title, prompt, pasted, school, retryable, router])
 
   if (!open) return null
 
   const trimmed = title.trim().length
-  const canSubmit = canCreateNow({
-    path,
-    title,
-    promptId: prompt === null ? null : prompt.id,
+  const canSubmit = pasted !== null
+    ? canCreatePasteNow({
+        title,
+        schoolId: school === null ? null : school.id,
+        pasted,
+        submitting,
+        retryable,
+      })
+    : canCreateNow({
+        path,
+        title,
+        promptId: prompt === null ? null : prompt.id,
+        submitting,
+        retryable,
+      })
+  const pasteReady = canCreatePasteNow({
+    title: 'placeholder',
+    schoolId: school === null ? null : school.id,
+    pasted,
     submitting,
     retryable,
   })
@@ -319,6 +367,7 @@ export default function NewDraftDialog({
   const heading = step === 'choice' ? 'New draft'
     : step === 'school' ? NEW_DRAFT_MESSAGES.chooseSchool
     : step === 'prompt' ? NEW_DRAFT_MESSAGES.choosePrompt
+    : step === 'paste' ? NEW_DRAFT_MESSAGES.pasteHeading
     : NEW_DRAFT_MESSAGES.nameDraft
 
   return (
@@ -453,7 +502,7 @@ export default function NewDraftDialog({
                     <li key={choice.id}>
                       <button
                         type="button"
-                        onClick={() => { setPrompt(choice); setStep('title') }}
+                        onClick={() => { setPasted(null); setPrompt(choice); setStep('title') }}
                         className="w-full rounded-xl border border-slate-200 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                       >
                         <span className="block text-sm font-bold text-slate-900">{choice.label}</span>
@@ -472,15 +521,140 @@ export default function NewDraftDialog({
                   ))}
                 </ul>
               )}
+              {/* OFFERED WHETHER OR NOT THE SCHOOL HAS PROMPTS. A catalog that
+                  lists two questions may still be missing this year's, so the
+                  paste option is not an empty-state fallback -- it sits under
+                  the list as a peer of it. */}
+              {!loading && submissionsEnabled && (
+                <button
+                  type="button"
+                  onClick={startPaste}
+                  className="mt-4 block text-sm font-semibold text-blue-700 underline-offset-4 transition hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  {NEW_DRAFT_MESSAGES.pastePrompt}
+                </button>
+              )}
+              {/* And the general path stays reachable from here, so a school
+                  with nothing listed is never a dead end. */}
               {!loading && (prompts === null || prompts.length === 0) && (
                 <button
                   type="button"
                   onClick={startGeneral}
-                  className="mt-4 text-sm font-semibold text-blue-700 underline-offset-4 transition hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  className="mt-3 block text-sm font-semibold text-slate-600 underline-offset-4 transition hover:text-slate-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   {NEW_DRAFT_MESSAGES.startGeneral}
                 </button>
               )}
+            </div>
+          )}
+
+          {/* --------------------------------------------- paste your own */}
+          {step === 'paste' && pasted !== null && (
+            <div className="mt-5">
+              {school !== null && (
+                <p className="mb-3 truncate text-sm font-medium text-slate-600">
+                  {schoolLabel(school)}
+                </p>
+              )}
+
+              <label htmlFor={`${headingId}-paste`} className="mb-2 block text-sm font-medium text-slate-700">
+                The school&rsquo;s prompt
+              </label>
+              {/* A plain textarea rendering escaped React text. Nothing typed
+                  here is ever interpreted as markup, here or in review. */}
+              <textarea
+                id={`${headingId}-paste`}
+                rows={5}
+                value={pasted.promptText}
+                disabled={submitting}
+                onChange={(event) => setPasted({ ...pasted, promptText: event.target.value })}
+                placeholder="Paste the question exactly as your school wrote it"
+                className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
+              />
+
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor={`${headingId}-words`} className="mb-1.5 block text-xs font-medium text-slate-600">
+                    Word limit <span className="text-slate-400">(optional)</span>
+                  </label>
+                  {/* A BLANK FIELD STAYS NULL. Number('') is 0, and recording
+                      that would claim a school allows zero words. */}
+                  <input
+                    id={`${headingId}-words`}
+                    type="number"
+                    min={1}
+                    max={5000}
+                    value={pasted.statedMaxWords === null ? '' : pasted.statedMaxWords}
+                    disabled={submitting}
+                    onChange={(event) => setPasted({
+                      ...pasted,
+                      statedMaxWords: event.target.value.trim() === ''
+                        ? null
+                        : Number(event.target.value),
+                    })}
+                    placeholder="Not stated"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+                <div>
+                  <label htmlFor={`${headingId}-cycle`} className="mb-1.5 block text-xs font-medium text-slate-600">
+                    Application cycle <span className="text-slate-400">(optional)</span>
+                  </label>
+                  <input
+                    id={`${headingId}-cycle`}
+                    type="text"
+                    value={pasted.applicationCycle ?? ''}
+                    disabled={submitting}
+                    onChange={(event) => setPasted({
+                      ...pasted,
+                      applicationCycle: event.target.value.trim() === '' ? null : event.target.value,
+                    })}
+                    placeholder="2026 or 2026-2027"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+              </div>
+
+              <label htmlFor={`${headingId}-source`} className="mb-1.5 mt-3 block text-xs font-medium text-slate-600">
+                Where you found it <span className="text-slate-400">(optional)</span>
+              </label>
+              <input
+                id={`${headingId}-source`}
+                type="url"
+                value={pasted.sourceUrl ?? ''}
+                disabled={submitting}
+                onChange={(event) => setPasted({
+                  ...pasted,
+                  sourceUrl: event.target.value.trim() === '' ? null : event.target.value,
+                })}
+                placeholder="https://"
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+
+              {/* THE NOTICE COMES BEFORE THE AGREEMENT, and says both halves:
+                  the wording may be published, the writing never is. */}
+              <p className="mt-5 rounded-xl border border-blue-200 bg-blue-50/60 px-4 py-3 text-xs leading-relaxed text-slate-700">
+                {NEW_DRAFT_MESSAGES.pasteNotice}
+              </p>
+              <label className="mt-3 flex items-start gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={pasted.confirmed}
+                  disabled={submitting}
+                  onChange={(event) => setPasted({ ...pasted, confirmed: event.target.checked })}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>{NEW_DRAFT_MESSAGES.pasteConfirm}</span>
+              </label>
+
+              <button
+                type="button"
+                disabled={!pasteReady}
+                onClick={() => setStep('title')}
+                className="mt-5 w-full rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Continue
+              </button>
             </div>
           )}
 
@@ -493,6 +667,21 @@ export default function NewDraftDialog({
                 void submit()
               }}
             >
+              {/* A PASTED PROMPT IS LABELLED WHEREVER IT IS SHOWN, and the
+                  label says what is true: nobody has checked this yet. */}
+              {pasted !== null && school !== null && (
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-amber-800">
+                    {schoolLabel(school)}
+                  </p>
+                  <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                    {pasted.promptText}
+                  </p>
+                  <p className="mt-2 text-xs font-medium text-amber-800">
+                    {NEW_DRAFT_MESSAGES.unverifiedBadge}
+                  </p>
+                </div>
+              )}
               {prompt !== null && school !== null && (
                 <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-4">
                   <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">

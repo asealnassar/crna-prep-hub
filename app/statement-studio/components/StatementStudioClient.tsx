@@ -111,10 +111,30 @@ export default function StatementStudioClient({
   draft,
   schools,
   schoolsUnavailable,
+  promptNotice = null,
 }: {
   draft: StatementDraft
   schools: readonly SchoolOption[]
   schoolsUnavailable: boolean
+  /**
+   * What to say about where this draft's question came from, ALREADY WORDED.
+   *
+   * A PREPARED STRING, not a status this component interprets. The server
+   * resolves the submission and promptStatusLabel() chooses the sentence, so
+   * nothing here has to know what a submission is, read one, or decide what
+   * approval means -- and this component gains no new dependency, no new
+   * fetch, and no new write.
+   *
+   * NULL FOR A CATALOG PROMPT AND FOR A GENERAL DRAFT, which is most drafts and
+   * every draft today. The default means a page that does not pass it behaves
+   * exactly as this component did before the prop existed.
+   *
+   * THE SNAPSHOT IS STILL WHAT IS RENDERED. This is a label beside the
+   * question, never a replacement for it: `prompt` is untouched by this prop,
+   * so an administrator editing or rejecting a submission cannot change a word
+   * of what the applicant sees.
+   */
+  promptNotice?: string | null
 }) {
   const router = useRouter()
 
@@ -1027,6 +1047,14 @@ export default function StatementStudioClient({
         way to reach startSave except through the ordinary autosave it shares
         with typing.
       */}
+      {/* Shown above the picker because it is about the question already
+          attached, not about choosing another. Rendered as escaped text. */}
+      {promptNotice !== null && (
+        <p className="mx-auto mt-6 max-w-3xl rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-xs font-medium text-amber-900">
+          {promptNotice}
+        </p>
+      )}
+
       <PromptPicker
         schools={schools}
         schoolsUnavailable={schoolsUnavailable}

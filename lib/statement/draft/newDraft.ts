@@ -36,7 +36,7 @@ import type { PromptChoice } from './picker.ts'
 export type CreatePath = 'school' | 'general'
 
 /** The screens, in the order they are reached. */
-export type NewDraftStep = 'choice' | 'school' | 'prompt' | 'title'
+export type NewDraftStep = 'choice' | 'school' | 'prompt' | 'paste' | 'title'
 
 /**
  * Every word the dialog can show that is not already PICKER_MESSAGES'.
@@ -63,6 +63,23 @@ export const NEW_DRAFT_MESSAGES = {
   noPrompts: 'No prompts are listed for this school yet.',
   /** The way forward, and it keeps whatever title has been typed. */
   startGeneral: 'Start a general statement instead',
+  /** The third way to start, offered alongside a school's listed questions. */
+  pastePrompt: 'Don\u2019t see your prompt? Paste it here.',
+  pasteHeading: 'Paste your school\u2019s prompt',
+  /**
+   * THE CONSENT SENTENCE, shown before the box is sent and not after.
+   *
+   * It says both halves plainly, because both are true and only one of them is
+   * obvious: the wording may be published, and the writing never is.
+   */
+  pasteNotice:
+    'Your submitted prompt will be reviewed by CRNAPREPHUB and may be added to our shared '
+    + 'school-prompt directory. Your personal statement and essay will remain private.',
+  pasteConfirm: 'I understand my prompt may be added to the shared directory.',
+  /** What a draft on a pasted prompt is labelled, everywhere it appears. */
+  unverifiedBadge: 'User-provided prompt \u2014 Not yet verified by CRNAPREPHUB',
+  pasteIncomplete: 'Add the prompt wording and confirm before creating the draft.',
+  pasteSchoolMissing: 'Choose a school before pasting its prompt.',
   chooseSchool: 'Choose a school',
   choosePrompt: 'Choose a prompt',
   nameDraft: 'Name your draft',
@@ -98,6 +115,10 @@ export function stepBefore(step: NewDraftStep, path: CreatePath | null): NewDraf
       return 'choice'
     case 'prompt':
       return 'school'
+    // The paste form is reached FROM the prompt list -- including from the
+    // version of it that had no prompts to list -- so Back returns there.
+    case 'paste':
+      return 'prompt'
     case 'title':
       // The general path never saw the two middle screens, so its Back goes
       // all the way to the choice rather than to a school it never picked.
@@ -196,4 +217,154 @@ export function createRequestFor(input: {
  */
 export function promptWasRefused(message: string): boolean {
   return message === CREATE_MESSAGES.promptGone || message === CREATE_MESSAGES.promptUnusable
+}
+
+/* ===========================================================================
+ * A PASTED PROMPT.
+ *
+ * The third thing an applicant can start from, and the one that must never be
+ * confused with the second. An approved prompt is named by an id the server
+ * resolves against a catalog no browser may write; a pasted prompt is wording
+ * the browser supplies. They travel different request shapes, through
+ * different builders, to different branches of the route, and end in different
+ * columns -- so there is no single place where swapping one for the other is a
+ * typo away.
+ * ======================================================================== */
+
+/** What an applicant typed, before any of it has been checked. */
+export interface PastedPrompt {
+  readonly promptText: string
+  readonly statedMaxWords: number | null
+  readonly applicationCycle: string | null
+  readonly sourceUrl: string | null
+  /** Their explicit agreement that this wording may be published. */
+  readonly confirmed: boolean
+}
+
+/**
+ * What the applicant has chosen to write against, as a closed union.
+ *
+ * THE DISCRIMINANT IS THE POINT. 'approved' carries an id and no wording;
+ * 'pasted' carries wording and no id. Neither member can hold the other's
+ * field, so a function that handles one cannot silently accept the other, and
+ * adding a third kind later forces every reader to say what it means.
+ */
+export type DraftSelection =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'approved'; readonly promptId: string }
+  | { readonly kind: 'pasted'; readonly pasted: PastedPrompt }
+
+/** An empty paste, for a form that has just been opened. */
+export const EMPTY_PASTE: PastedPrompt = {
+  promptText: '',
+  statedMaxWords: null,
+  applicationCycle: null,
+  sourceUrl: null,
+  confirmed: false,
+}
+
+/**
+ * Whether a paste is complete enough to send.
+ *
+ * WORDING AND CONSENT, and nothing else is required: the three optional fields
+ * are optional because a school often states none of them, and demanding a word
+ * limit nobody published would make applicants invent one.
+ *
+ * CONSENT IS CHECKED HERE AS WELL AS IN THE VALIDATOR because this is what
+ * decides whether the button is live. The validator is what decides whether the
+ * request is honoured, and a caller that never rendered the checkbox is refused
+ * there regardless of what this returns.
+ */
+export function pasteIsComplete(pasted: PastedPrompt | null | undefined): boolean {
+  if (!pasted) return false
+  if (typeof pasted.promptText !== 'string') return false
+  if (pasted.promptText.trim().length === 0) return false
+  return pasted.confirmed === true
+}
+
+/**
+ * The request that creates a draft from a pasted prompt.
+ *
+ * A DIFFERENT SHAPE FROM BOTH OTHERS, deliberately. The general body is two
+ * keys, the approved body is three with a promptId, and this one nests
+ * everything the submission needs under `promptSubmission` -- so the route can
+ * tell the three apart by shape alone, and the pasted branch is taken before
+ * the promptId branch is ever reached.
+ *
+ * NO promptId, AND NO WAY TO ADD ONE. The object is built with exactly two
+ * top-level keys plus the submission, from arguments that do not include a
+ * catalog id, so this path cannot claim catalog provenance even by mistake.
+ */
+export type PastedDraftRequest =
+  | {
+      readonly ok: true
+      readonly body: {
+        readonly title: string
+        readonly essay: string
+        readonly promptSubmission: {
+          readonly schoolId: string
+          readonly promptText: string
+          readonly statedMaxWords: number | null
+          readonly applicationCycle: string | null
+          readonly sourceUrl: string | null
+          readonly confirmed: true
+        }
+      }
+    }
+  | { readonly ok: false; readonly message: string }
+
+export function newPastedDraftRequest(
+  rawTitle: unknown,
+  schoolId: unknown,
+  pasted: PastedPrompt | null,
+): PastedDraftRequest {
+  const checked = checkTitle(rawTitle)
+  if (!checked.ok) {
+    return {
+      ok: false,
+      message: checked.code === 'title-too-long' ? CREATE_MESSAGES.tooLong : CREATE_MESSAGES.title,
+    }
+  }
+  if (!isPromptId(schoolId)) {
+    return { ok: false, message: NEW_DRAFT_MESSAGES.pasteSchoolMissing }
+  }
+  if (!pasteIsComplete(pasted) || pasted === null) {
+    return { ok: false, message: NEW_DRAFT_MESSAGES.pasteIncomplete }
+  }
+  return {
+    ok: true,
+    body: {
+      title: checked.title,
+      essay: '',
+      promptSubmission: {
+        schoolId,
+        promptText: pasted.promptText,
+        statedMaxWords: pasted.statedMaxWords,
+        applicationCycle: pasted.applicationCycle,
+        sourceUrl: pasted.sourceUrl,
+        confirmed: true,
+      },
+    },
+  }
+}
+
+/**
+ * Whether Create may fire for a pasted prompt.
+ *
+ * A SIBLING OF canCreateNow RATHER THAN A BRANCH INSIDE IT, so the committed
+ * rule -- "the school path may not create without a prompt id" -- keeps meaning
+ * exactly what it meant, and a pasted prompt cannot satisfy it by accident.
+ */
+export function canCreatePasteNow(input: {
+  readonly title: string
+  readonly schoolId: string | null
+  readonly pasted: PastedPrompt | null
+  readonly submitting: boolean
+  readonly retryable: boolean
+}): boolean {
+  if (input.submitting !== false) return false
+  if (input.retryable !== true) return false
+  if (!isPromptId(input.schoolId)) return false
+  if (!pasteIsComplete(input.pasted)) return false
+  return checkTitle(input.title).ok
 }

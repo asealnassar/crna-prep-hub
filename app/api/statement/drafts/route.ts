@@ -5,6 +5,9 @@ import {
   STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
 } from '@/lib/statement/studioGate'
 import { checkDraftCreate, createPromptSelectionOf } from '@/lib/statement/draft/validate'
+import { checkPromptSubmission } from '@/lib/statement/draft/promptSubmission'
+import { createDraftWithSubmission, verifySchoolListed } from '@/lib/statement/draft/submissionRepo'
+import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
 import { createDraft, listDrafts } from '@/lib/statement/draft/draftRepo'
 import type { StatementPromptSnapshot } from '@/lib/statement/draft/promptRepo'
 import { readActivePrompt } from '@/lib/statement/draft/promptRepo'
@@ -47,6 +50,19 @@ import {
  */
 
 export const dynamic = 'force-dynamic'
+
+/**
+ * The three fixed answers the pasted-prompt branch can give.
+ *
+ * FIXED, like every other body in this family: a refusal's wording is ours, so
+ * no database message, constraint text or function detail can reach a reader.
+ * The 404 is the gate's own shape -- while the feature is off, this branch does
+ * not exist, and saying so in any other words would advertise it.
+ */
+const SUBMISSION_UNAVAILABLE_BODY = { error: 'Not found', code: 'not-found' } as const
+const SUBMISSION_REFUSED = 'That prompt could not be submitted.'
+const SUBMISSION_RATE_LIMITED =
+  'You have submitted several prompts recently. Try again a little later.'
 
 type Caller = { userId: string; db: SupabaseClient }
 
@@ -219,6 +235,81 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(
       validationBody(checked.code, checked.characters),
       { status: statusForValidation(checked.code) },
+    )
+  }
+
+  // ---------------------------------------------------------------- pasted
+  // A SCHOOL'S QUESTION THE CATALOG DOES NOT HAVE YET.
+  //
+  // GATED, AND OFF BY DEFAULT. Until 20261002_000..003 are applied there is no
+  // submissions table and no function to call, so with the flag unset this
+  // branch is not entered and the body key is simply never read -- the route
+  // behaves exactly as it did before this feature existed.
+  //
+  // THIS IS NOT THE promptId BRANCH, and the two can never be reached by one
+  // request: the pasted path is taken first and returns, so a body carrying
+  // both a submission and a promptId never reaches the resolver. A pasted
+  // prompt must not travel the path that means "the catalog vouches for this".
+  const pasted = (shape.body as { promptSubmission?: unknown }).promptSubmission
+  if (pasted !== undefined) {
+    if (!promptSubmissionsEnabled()) {
+      return NextResponse.json(SUBMISSION_UNAVAILABLE_BODY, { status: 404 })
+    }
+
+    // The whole object is handed to the validator and the result is never
+    // destructured here, so this file still names no canonical prompt field.
+    const submission = checkPromptSubmission(pasted as Record<string, unknown>)
+    if (!submission.ok) {
+      return NextResponse.json(
+        { error: SUBMISSION_REFUSED, code: submission.code },
+        { status: 400 },
+      )
+    }
+
+    // The school must be one the directory actually lists. Checked before any
+    // write, so a submission naming a school nobody was offered creates nothing.
+    const listed = await verifySchoolListed(caller.db, submission.input)
+    if (!listed.ok) {
+      if (listed.reason === 'invalid') {
+        // A DISTINCT CODE FROM THE CATALOG ENDPOINT'S, which reports a
+        // malformed uuid in a query string. This reports the opposite kind of
+        // thing: a well-formed id naming a school the directory does not list.
+        // Two conditions, two words -- and this file deliberately does not
+        // spell the other endpoint's code, because naming it is how a route
+        // starts knowing about an endpoint it has no business knowing.
+        return NextResponse.json(
+          { error: SUBMISSION_REFUSED, code: 'school-not-listed' },
+          { status: 400 },
+        )
+      }
+      return NextResponse.json(SERVER_ERROR_BODY, { status: 500 })
+    }
+
+    // ONE TRANSACTION. Both rows or neither -- see 20261002_003.
+    const made = await createDraftWithSubmission(caller.db, {
+      title: checked.input.title,
+      essay: checked.input.essay,
+      ...submission.input,
+    })
+    if (!made.ok) {
+      if (made.reason === 'rate-limited') {
+        return NextResponse.json(
+          { error: SUBMISSION_RATE_LIMITED, code: 'rate-limited' },
+          { status: 429 },
+        )
+      }
+      if (made.reason === 'invalid') {
+        return NextResponse.json(
+          { error: SUBMISSION_REFUSED, code: 'invalid-submission' },
+          { status: 400 },
+        )
+      }
+      return NextResponse.json(SERVER_ERROR_BODY, { status: 500 })
+    }
+
+    return NextResponse.json(
+      { draft: publicDraft(made.value.draft), submissionId: made.value.submissionId },
+      { status: 201 },
     )
   }
 
