@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
 import { statementStudioAccess, statementStudioMode } from '@/lib/statement/studioGate'
 import { listDrafts } from '@/lib/statement/draft/draftRepo'
+import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
 import LibraryClient from './components/LibraryClient'
 
 /**
@@ -78,7 +79,29 @@ export default async function StatementStudioLibraryPage() {
   // a fixed message that never carries `listed.detail`.
   if (!listed.ok) throw new Error(UNREADABLE)
 
+  // THE SCHOOL DIRECTORY IS NOT LOAD-BEARING, and this is the one place that
+  // can be decided. Three columns -- id, name, locationState -- read with the
+  // same caller-scoped client, after the gate, so an unadmitted visitor never
+  // reaches it.
+  //
+  // A FAILURE HERE DOES NOT TAKE THE LIBRARY DOWN. The drafts are already in
+  // hand and starting a general statement needs no school at all, so a refusal
+  // is passed along as a flag rather than thrown: the applicant loses the
+  // school-specific path and keeps everything else.
+  //
+  // UNAVAILABLE IS NOT EMPTY, and the two are passed separately because they
+  // read as the same thing and are not. Telling somebody "no schools are
+  // listed" because a connection dropped would have them conclude this product
+  // knows of no CRNA programmes. `detail` is a Postgres message and is not read.
+  const schools = await listSchoolPickerOptions(db)
+
   // Newest edit first, exactly as the repository ordered it. The client does not
   // re-sort: one ordering, decided by the index that serves the query.
-  return <LibraryClient drafts={listed.value} />
+  return (
+    <LibraryClient
+      drafts={listed.value}
+      schools={schools.ok ? schools.value : []}
+      schoolsUnavailable={!schools.ok}
+    />
+  )
 }

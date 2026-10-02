@@ -6,37 +6,85 @@ import { MAX_TITLE_CHARS } from '@/lib/statement/draft/validate'
 import {
   NETWORK_FAILURE,
   NEW_DRAFT_ENDPOINT,
-  canSubmitNewDraft,
   createOutcomeFrom,
-  newDraftRequest,
 } from '@/lib/statement/draft/library'
+import {
+  NEW_DRAFT_MESSAGES,
+  canCreateNow,
+  createRequestFor,
+  promptWasRefused,
+  selectionAfterSchoolChange,
+  stepBefore,
+  stepForPath,
+  type CreatePath,
+  type NewDraftStep,
+} from '@/lib/statement/draft/newDraft'
+import {
+  PICKER_MESSAGES,
+  directoryNotice,
+  matchingSchools,
+  mayApplyPrompts,
+  promptListFrom,
+  promptsPath,
+  schoolLabel,
+  wordLimitLabel,
+  type PromptChoice,
+} from '@/lib/statement/draft/picker'
+import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
 
 /**
- * New draft: a title, then the draft.
+ * New draft: a path, then what that path needs, then the draft.
  *
- * THE TITLE COMES FIRST AND THE ROW IS CREATED IMMEDIATELY. The alternative --
+ * THE ROW IS STILL CREATED BEFORE ANYTHING IS TYPED INTO IT. The alternative --
  * open an editor and create the row on the first keystroke -- means an applicant
- * can type a paragraph into something that does not exist yet, and every failure
- * after that point is a lost paragraph. One POST, before there is anything to
- * lose, and the editor opens on a draft that is already saved.
+ * can write a paragraph into something that does not exist yet, and every
+ * failure after that point is a lost paragraph. One POST, before there is
+ * anything to lose, and the editor opens on a draft that is already saved.
  *
- * WIRING ONLY. What a title may be, what is sent, when Create may fire and what
- * a reader is told all live in lib/statement/draft/library.ts, which is pure and
- * unit-tested. This component holds the fields, the focus and the guard.
+ * ONE POST, NOT A CREATE-THEN-PATCH. A school-specific draft is born answering
+ * its prompt: the id goes with the create, the server resolves the canonical
+ * school, wording and limit, and the row exists correct from its first revision.
+ * There is no moment at which the draft exists without the question it was
+ * started for, and no second write to fail halfway.
+ *
+ * WIRING ONLY, as before. Which screen follows which, when Create may fire,
+ * what is sent and what survives going backward all live in
+ * lib/statement/draft/newDraft.ts, which is pure and unit-tested; the school
+ * search, the prompt-list parsing and the stale-response guard live in
+ * picker.ts, which the editor's own picker already uses. This component holds
+ * the fields, the focus and the guard.
  *
  * NO maxLength ON THE INPUT, deliberately. It would stop typing at the limit and
  * silently shorten a pasted title, which is exactly what the rules say not to do.
  * A long title is REFUSED, visibly, with the count in front of the applicant.
+ *
+ * THE TITLE IS WRITTEN IN EXACTLY TWO PLACES -- the applicant's keystrokes, and
+ * the reset when the dialog opens. Every other screen, every Back, every
+ * refusal and the switch to a general statement all leave it alone, which is
+ * what makes "go back and change your mind" cost no retyping. A test asserts
+ * the set of writes, so a third one cannot appear unnoticed.
  */
 export default function NewDraftDialog({
   open,
   onClose,
+  schools,
+  schoolsUnavailable,
 }: {
   open: boolean
   onClose: () => void
+  schools: readonly SchoolOption[]
+  schoolsUnavailable: boolean
 }) {
   const router = useRouter()
+  const [step, setStep] = useState<NewDraftStep>('choice')
+  const [path, setPath] = useState<CreatePath | null>(null)
   const [title, setTitle] = useState('')
+  const [school, setSchool] = useState<SchoolOption | null>(null)
+  const [prompt, setPrompt] = useState<PromptChoice | null>(null)
+  const [query, setQuery] = useState('')
+  const [prompts, setPrompts] = useState<readonly PromptChoice[] | null>(null)
+  const [promptNotice, setPromptNotice] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   /** False only after a create that may have left a draft behind. */
@@ -49,6 +97,12 @@ export default function NewDraftDialog({
    * the first await, so the second click returns immediately.
    */
   const inFlight = useRef(false)
+  /**
+   * WHICH SCHOOL IS BEING BROWSED, synchronously. State settles after the event
+   * that changed it, so by the time a prompt list arrives `school` may not yet
+   * be the school already clicked. This is what the stale guard compares.
+   */
+  const browsing = useRef<string | null>(null)
   const panel = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)
   const headingId = useId()
@@ -64,13 +118,28 @@ export default function NewDraftDialog({
     setMessage(null)
     setRetryable(true)
     setSubmitting(false)
+    setStep('choice')
+    setPath(null)
+    setSchool(null)
+    setPrompt(null)
+    setQuery('')
+    setPrompts(null)
+    setPromptNotice(null)
+    setLoading(false)
+    browsing.current = null
     inFlight.current = false
-    const timer = setTimeout(() => field.current?.focus(), 0)
+    const timer = setTimeout(() => panel.current?.focus(), 0)
     return () => {
       clearTimeout(timer)
       opener?.focus?.()
     }
   }, [open])
+
+  // The title field takes focus when its screen arrives, from whichever
+  // direction -- forward from a prompt, or back from a refusal.
+  useEffect(() => {
+    if (step === 'title') field.current?.focus()
+  }, [step])
 
   /** The dialog does not close itself, and it cannot be closed mid-flight. */
   const dismiss = useCallback(() => {
@@ -104,10 +173,81 @@ export default function NewDraftDialog({
     [dismiss]
   )
 
+  /**
+   * A school's active prompts.
+   *
+   * THE STALE GUARD IS WHY THIS READS A REF. Clicking through three schools
+   * quickly puts three requests in the air and they may land in any order;
+   * applying a late one would show one school's questions under another's name,
+   * with nothing on screen to say so. A reply is applied only while the school
+   * it was asked about is still the school being browsed, and a reply that is
+   * not applied touches NOTHING -- not the list, not the notice, not the
+   * spinner, all of which belong to the request that is still outstanding.
+   */
+  const chooseSchool = useCallback(async (option: SchoolOption) => {
+    // A prompt belongs to the school it was chosen from, and cannot survive a
+    // move to another. Re-clicking the school already open is not a move.
+    setPrompt(selectionAfterSchoolChange({
+      chosenId: option.id,
+      browsingId: browsing.current,
+      prompt,
+    }))
+    browsing.current = option.id
+    setSchool(option)
+    setStep('prompt')
+    setPrompts(null)
+    setPromptNotice(PICKER_MESSAGES.loading)
+    setLoading(true)
+
+    try {
+      const response = await fetch(promptsPath(option.id))
+      const body = await response.json().catch(() => null)
+      if (!mayApplyPrompts({ requestedFor: option.id, browsingNow: browsing.current })) return
+
+      const outcome = promptListFrom({ status: response.status, body })
+      setLoading(false)
+      if (!outcome.ok) {
+        setPrompts(null)
+        setPromptNotice(outcome.message)
+        return
+      }
+      setPrompts(outcome.prompts)
+      setPromptNotice(outcome.prompts.length === 0 ? NEW_DRAFT_MESSAGES.noPrompts : null)
+    } catch {
+      if (!mayApplyPrompts({ requestedFor: option.id, browsingNow: browsing.current })) return
+      setLoading(false)
+      setPrompts(null)
+      setPromptNotice(PICKER_MESSAGES.failed)
+    }
+  }, [prompt])
+
+  /**
+   * Abandon the school and write a general statement. THE TITLE IS KEPT: an
+   * applicant who already named their draft should not retype it because the
+   * school they picked turned out to list no questions.
+   */
+  const startGeneral = useCallback(() => {
+    setPath('general')
+    setPrompt(null)
+    setStep('title')
+  }, [])
+
+  const goBack = useCallback(() => {
+    const before = stepBefore(step, path)
+    if (before === null) return
+    if (before === 'choice') setPath(null)
+    setStep(before)
+  }, [step, path])
+
   const submit = useCallback(async () => {
     if (inFlight.current) return
+    if (path === null) return
 
-    const request = newDraftRequest(title)
+    // Built by the committed builders, never assembled here. The general path
+    // sends two keys and the school path three; neither can behave like the
+    // other, and a school path with no prompt is REFUSED rather than quietly
+    // creating a blank general draft.
+    const request = createRequestFor({ path, title, promptId: prompt === null ? null : prompt.id })
     if (!request.ok) {
       setMessage(request.message)
       field.current?.focus()
@@ -143,6 +283,14 @@ export default function NewDraftDialog({
       // retyping. Nothing retries on its own -- a create is not idempotent.
       setMessage(outcome.message)
       setRetryable(outcome.retryable)
+      // A PROMPT WITHDRAWN BETWEEN CHOOSING AND CREATING. No draft was made --
+      // the server refuses the whole request rather than making a general one --
+      // so the selection is dropped and the list reopens. Nothing is created as
+      // a consolation, and the title is untouched.
+      if (promptWasRefused(outcome.message)) {
+        setPrompt(null)
+        setStep('prompt')
+      }
     } catch {
       setMessage(NETWORK_FAILURE.message)
       setRetryable(NETWORK_FAILURE.retryable)
@@ -150,94 +298,280 @@ export default function NewDraftDialog({
 
     inFlight.current = false
     setSubmitting(false)
-  }, [title, retryable, router])
+  }, [path, title, prompt, retryable, router])
 
   if (!open) return null
 
   const trimmed = title.trim().length
-  const canSubmit = canSubmitNewDraft({ title, submitting, retryable })
+  const canSubmit = canCreateNow({
+    path,
+    title,
+    promptId: prompt === null ? null : prompt.id,
+    submitting,
+    retryable,
+  })
+  const visible = matchingSchools(schools, query)
+  const notice = directoryNotice({
+    unavailable: schoolsUnavailable,
+    total: schools.length,
+    matching: visible.length,
+  })
+  const heading = step === 'choice' ? 'New draft'
+    : step === 'school' ? NEW_DRAFT_MESSAGES.chooseSchool
+    : step === 'prompt' ? NEW_DRAFT_MESSAGES.choosePrompt
+    : NEW_DRAFT_MESSAGES.nameDraft
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto p-4 sm:p-6">
-      <div
-        aria-hidden="true"
-        onClick={dismiss}
-        className="fixed inset-0 bg-slate-900/40"
-      />
+      <div aria-hidden="true" onClick={dismiss} className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm" />
       <div className="flex min-h-full items-start justify-center sm:items-center">
         <div
           ref={panel}
           role="dialog"
           aria-modal="true"
           aria-labelledby={headingId}
+          tabIndex={-1}
           onKeyDown={onKeyDown}
-          className="relative w-full max-w-md rounded-xl border border-gray-200 bg-white p-5 shadow-xl"
+          className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl focus:outline-none sm:p-7"
         >
-          <h2 id={headingId} className="text-base font-semibold text-slate-900">
-            New draft
-          </h2>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Give it a title. You can change it later.
-          </p>
-
-          <form
-            className="mt-4"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void submit()
-            }}
-          >
-            <label htmlFor={`${headingId}-title`} className="mb-2 block text-sm font-medium text-gray-700">
-              Title
-            </label>
-            <input
-              ref={field}
-              id={`${headingId}-title`}
-              type="text"
-              value={title}
-              autoComplete="off"
-              disabled={submitting}
-              aria-invalid={message !== null}
-              aria-describedby={message === null ? undefined : messageId}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Why I want to become a CRNA"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
-            />
-
-            <p className="mt-1.5 text-xs text-slate-500">
-              {trimmed > MAX_TITLE_CHARS
-                ? `${trimmed} characters. Use ${MAX_TITLE_CHARS} or fewer.`
-                : `${trimmed}/${MAX_TITLE_CHARS}`}
-            </p>
-
-            {message !== null && (
-              <p
-                id={messageId}
-                role="alert"
-                className="mt-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 id={headingId} className="text-lg font-bold tracking-tight text-slate-900">
+                {heading}
+              </h2>
+              {step === 'choice' && (
+                <p className="mt-1 text-sm text-slate-500">
+                  How would you like to start?
+                </p>
+              )}
+              {step === 'prompt' && school !== null && (
+                <p className="mt-1 truncate text-sm text-slate-500">{schoolLabel(school)}</p>
+              )}
+            </div>
+            {stepBefore(step, path) !== null && (
+              <button
+                type="button"
+                onClick={goBack}
+                disabled={submitting}
+                className="shrink-0 rounded-lg px-2.5 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50"
               >
-                {message}
-              </p>
+                {NEW_DRAFT_MESSAGES.back}
+              </button>
             )}
+          </div>
 
-            <div className="mt-5 flex justify-end gap-2">
+          {/* ------------------------------------------------- choose a path */}
+          {step === 'choice' && (
+            <div className="mt-5 grid gap-3">
+              <button
+                type="button"
+                onClick={() => { setPath('school'); setStep(stepForPath('school')) }}
+                className="rounded-xl border border-slate-200 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                <span className="block text-sm font-bold text-slate-900">
+                  {NEW_DRAFT_MESSAGES.schoolPath}
+                </span>
+                <span className="mt-1 block text-sm leading-relaxed text-slate-600">
+                  {NEW_DRAFT_MESSAGES.schoolPathBody}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setPath('general'); setStep(stepForPath('general')) }}
+                className="rounded-xl border border-slate-200 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                <span className="block text-sm font-bold text-slate-900">
+                  {NEW_DRAFT_MESSAGES.generalPath}
+                </span>
+                <span className="mt-1 block text-sm leading-relaxed text-slate-600">
+                  {NEW_DRAFT_MESSAGES.generalPathBody}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {/* ----------------------------------------------- choose a school */}
+          {step === 'school' && (
+            <div className="mt-5">
+              <label htmlFor={`${headingId}-school`} className="sr-only">
+                Search schools by name
+              </label>
+              <input
+                id={`${headingId}-school`}
+                type="search"
+                value={query}
+                autoComplete="off"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search schools..."
+                className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+              {notice !== null ? (
+                <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-relaxed text-slate-600">
+                  {notice}
+                </p>
+              ) : (
+                <ul className="mt-3 max-h-72 overflow-y-auto">
+                  {visible.map((option) => (
+                    <li key={option.id}>
+                      <button
+                        type="button"
+                        onClick={() => void chooseSchool(option)}
+                        className="w-full rounded-lg px-3 py-2.5 text-left text-sm text-slate-800 transition hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                      >
+                        {schoolLabel(option)}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* Available even while the directory is unreadable: a general
+                  statement needs no school, so a failed list is not a dead end. */}
+              <button
+                type="button"
+                onClick={startGeneral}
+                className="mt-4 text-sm font-semibold text-blue-700 underline-offset-4 transition hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                {NEW_DRAFT_MESSAGES.startGeneral}
+              </button>
+            </div>
+          )}
+
+          {/* ----------------------------------------------- choose a prompt */}
+          {step === 'prompt' && (
+            <div className="mt-5">
+              {promptNotice !== null && (
+                <p
+                  aria-live="polite"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-relaxed text-slate-600"
+                >
+                  {promptNotice}
+                </p>
+              )}
+              {prompts !== null && prompts.length > 0 && (
+                <ul className="grid max-h-80 gap-2.5 overflow-y-auto">
+                  {prompts.map((choice) => (
+                    <li key={choice.id}>
+                      <button
+                        type="button"
+                        onClick={() => { setPrompt(choice); setStep('title') }}
+                        className="w-full rounded-xl border border-slate-200 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                      >
+                        <span className="block text-sm font-bold text-slate-900">{choice.label}</span>
+                        {/* The school's exact words, rendered as escaped text. */}
+                        <span className="mt-1.5 block text-sm leading-relaxed text-slate-700">
+                          {choice.promptText}
+                        </span>
+                        <span className="mt-2 block text-xs text-slate-500">
+                          {wordLimitLabel(choice.statedMaxWords)}
+                          {choice.applicationCycle === null
+                            ? ''
+                            : ` Cycle ${choice.applicationCycle}.`}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!loading && (prompts === null || prompts.length === 0) && (
+                <button
+                  type="button"
+                  onClick={startGeneral}
+                  className="mt-4 text-sm font-semibold text-blue-700 underline-offset-4 transition hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  {NEW_DRAFT_MESSAGES.startGeneral}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ------------------------------------------------- name and create */}
+          {step === 'title' && (
+            <form
+              className="mt-5"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void submit()
+              }}
+            >
+              {prompt !== null && school !== null && (
+                <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">
+                    {schoolLabel(school)}
+                  </p>
+                  <p className="mt-1.5 text-sm leading-relaxed text-slate-800">
+                    {prompt.promptText}
+                  </p>
+                  <p className="mt-2 text-xs text-slate-600">
+                    {wordLimitLabel(prompt.statedMaxWords)}
+                    {prompt.applicationCycle === null ? '' : ` Cycle ${prompt.applicationCycle}.`}
+                  </p>
+                </div>
+              )}
+
+              <label htmlFor={`${headingId}-title`} className="mb-2 block text-sm font-medium text-slate-700">
+                Title
+              </label>
+              <input
+                ref={field}
+                id={`${headingId}-title`}
+                type="text"
+                value={title}
+                autoComplete="off"
+                disabled={submitting}
+                aria-invalid={message !== null}
+                aria-describedby={message === null ? undefined : messageId}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Why I want to become a CRNA"
+                className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
+              />
+
+              <p className="mt-1.5 text-xs text-slate-500">
+                {trimmed > MAX_TITLE_CHARS
+                  ? `${trimmed} characters. Use ${MAX_TITLE_CHARS} or fewer.`
+                  : `${trimmed}/${MAX_TITLE_CHARS}`}
+              </p>
+
+              {message !== null && (
+                <p
+                  id={messageId}
+                  role="alert"
+                  className="mt-3 rounded-xl border border-red-300 bg-red-50 px-3.5 py-2.5 text-sm text-red-800"
+                >
+                  {message}
+                </p>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={dismiss}
+                  disabled={submitting}
+                  className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!canSubmit}
+                  className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitting ? 'Creating…' : 'Create draft'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {step !== 'title' && (
+            <div className="mt-6 flex justify-end">
               <button
                 type="button"
                 onClick={dismiss}
-                disabled={submitting}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               >
                 Cancel
               </button>
-              <button
-                type="submit"
-                disabled={!canSubmit}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {submitting ? 'Creating…' : 'Create draft'}
-              </button>
             </div>
-          </form>
+          )}
         </div>
       </div>
     </div>

@@ -317,7 +317,16 @@ test('a repository failure leaks no detail', () => {
 })
 
 test('the library is given summaries only, and no essay reaches it', () => {
-  assert.match(PAGE, /<LibraryClient drafts=\{listed\.value\} \/>/)
+  assert.match(PAGE, /drafts=\{listed\.value\}/)
+  // The directory is handed over as a LIST and a FLAG, read on the server after
+  // the gate. Unavailable and empty are separate values because they read the
+  // same on screen and are not the same thing.
+  assert.match(PAGE, /schools=\{schools\.ok \? schools\.value : \[\]\}/)
+  assert.match(PAGE, /schoolsUnavailable=\{!schools\.ok\}/)
+  // AND A FAILED DIRECTORY DOES NOT TAKE THE PAGE DOWN: the only throw is the
+  // one about drafts, so starting a general statement survives it.
+  assert.equal(PAGE.split('throw new Error').length - 1, 1, 'one throw, and it is about drafts')
+  assert.doesNotMatch(PAGE, /schools\.detail/, 'a Postgres message is not a page')
   assert.match(LIST, /StatementDraftSummary/)
   // Neither file mentions an essay, reads a full draft, or fetches one.
   for (const [name, source] of [['page', PAGE], ['list', LIST]] as const) {
@@ -347,15 +356,29 @@ test('the dialog POSTs to the gated API and builds no body of its own', () => {
   // The body is the pure module's, verbatim. No object literal is assembled here.
   assert.match(DIALOG, /body: JSON\.stringify\(request\.body\)/)
   assert.doesNotMatch(DIALOG, /title:\s*[a-zA-Z]/, 'the dialog must not assemble a payload')
-  assert.equal(DIALOG.split('fetch(').length - 1, 1, 'exactly one request in the whole flow')
+  // TWO REQUESTS, AND EXACTLY TWO: one that lists a school's prompts and one
+  // that creates. There is deliberately no third -- in particular no PATCH
+  // after the create, because the prompt rides the create itself.
+  assert.equal(DIALOG.split('fetch(NEW_DRAFT_ENDPOINT').length - 1, 1, 'one create request')
+  assert.equal(DIALOG.split('fetch(promptsPath(').length - 1, 1, 'one prompt-list request')
+  assert.equal(DIALOG.split('fetch(').length - 1, 2, 'and no other request anywhere')
+  assert.doesNotMatch(DIALOG, /method: 'PATCH'|PATCH/, 'a created draft is never patched')
 })
 
 test('the dialog holds a SYNCHRONOUS duplicate guard, set before the request', () => {
   assert.match(DIALOG, /const inFlight = useRef\(false\)/)
   assert.match(DIALOG, /if \(inFlight\.current\) return/)
-  const guardCheck = DIALOG.indexOf('if (inFlight.current) return')
-  const guardSet = DIALOG.indexOf('inFlight.current = true')
-  const request = DIALOG.indexOf('await fetch(')
+  // MEASURED INSIDE THE CREATE FLOW, not across the file: the prompt list also
+  // awaits a fetch, and an indexOf over the whole source would find whichever
+  // appeared first rather than the one this ordering is about.
+  const create = DIALOG.slice(
+    DIALOG.indexOf('const submit = useCallback'),
+    DIALOG.indexOf('if (!open) return null')
+  )
+  assert.ok(create.length > 0, 'the create flow was not found')
+  const guardCheck = create.indexOf('if (inFlight.current) return')
+  const guardSet = create.indexOf('inFlight.current = true')
+  const request = create.indexOf('await fetch(')
   assert.ok(guardCheck !== -1 && guardSet !== -1 && request !== -1)
   assert.ok(guardCheck < guardSet, 'the guard is read before it is taken')
   assert.ok(guardSet < request, 'the guard is taken before anything awaits')
@@ -401,7 +424,11 @@ test('the dialog renders only its own controlled message', () => {
 test('the title input does not silently truncate', () => {
   assert.doesNotMatch(DIALOG, /maxLength/, 'maxLength would shorten a pasted title')
   assert.doesNotMatch(DIALOG, /\.slice\(0,|substring\(/)
-  assert.match(DIALOG, /newDraftRequest\(title\)/)
+  // The dialog picks neither builder itself: createRequestFor does, from the
+  // path, so a general body and a school body cannot be swapped by a typo here.
+  assert.match(DIALOG, /createRequestFor\(\{ path, title, promptId:/)
+  assert.doesNotMatch(DIALOG, /newDraftRequest\(|newSchoolDraftRequest\(/,
+    'the dialog chooses a path, not a builder')
 })
 
 test('no client-side gate was added: the server gate stays authoritative', () => {
@@ -611,6 +638,7 @@ test('the redesign added no dependency', () => {
     '@/lib/SidebarContext',
     '@/lib/statement/draft/library',
     '@/lib/statement/draft/rows',
+    '@/lib/statement/draft/schoolPicker',
     'next/link',
     'react',
   ])
@@ -754,4 +782,97 @@ test('a created school draft still opens at the path the id gives', () => {
   })
   assert.equal(outcome.type, 'created')
   assert.equal(outcome.type === 'created' && outcome.path, draftPath('aaaaaaaa-0000-4000-8000-000000000001'))
+})
+
+/* ===========================================================================
+ * The guided New Draft dialog.
+ *
+ * Structural again, for the usual reason: the component cannot be imported
+ * under node --test. What the flow DOES is tested for real in newDraft.test.ts
+ * and picker.test.ts; what is asserted here is that the dialog calls those
+ * functions rather than reimplementing them beside them.
+ * ======================================================================== */
+
+test('the dialog is handed the directory, and never fetches one of its own', () => {
+  // One read, on the server, after the gate. A browser-side schools query would
+  // be a second code path to secure for no gain.
+  assert.match(LIST, /schools=\{schools\}/)
+  assert.match(LIST, /schoolsUnavailable=\{schoolsUnavailable\}/)
+  assert.match(DIALOG, /schools: readonly SchoolOption\[\]/)
+  assert.doesNotMatch(DIALOG, /\/api\/statement\/schools|listSchoolPickerOptions/)
+})
+
+test('an unreadable directory is told apart from an empty one, by the committed function', () => {
+  assert.match(DIALOG, /directoryNotice\(\{/)
+  assert.match(DIALOG, /unavailable: schoolsUnavailable/)
+  // The dialog writes no notice of its own for either case.
+  assert.doesNotMatch(DIALOG, /No schools are listed/)
+})
+
+test('the stale-response guard wraps the prompt list, and reads a REF', () => {
+  // Switching schools quickly puts several requests in the air. A late reply
+  // must not land under a different school's name.
+  assert.match(DIALOG, /mayApplyPrompts\(\{ requestedFor: option\.id, browsingNow: browsing\.current \}\)/)
+  assert.match(DIALOG, /const browsing = useRef<string \| null>\(null\)/)
+  // Guarded on BOTH outcomes of the request, not just the happy one.
+  assert.equal(DIALOG.split('mayApplyPrompts(').length - 1, 2, 'the reply and the failure')
+  // And a stale reply returns without writing anything.
+  assert.match(DIALOG, /if \(!mayApplyPrompts\([^)]*\)\) return/)
+})
+
+test('a prompt cannot outlive the school it was chosen from', () => {
+  assert.match(DIALOG, /setPrompt\(selectionAfterSchoolChange\(\{/)
+  assert.match(DIALOG, /browsingId: browsing\.current/)
+})
+
+test('a withdrawn prompt reopens the list and creates nothing in its place', () => {
+  assert.match(DIALOG, /if \(promptWasRefused\(outcome\.message\)\) \{/)
+  // The selection is dropped and the prompt screen returns. No general draft is
+  // created as a consolation -- there is no second request to make one with.
+  const refusal = DIALOG.slice(DIALOG.indexOf('if (promptWasRefused('))
+  assert.match(refusal.slice(0, 160), /setPrompt\(null\)/)
+  assert.match(refusal.slice(0, 160), /setStep\('prompt'\)/)
+})
+
+test('the general path is offered wherever a school path can dead-end', () => {
+  // From the school screen (an unreadable or empty directory) and from the
+  // prompt screen (a school that lists none). Both keep the typed title.
+  assert.equal(DIALOG.split('onClick={startGeneral}').length - 1, 2)
+  assert.match(DIALOG, /const startGeneral = useCallback\(\(\) => \{/)
+  const general = DIALOG.slice(DIALOG.indexOf('const startGeneral'), DIALOG.indexOf('const goBack'))
+  assert.doesNotMatch(general, /setTitle/, 'switching path must not clear the title')
+})
+
+test('neither path is preselected', () => {
+  assert.match(DIALOG, /useState<CreatePath \| null>\(null\)/)
+  assert.match(DIALOG, /useState<NewDraftStep>\('choice'\)/)
+  // Both choices are explicit clicks, and there are exactly two of them.
+  assert.equal(DIALOG.split("setPath('school')").length - 1, 1)
+  assert.equal(DIALOG.split("setPath('general')").length - 1, 2, 'the choice, and the dead-end exit')
+})
+
+test('the dialog authors no canonical prompt value, anywhere', () => {
+  // The whole trust boundary, as a property of the source: a field it cannot
+  // name is a field it cannot send.
+  for (const canonical of ['schoolId', 'school_id', 'promptText:', 'prompt_text',
+                           'statedMaxWords:', 'stated_max_words']) {
+    assert.equal(DIALOG.includes(canonical), false, `the dialog must not name ${canonical}`)
+  }
+})
+
+test('the prompt wording is rendered as escaped text, never as markup', () => {
+  assert.doesNotMatch(DIALOG, /dangerouslySetInnerHTML/)
+  assert.match(DIALOG, /\{choice\.promptText\}/)
+  assert.match(DIALOG, /wordLimitLabel\(/, 'the limit is worded by the committed function')
+})
+
+test('the dialog is still a modal with a focus trap', () => {
+  assert.match(DIALOG, /role="dialog"/)
+  assert.match(DIALOG, /aria-modal="true"/)
+  assert.match(DIALOG, /aria-labelledby=\{headingId\}/)
+  assert.match(DIALOG, /event\.key === 'Escape'/)
+  assert.match(DIALOG, /event\.key !== 'Tab'/)
+  // Back is a navigation, not a close: only Cancel and Escape reach onClose.
+  const back = DIALOG.slice(DIALOG.indexOf('const goBack'), DIALOG.indexOf('const submit'))
+  assert.doesNotMatch(back, /onClose/)
 })

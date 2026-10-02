@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactElement } from 'react'
 import Link from 'next/link'
 import type { StatementDraftSummary } from '@/lib/statement/draft/rows'
+import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
 import {
   DRAFT_ORDERS,
   draftDay,
@@ -51,7 +52,17 @@ import NewDraftDialog from './NewDraftDialog'
  * extraction endpoint -- and the V2 analyser is not. The previous wording
  * claimed upload was unwired, which stopped being true when upload shipped.
  */
-export default function LibraryClient({ drafts }: { drafts: readonly StatementDraftSummary[] }) {
+export default function LibraryClient({
+  drafts,
+  schools,
+  schoolsUnavailable,
+}: {
+  drafts: readonly StatementDraftSummary[]
+  /** The directory, three columns, read on the server after the gate. */
+  schools: readonly SchoolOption[]
+  /** The directory could not be READ. Not the same as it being empty. */
+  schoolsUnavailable: boolean
+}) {
   const [creating, setCreating] = useState(false)
   const [query, setQuery] = useState('')
   const [order, setOrder] = useState<DraftOrder>('edited')
@@ -330,7 +341,14 @@ export default function LibraryClient({ drafts }: { drafts: readonly StatementDr
         </main>
       </div>
 
-      <NewDraftDialog open={creating} onClose={() => setCreating(false)} />
+      {/* Handed straight through: the library shows no school of its own, and
+          a summary carries none. The dialog is where a school is chosen. */}
+      <NewDraftDialog
+        open={creating}
+        onClose={() => setCreating(false)}
+        schools={schools}
+        schoolsUnavailable={schoolsUnavailable}
+      />
     </div>
   )
 }
