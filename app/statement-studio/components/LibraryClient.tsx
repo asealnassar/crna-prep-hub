@@ -16,6 +16,7 @@ import {
 } from '@/lib/statement/draft/library'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import NewDraftDialog from './NewDraftDialog'
+import RequirementPreview from './RequirementPreview'
 
 /**
  * The statement draft library.
@@ -58,6 +59,7 @@ export default function LibraryClient({
   schoolsUnavailable,
   submissionsEnabled,
   pastePreview,
+  requirementsPreview = false,
 }: {
   drafts: readonly StatementDraftSummary[]
   /** The directory, three columns, read on the server after the gate. */
@@ -68,6 +70,15 @@ export default function LibraryClient({
   submissionsEnabled: boolean
   /** Development-only: draw the paste screens without wiring them up. */
   pastePreview: boolean
+  /**
+   * Development-only: draw the school writing-requirement checklists from the
+   * research fixtures.
+   *
+   * Defaults to false, so a page that does not pass it draws none. Decided on
+   * the server, after the Studio gate, from NODE_ENV and an explicit query
+   * parameter -- see app/statement-studio/page.tsx.
+   */
+  requirementsPreview?: boolean
 }) {
   const [creating, setCreating] = useState(false)
   const [query, setQuery] = useState('')
@@ -100,6 +111,35 @@ export default function LibraryClient({
           sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'
         } pt-16 lg:pt-0`}
       >
+        {/*
+          THE PREVIEW REPLACES THE LIBRARY, IT DOES NOT SIT BESIDE IT.
+
+          WHY THIS IS A CONDITIONAL AND NOT A SECOND BLOCK. The root element of
+          this component is `flex`, and its one child is the column that holds
+          everything -- `min-w-0 flex-1`, which is what lets the page reflow
+          when the nav collapses. A preview rendered as a SECOND child of that
+          flex row becomes a column BESIDE the page: it claims its own width and
+          `flex-1` obligingly shrinks the real content to fit, which squeezed
+          the hero, the three step cards and the draft library into narrow
+          strips and wrapped their text to pieces. That is exactly what
+          happened, and the comment that shipped with it said "below the
+          library" because it was below the `</main>`'s PARENT rather than
+          below the `</main>`.
+
+          SO THERE IS ONE CONTENT COLUMN AND IT RENDERS ONE THING. The preview
+          gets the same `mx-auto w-full max-w-7xl` container the library uses,
+          so it is centred and padded identically and inherits the same
+          responsive behaviour instead of having its own.
+
+          AND WITHOUT THE PARAMETER THIS BRANCH IS NOT TAKEN, so the approved
+          layout below is rendered by exactly the markup that rendered it
+          before -- not a reconstruction of it.
+        */}
+        {requirementsPreview ? (
+          <main className="mx-auto w-full max-w-7xl px-4 pb-16 pt-6 sm:px-6 lg:px-10 lg:pt-10">
+            <RequirementPreview />
+          </main>
+        ) : (
         <main className="mx-auto w-full max-w-7xl px-4 pb-16 pt-6 sm:px-6 lg:px-10 lg:pt-10">
           {/* ============================================================ hero */}
           <section className="relative isolate overflow-hidden rounded-3xl bg-slate-950 shadow-xl shadow-slate-900/10">
@@ -344,6 +384,7 @@ export default function LibraryClient({
             )}
           </section>
         </main>
+        )}
       </div>
 
       {/* Handed straight through: the library shows no school of its own, and

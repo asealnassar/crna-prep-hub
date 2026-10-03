@@ -19,6 +19,7 @@ import {
   promptWasRefused,
   selectionAfterSchoolChange,
   stepBefore,
+  stepBeforeTitle,
   stepForPath,
   type CreatePath,
   type NewDraftStep,
@@ -36,6 +37,12 @@ import {
   type PromptChoice,
 } from '@/lib/statement/draft/picker'
 import type { SchoolOption } from '@/lib/statement/draft/schoolPicker'
+import {
+  canCreateRequirementNow, requirementDraftRequest, requirementStepFrom, requirementsPath,
+} from '@/lib/statement/requirements/newDraftFlow'
+import { checklistView } from '@/lib/statement/requirements/checklistView'
+import type { RequirementSet } from '@/lib/statement/requirements/requirement'
+import RequirementChecklist from './RequirementChecklist'
 
 /**
  * New draft: a path, then what that path needs, then the draft.
@@ -114,6 +121,17 @@ export default function NewDraftDialog({
   const [pasted, setPasted] = useState<PastedPrompt | null>(null)
   const [query, setQuery] = useState('')
   const [prompts, setPrompts] = useState<readonly PromptChoice[] | null>(null)
+  /**
+   * The school's published writing requirements, when the catalog has any.
+   *
+   * null MEANS "NOT APPLICABLE", which covers every reason: the rollout flag is
+   * off, the migration is unapplied, the school has none researched, or the
+   * read failed. All of them send the applicant to the prompt list, which is
+   * the flow that ships today.
+   */
+  const [requirementSets, setRequirementSets] = useState<readonly RequirementSet[] | null>(null)
+  /** The document chosen from the checklist. One id, never a snapshot. */
+  const [requirementId, setRequirementId] = useState<string | null>(null)
   const [promptNotice, setPromptNotice] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -158,6 +176,8 @@ export default function NewDraftDialog({
     setPrompts(null)
     setPromptNotice(null)
     setLoading(false)
+    setRequirementSets(null)
+    setRequirementId(null)
     browsing.current = null
     inFlight.current = false
     const timer = setTimeout(() => panel.current?.focus(), 0)
@@ -230,10 +250,46 @@ export default function NewDraftDialog({
     if (browsing.current !== option.id) setPasted(null)
     browsing.current = option.id
     setSchool(option)
+    setRequirementSets(null)
+    setRequirementId(null)
     setStep('prompt')
     setPrompts(null)
     setPromptNotice(PICKER_MESSAGES.loading)
     setLoading(true)
+
+    // ---- does this school publish structured writing requirements? --------
+    //
+    // ASKED FIRST, AND FAILING SOFT. A 404 (the flag is off), a 500, a body
+    // this build does not understand and a school with none researched all
+    // return 'fallback', and the prompt list below runs exactly as it does
+    // today. Nothing here can prevent the shipped flow from working.
+    //
+    // THE SAME STALENESS GUARD THE PROMPT LIST USES. An applicant who clicks
+    // two schools quickly must not be shown the first one's requirements under
+    // the second one's name, so the reply is dropped unless they are still
+    // browsing the school it was requested for.
+    try {
+      const catalog = await fetch(requirementsPath(option.id))
+      const catalogBody = await catalog.json().catch(() => null)
+      if (!mayApplyPrompts({ requestedFor: option.id, browsingNow: browsing.current })) return
+
+      const outcome = requirementStepFrom({
+        status: catalog.status,
+        body: catalogBody,
+        schoolId: option.id,
+        schoolName: option.name,
+      })
+      if (outcome.kind === 'ready') {
+        setRequirementSets(outcome.sets)
+        setPromptNotice(null)
+        setLoading(false)
+        setStep('requirement')
+        return
+      }
+    } catch {
+      // A thrown fetch is a fallback like any other. The prompt list follows.
+      if (!mayApplyPrompts({ requestedFor: option.id, browsingNow: browsing.current })) return
+    }
 
     try {
       const response = await fetch(promptsPath(option.id))
@@ -258,6 +314,66 @@ export default function NewDraftDialog({
   }, [prompt])
 
   /**
+   * Start ONE of the school's writing documents.
+   *
+   * ONE ID, AND NOTHING ELSE IS REMEMBERED. The wording, the limits and the
+   * provenance are not carried in state and are not sent: the server reads them
+   * from the catalog when the draft is created. So this cannot create a draft
+   * against a requirement the catalog does not currently publish, and a
+   * tampered client holding a stale snapshot has nothing to submit.
+   *
+   * THE TITLE IS KEPT, like every other transition here. And no other document
+   * is touched: starting the diversity essay creates one draft, not the
+   * school's whole set.
+   *
+   * A PROMPT SELECTION IS DROPPED, because a draft is one or the other. The
+   * server refuses a body carrying both; this is the browser-side half.
+   */
+  const startRequirement = useCallback((id: string) => {
+    setRequirementId(id)
+    setPrompt(null)
+    setPasted(null)
+    setPath('school')
+    setMessage(null)
+    setStep('title')
+  }, [])
+
+  /**
+   * Leave the checklist for this school's older catalog prompts.
+   *
+   * KEPT REACHABLE DELIBERATELY. A school may have rows in statement_prompts
+   * AND a published requirement set, and the prompt path is the shipped flow --
+   * it must not become unreachable because a newer catalog answered first.
+   */
+  const showListedPrompts = useCallback(async () => {
+    if (school === null) return
+    setRequirementId(null)
+    setStep('prompt')
+    setPrompts(null)
+    setPromptNotice(PICKER_MESSAGES.loading)
+    setLoading(true)
+    try {
+      const response = await fetch(promptsPath(school.id))
+      const body = await response.json().catch(() => null)
+      if (!mayApplyPrompts({ requestedFor: school.id, browsingNow: browsing.current })) return
+      const outcome = promptListFrom({ status: response.status, body })
+      setLoading(false)
+      if (!outcome.ok) {
+        setPrompts(null)
+        setPromptNotice(outcome.message)
+        return
+      }
+      setPrompts(outcome.prompts)
+      setPromptNotice(outcome.prompts.length === 0 ? NEW_DRAFT_MESSAGES.noPrompts : null)
+    } catch {
+      if (!mayApplyPrompts({ requestedFor: school.id, browsingNow: browsing.current })) return
+      setLoading(false)
+      setPrompts(null)
+      setPromptNotice(PICKER_MESSAGES.failed)
+    }
+  }, [school])
+
+  /**
    * Abandon the school and write a general statement. THE TITLE IS KEPT: an
    * applicant who already named their draft should not retype it because the
    * school they picked turned out to list no questions.
@@ -266,6 +382,11 @@ export default function NewDraftDialog({
     setPath('general')
     setPrompt(null)
     setPasted(null)
+    // A GENERAL STATEMENT ANSWERS NOTHING, so a requirement chosen a moment ago
+    // must not survive into the create. Without this, an applicant who started
+    // a document and then changed their mind would get a requirement-backed
+    // draft labelled as a general one.
+    setRequirementId(null)
     setStep('title')
   }, [])
 
@@ -277,11 +398,21 @@ export default function NewDraftDialog({
   }, [])
 
   const goBack = useCallback(() => {
-    const before = stepBefore(step, path)
+    // THE TITLE SCREEN IS THE ONE THAT NEEDS MORE THAN THE PATH. Both kinds of
+    // school draft carry path === 'school', so stepBefore() alone would send a
+    // requirement-backed draft back to the prompt list -- the other catalog,
+    // which the applicant never chose from.
+    const before = step === 'title'
+      ? stepBeforeTitle({ path, requirementId })
+      : stepBefore(step, path)
     if (before === null) return
     if (before === 'choice') setPath(null)
+    // LEAVING THE TITLE FOR THE CHECKLIST UNCHOOSES THE DOCUMENT, so the cards
+    // all read Start again and the applicant can pick a different one. The
+    // title survives, as it does on every other transition here.
+    if (before === 'requirement') setRequirementId(null)
     setStep(before)
-  }, [step, path])
+  }, [step, path, requirementId])
 
   const submit = useCallback(async () => {
     if (inFlight.current) return
@@ -308,9 +439,52 @@ export default function NewDraftDialog({
       return
     }
 
-    // THREE SHAPES, THREE BUILDERS, AND THE PASTE IS CHECKED FIRST. A pasted
-    // prompt must never travel the promptId branch -- that branch means "the
-    // catalog vouches for this", and nobody has reviewed this wording yet.
+    // FOUR SHAPES, FOUR BUILDERS, IN A FIXED ORDER OF PRECEDENCE.
+    //
+    // A REQUIREMENT IS CHECKED FIRST, and it is the only branch that sends a
+    // requirementId. It cannot be combined with a promptId -- the server
+    // refuses a body carrying both -- so this returns its own request rather
+    // than merging into the school builder.
+    //
+    // THE PASTE IS CHECKED BEFORE THE PROMPT, unchanged: a pasted prompt must
+    // never travel the promptId branch, which means "the catalog vouches for
+    // this", and nobody has reviewed that wording yet.
+    if (requirementId !== null) {
+      if (!canCreateRequirementNow({ title, requirementId, submitting })) {
+        setMessage(NEW_DRAFT_MESSAGES.requirementTitleRequired)
+        field.current?.focus()
+        return
+      }
+      if (!retryable) return
+      inFlight.current = true
+      setSubmitting(true)
+      setMessage(null)
+      try {
+        const response = await fetch(NEW_DRAFT_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requirementDraftRequest(title, requirementId)),
+        })
+        const body = await response.json().catch(() => null)
+        const outcome = createOutcomeFrom({ status: response.status, body })
+        if (outcome.type === 'created') {
+          // NEITHER THE GUARD NOR THE BUSY STATE IS RELEASED, exactly as the
+          // other paths do it: router.push is a soft navigation and this
+          // component stays mounted until the new route lands.
+          router.push(outcome.path)
+          return
+        }
+        setMessage(outcome.message)
+        setRetryable(outcome.retryable)
+      } catch {
+        setMessage(NETWORK_FAILURE.message)
+        setRetryable(NETWORK_FAILURE.retryable)
+      }
+      inFlight.current = false
+      setSubmitting(false)
+      return
+    }
+
     const request = pasted !== null
       ? newPastedDraftRequest(title, school === null ? null : school.id, pasted)
       : createRequestFor({ path, title, promptId: prompt === null ? null : prompt.id })
@@ -364,12 +538,22 @@ export default function NewDraftDialog({
 
     inFlight.current = false
     setSubmitting(false)
-  }, [path, title, prompt, pasted, school, retryable, router, submissionsEnabled])
+  }, [path, title, prompt, pasted, school, retryable, router, submissionsEnabled,
+      requirementId, submitting])
 
   if (!open) return null
 
   const trimmed = title.trim().length
-  const canSubmit = pasted !== null
+  /*
+    THREE GATES, CHECKED IN THE SAME ORDER submit() USES ITS BUILDERS.
+    A requirement-backed draft cannot be judged by canCreateNow: that function
+    requires a promptId on the school path, and a requirement-backed draft has
+    none by design -- its identity is requirement_id. Routing it through the
+    same gate would leave Create permanently disabled.
+  */
+  const canSubmit = requirementId !== null
+    ? canCreateRequirementNow({ title, requirementId, submitting })
+    : pasted !== null
     ? canCreatePasteNow({
         title,
         schoolId: school === null ? null : school.id,
@@ -403,6 +587,7 @@ export default function NewDraftDialog({
   })
   const heading = step === 'choice' ? 'New draft'
     : step === 'school' ? NEW_DRAFT_MESSAGES.chooseSchool
+    : step === 'requirement' ? NEW_DRAFT_MESSAGES.chooseRequirement
     : step === 'prompt' ? NEW_DRAFT_MESSAGES.choosePrompt
     : step === 'paste' ? NEW_DRAFT_MESSAGES.pasteHeading
     : NEW_DRAFT_MESSAGES.nameDraft
@@ -434,7 +619,9 @@ export default function NewDraftDialog({
                 <p className="mt-1 truncate text-sm text-slate-500">{schoolLabel(school)}</p>
               )}
             </div>
-            {stepBefore(step, path) !== null && (
+            {(step === 'title'
+              ? stepBeforeTitle({ path, requirementId })
+              : stepBefore(step, path)) !== null && (
               <button
                 type="button"
                 onClick={goBack}
@@ -523,6 +710,58 @@ export default function NewDraftDialog({
           )}
 
           {/* ----------------------------------------------- choose a prompt */}
+          {/* ----------------------------------- the school's writing documents */}
+          {/*
+            THE CHECKLIST, RENDERED BY THE SAME COMPONENT THE EDITOR'S LIBRARY
+            PREVIEW USES. One implementation, so what the owner approved in the
+            preview is literally what an applicant sees here.
+
+            NO DRAFT EXISTS YET, so every card reads Start and `drafts` is
+            empty: the dialog creates one document when Start is pressed and
+            nothing before that. Continue appears on this school's cards only
+            after a draft exists, which is a later visit.
+          */}
+          {step === 'requirement' && requirementSets !== null && (
+            <div className="mt-5 grid gap-4">
+              <p className="text-sm leading-relaxed text-slate-600">
+                {NEW_DRAFT_MESSAGES.requirementBody}
+              </p>
+              {requirementSets.map((set) => (
+                <RequirementChecklist
+                  key={set.id}
+                  view={checklistView({ set, drafts: [] })}
+                  actions={{
+                    onStart: startRequirement,
+                    // UNREACHABLE FROM HERE: no card can be in the Continue
+                    // state, because this screen is only shown while creating.
+                    draftHref: () => '#',
+                    busy: submitting,
+                  }}
+                />
+              ))}
+
+              {/*
+                THE OLDER CATALOG STAYS REACHABLE. A school may have rows in
+                both, and the prompt path is the shipped flow -- it must not
+                become unreachable because a newer catalog answered first.
+              */}
+              <button
+                type="button"
+                onClick={() => void showListedPrompts()}
+                className="justify-self-start text-sm font-semibold text-blue-700 underline underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                {NEW_DRAFT_MESSAGES.otherPrompts}
+              </button>
+              <button
+                type="button"
+                onClick={startGeneral}
+                className="justify-self-start text-sm font-semibold text-slate-600 underline underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              >
+                {NEW_DRAFT_MESSAGES.startGeneral}
+              </button>
+            </div>
+          )}
+
           {step === 'prompt' && (
             <div className="mt-5">
               {promptNotice !== null && (
@@ -719,6 +958,60 @@ export default function NewDraftDialog({
                 void submit()
               }}
             >
+              {/*
+                WHICH DOCUMENT IS BEING NAMED. An applicant who pressed Start on
+                the diversity essay must see that on the title screen, or three
+                visits to this dialog look identical and they cannot tell which
+                one they are about to create.
+
+                THE LABEL COMES FROM THE SET IN STATE, not from a snapshot held
+                for submission: nothing on this screen is sent, and the server
+                re-reads the requirement from the catalog when it creates.
+              */}
+              {requirementId !== null && school !== null && (
+                <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">
+                    {schoolLabel(school)}
+                  </p>
+                  {(() => {
+                    const chosen = (requirementSets ?? [])
+                      .flatMap((set) => set.requirements)
+                      .find((candidate) => candidate.id === requirementId)
+                    if (chosen === undefined) return null
+                    return (
+                      <>
+                        <p className="mt-1 text-sm font-bold text-slate-900">{chosen.label}</p>
+                        <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                          {chosen.promptText}
+                        </p>
+                        {/*
+                          THE QUESTIONS STAY TOGETHER, in the one document, so
+                          an applicant naming a multipart essay can see it is
+                          one essay and not four.
+                        */}
+                        {chosen.components.length > 0 && (
+                          <ol className="mt-2 grid gap-1">
+                            {chosen.components.map((part, index) => (
+                              <li key={part.id} className="flex gap-2 text-xs leading-relaxed text-slate-600">
+                                <span className="font-semibold text-slate-400">{index + 1}.</span>
+                                <span>
+                                  {part.optional && (
+                                    <span className="mr-1 font-semibold uppercase tracking-wide">
+                                      Optional —{' '}
+                                    </span>
+                                  )}
+                                  {part.text}
+                                </span>
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </>
+                    )
+                  })()}
+                </div>
+              )}
+
               {/* A PASTED PROMPT IS LABELLED WHEREVER IT IS SHOWN, and the
                   label says what is true: nobody has checked this yet. */}
               {pasted !== null && school !== null && (

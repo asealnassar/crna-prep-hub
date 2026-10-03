@@ -44,6 +44,18 @@ export interface StatementDraftRow {
   prompt_text: string | null
   /** integer, so PostgREST sends a JSON number -- never a string. */
   stated_max_words: number | null
+
+  // ----------------------------------------------- the structured requirement
+  // ABSENT, NOT NULL, ON EVERY ENVIRONMENT WHERE 20261002_005 IS UNAPPLIED --
+  // which is why both are optional properties rather than `| null` like the
+  // four above. The repository does not even ask for these columns unless
+  // STATEMENT_REQUIREMENTS is on, so the keys are missing from the row object
+  // entirely, and `undefined` here means "this deployment has no requirement
+  // columns" while `null` means "this draft has no requirement". Collapsing the
+  // two would make an unmigrated database indistinguishable from a general
+  // statement.
+  requirement_id?: string | null
+  requirement_snapshot?: unknown
 }
 
 /**
@@ -82,6 +94,22 @@ export interface StatementDraft {
   readonly promptId: string | null
   readonly promptText: string | null
   readonly statedMaxWords: number | null
+
+  /**
+   * The frozen structured requirement, when this draft has one.
+   *
+   * null COVERS BOTH "no requirement" AND "this deployment has no requirement
+   * columns", and that collapse is deliberate HERE, unlike on the row: every
+   * consumer treats the two the same way -- fall back to the prompt snapshot --
+   * so giving them separate representations downstream would be a distinction
+   * nothing acts on. The row keeps them apart; the parsed draft does not need to.
+   *
+   * `unknown` RATHER THAN A PARSED TYPE. Parsing lives in
+   * requirements/snapshot.ts, which this module does not import: rows.ts stays
+   * a pure row-to-object mapper with no knowledge of what a requirement is.
+   */
+  readonly requirementId: string | null
+  readonly requirementSnapshot: unknown
 }
 
 /**
@@ -240,6 +268,16 @@ export function draftPromptFrom(fields: {
   readonly promptId: unknown
   readonly promptText: unknown
   readonly statedMaxWords: unknown
+  /**
+   * The structured requirement's id, when this draft is backed by one.
+   *
+   * IT EXISTS HERE ONLY TO ADMIT A THIRD SHAPE, and it is optional so that the
+   * two callers which know nothing about requirements -- the editor's reload
+   * parser and the picker's response parser -- keep the behaviour they had.
+   * Absent is read as "no requirement", which is the state every draft that
+   * exists today is in.
+   */
+  readonly requirementId?: unknown
 }): DraftPromptSnapshot | undefined {
   const { schoolId: school, promptId: prompt, promptText: text, statedMaxWords: words } = fields
 
@@ -247,13 +285,55 @@ export function draftPromptFrom(fields: {
     return undefined
   }
 
-  if (school === null && prompt === null && text === null && words === null) return NO_PROMPT
+  // A requirement id of any usable shape. undefined and null both mean "none".
+  const requirement = typeof fields.requirementId === 'string'
+    && SNAPSHOT_UUID.test(fields.requirementId)
+    ? fields.requirementId
+    : null
 
-  // A prompt was chosen, so all three identifying fields must be there.
+  if (school === null && prompt === null && text === null && words === null) {
+    // A GENERIC DRAFT CANNOT CARRY A REQUIREMENT. If one is present with no
+    // school and no wording, the row is incoherent and must not be read as a
+    // general statement -- that would silently drop the question the essay
+    // answers and hand it to the analyser with six categories.
+    return requirement === null ? NO_PROMPT : undefined
+  }
+
+  // THE SCHOOL AND THE WORDING ARE REQUIRED IN BOTH REMAINING SHAPES. They are
+  // what the editor displays and what the analyser judges against, so neither
+  // may be absent whichever kind of draft this is.
   if (typeof school !== 'string' || !SNAPSHOT_UUID.test(school)) return undefined
-  if (typeof prompt !== 'string' || !SNAPSHOT_UUID.test(prompt)) return undefined
   if (typeof text !== 'string' || text.trim().length === 0) return undefined
   if (tooManyCodePoints(text)) return undefined
+
+  // ---- which of the two prompted shapes is this? -------------------------
+  //
+  // THREE STATES, NOT TWO, AND prompt_id IS WHAT DISTINGUISHES THEM:
+  //
+  //   LEGACY     prompt_id set, requirement_id null. The wording came from
+  //              public.statement_prompts (or from an applicant's paste), and
+  //              prompt_id is a uuid in THAT table -- which is the only thing
+  //              it has ever meant and the only thing it may mean.
+  //   REQUIREMENT prompt_id NULL, requirement_id set. The wording came from
+  //              public.statement_requirements and its identity lives in
+  //              requirement_id and requirement_snapshot. prompt_id stays null
+  //              because an id from a different table does not belong in it.
+  //   NEITHER    both null with a school and wording present: nothing can say
+  //              where this question came from, so the row is refused rather
+  //              than displayed as though it were vouched for.
+  //
+  // AND NEVER BOTH. A row carrying both ids is two claims about one question;
+  // refusing it here is the second answer to that, the first being the CHECK
+  // constraint in 20261002_005.
+  if (prompt === null) {
+    if (requirement === null) return undefined
+    const statedMaxWords = parseStatedMaxWords(words)
+    if (statedMaxWords === undefined) return undefined
+    return { schoolId: school, promptId: null, promptText: text, statedMaxWords }
+  }
+
+  if (requirement !== null) return undefined
+  if (typeof prompt !== 'string' || !SNAPSHOT_UUID.test(prompt)) return undefined
 
   const statedMaxWords = parseStatedMaxWords(words)
   if (statedMaxWords === undefined) return undefined
@@ -275,6 +355,10 @@ function parseDraftPrompt(row: StatementDraftRow): DraftPromptSnapshot | undefin
     promptId: row.prompt_id,
     promptText: row.prompt_text,
     statedMaxWords: row.stated_max_words,
+    // ABSENT ON EVERY UNMIGRATED DEPLOYMENT, which reads as "no requirement"
+    // and therefore as the legacy shape -- exactly right, because without the
+    // column there are no requirement-backed drafts to read.
+    requirementId: row.requirement_id,
   })
 }
 
@@ -320,6 +404,14 @@ export function draftFromRow(row: StatementDraftRow | null | undefined): Stateme
     promptId: prompt.promptId,
     promptText: prompt.promptText,
     statedMaxWords: prompt.statedMaxWords,
+    // PASSED THROUGH UNPARSED, and null when this deployment has no such
+    // column. A malformed snapshot does NOT make the row unusable the way a
+    // malformed prompt does: the parser in requirements/snapshot.ts returns
+    // null for it and the draft falls back to its prompt columns, which is a
+    // true description of what is stored. Refusing the whole draft would lose
+    // somebody's essay over a bad catalog copy.
+    requirementId: typeof row.requirement_id === 'string' ? row.requirement_id : null,
+    requirementSnapshot: row.requirement_snapshot ?? null,
   }
 }
 

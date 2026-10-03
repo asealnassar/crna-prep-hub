@@ -1,0 +1,260 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+/**
+ * STRUCTURAL SOURCE ASSERTIONS, for the reason the rest of this repository uses
+ * them: a component importing next/navigation cannot be imported under
+ * `node --test`, so its markup is checked by reading it as text. The decisions
+ * worth testing at runtime were deliberately moved into checklistView.ts and
+ * are tested there; what is left here is "does the markup render what it was
+ * given, and does it render nothing it was not".
+ *
+ * COMMENTS ARE STRIPPED FIRST. These files explain at length what they do NOT
+ * do -- "no fetch, no draft, no model call", "never converts a page count" --
+ * and a naive grep would match that prose and report the opposite of the truth.
+ */
+const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+
+/**
+ * THE REPOSITORY'S OWN STRIPPER, copied from editor.test.ts rather than
+ * reinvented. The `{` and the `/*` must be ADJACENT: a version that allowed
+ * whitespace between them matched from `interface ChecklistActions {` -- whose
+ * body opens with a doc comment -- all the way to a later `*\/}` in the markup,
+ * silently deleting a third of the file and passing every absence assertion.
+ */
+const stripComments = (source: string) => source
+  .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^[ \t]*\/\/.*$/gm, '')
+
+const CHECKLIST_RAW = read('../../../app/statement-studio/components/RequirementChecklist.tsx')
+const PREVIEW_RAW = read('../../../app/statement-studio/components/RequirementPreview.tsx')
+const EDITOR_RAW = read('../../../app/statement-studio/components/StatementStudioClient.tsx')
+const LIBRARY_RAW = read('../../../app/statement-studio/components/LibraryClient.tsx')
+const LIBRARY_PAGE_RAW = read('../../../app/statement-studio/page.tsx')
+const EDITOR_PAGE_RAW = read('../../../app/statement-studio/[id]/page.tsx')
+
+const CHECKLIST = stripComments(CHECKLIST_RAW)
+const PREVIEW = stripComments(PREVIEW_RAW)
+const EDITOR = stripComments(EDITOR_RAW)
+const LIBRARY = stripComments(LIBRARY_RAW)
+
+// ===================================================== the checklist
+
+test('the checklist makes NO decisions of its own', () => {
+  // It renders a ChecklistView. It does not re-derive which card is started,
+  // what a limit says, or how many are required -- those are tested at runtime.
+  assert.doesNotMatch(CHECKLIST, /constraintLines|eligibilityFor|checklistView\(/)
+  assert.doesNotMatch(CHECKLIST, /\.filter\(\(row\)/)
+  assert.match(CHECKLIST, /progressLabel\(view\)/)
+})
+
+test('the checklist FETCHES NOTHING and creates nothing itself', () => {
+  assert.doesNotMatch(CHECKLIST, /fetch\(|useEffect|router\.|\.push\(/)
+  // Starting a draft is the parent's job, handed in as a callback.
+  assert.match(CHECKLIST, /actions\.onStart\(card\.requirementId\)/)
+})
+
+test('a started card offers Continue and an unstarted one offers Start', () => {
+  assert.match(CHECKLIST, /card\.started === null \?/)
+  // THE LABELS ARE NOW CONDITIONAL, because the development preview's controls
+  // create nothing and must not read as the applicant-facing action.
+  assert.match(CHECKLIST, /\? 'Start \(preview only\)' : 'Start'/)
+  assert.match(CHECKLIST, />\s*Continue\s*</, 'the real card still links')
+  assert.match(CHECKLIST, /Continue \(preview only\)/)
+})
+
+test('A MEASURED LIMIT AND AN UNMEASURED ONE RENDER DIFFERENTLY', () => {
+  // The one visual rule this component adds. Both branches must exist, keyed
+  // off `measured` and nothing else.
+  assert.match(CHECKLIST, /limit\.measured/)
+  const chips = CHECKLIST.slice(CHECKLIST.indexOf('function LimitChips'))
+  assert.match(chips, /bg-slate-900/, 'solid chip for a watched number')
+  assert.match(chips, /border border-slate-300/, 'outlined chip for a stated rule')
+})
+
+test('the unmeasured notice is rendered from the shared constant', () => {
+  assert.match(CHECKLIST, /\{UNMEASURED_NOTICE\}/)
+  // Not a second copy of the wording.
+  assert.doesNotMatch(CHECKLIST, /cannot check page count/)
+})
+
+test('a choice renders as ONE row with nested options', () => {
+  assert.match(CHECKLIST, /row\.kind === 'document'/)
+  assert.match(CHECKLIST, /Choose one of these/)
+  assert.match(CHECKLIST, /row\.options\.map/)
+  assert.match(CHECKLIST, /Option \$\{index \+ 1\}/)
+})
+
+test('the questions are listed INSIDE the one card', () => {
+  assert.match(CHECKLIST, /card\.questions\.map/)
+  assert.match(CHECKLIST, /This one document must address/)
+  // The optional marker exists, so omitting one does not read as a gap.
+  assert.match(CHECKLIST, /question\.optional &&/)
+})
+
+test('the verification notice is ABOVE the cards', () => {
+  const noticeAt = CHECKLIST.indexOf('view.verificationNotice')
+  const rowsAt = CHECKLIST.indexOf('view.rows.map')
+  assert.ok(noticeAt > 0 && rowsAt > 0)
+  assert.ok(noticeAt < rowsAt, 'a reader must meet the warning before the requirements')
+})
+
+test('the research text is reachable and collapsed', () => {
+  assert.match(CHECKLIST, /<details/)
+  assert.match(CHECKLIST, /\{view\.originalText\}/)
+  assert.match(CHECKLIST, /What was recorded for this school/)
+})
+
+test('model and catalog prose is rendered as ESCAPED TEXT, never as markup', () => {
+  // Same rule the editor follows: there is no markdown parser in this path.
+  assert.doesNotMatch(CHECKLIST, /dangerouslySetInnerHTML/)
+  assert.doesNotMatch(PREVIEW, /dangerouslySetInnerHTML/)
+  assert.match(CHECKLIST, /whitespace-pre-wrap/)
+})
+
+test('THE CHECKLIST NEVER CONVERTS A PAGE COUNT', () => {
+  // No arithmetic on a limit anywhere in the markup.
+  assert.doesNotMatch(CHECKLIST, /pages\s*\*|\*\s*pages|wordsPerPage|250|275/)
+})
+
+// ===================================================== the preview
+
+test('THE PREVIEW CALLS NOTHING: no fetch, no model, no usage', () => {
+  assert.doesNotMatch(PREVIEW, /fetch\(|analyzePath|\/api\//)
+  assert.doesNotMatch(PREVIEW, /createClient|supabase/i)
+  // onStart is local state and nothing else.
+  assert.match(PREVIEW, /setStarted\(\(current\)/)
+})
+
+test('the preview renders through the REAL checklist component', () => {
+  // The point of the preview: no second implementation to drift.
+  assert.match(PREVIEW, /import RequirementChecklist from '\.\/RequirementChecklist'/)
+  assert.match(PREVIEW, /checklistView\(\{ set, drafts \}\)/)
+  assert.match(PREVIEW, /<RequirementChecklist/)
+})
+
+test('the preview says what it is BEFORE any requirement', () => {
+  const noticeAt = PREVIEW.indexOf('FIXTURE_NOTICE')
+  const checklistAt = PREVIEW.indexOf('<RequirementChecklist')
+  assert.ok(noticeAt > 0 && checklistAt > 0)
+  assert.ok(noticeAt < checklistAt)
+  assert.match(PREVIEW, /\{FIXTURE_SOURCE\}/)
+})
+
+test('every fixture shape is reachable from the preview', () => {
+  assert.match(PREVIEW, /FIXTURE_SETS\.map/)
+  assert.match(PREVIEW, /aria-pressed=\{candidateIndex === index\}/)
+})
+
+test('the preview offers no real draft link', () => {
+  assert.match(PREVIEW, /draftHref: \(\) => '#preview-no-draft'/)
+})
+
+// ===================================================== the gate
+
+test('THE PREVIEW IS DECIDED ON THE SERVER, AFTER THE GATE', () => {
+  const page = stripComments(LIBRARY_PAGE_RAW)
+  // NODE_ENV from the process, so a deployed build cannot be addressed into it.
+  assert.match(page, /nodeEnv: process\.env\.NODE_ENV/)
+  assert.match(page, /isAdmin: isAdminEmail\(auth\.email\)/)
+  assert.match(page, /requested: requirementsPreviewRequested\(params\[PASTE_PREVIEW_PARAM\]\)/)
+  // Read AFTER the gate: the access check comes first in the file.
+  assert.ok(page.indexOf('statementStudioAccess') < page.indexOf('requirementsPreview'))
+})
+
+test('the preview defaults to OFF, so production renders none', () => {
+  assert.match(LIBRARY, /requirementsPreview = false/)
+  // RENDERED INSTEAD OF THE LIBRARY, not beside it: the `&&` form placed it
+  // as a second child of the flex root and squeezed the real content.
+  assert.match(LIBRARY, /\{requirementsPreview \? \(/)
+  assert.doesNotMatch(LIBRARY, /\{requirementsPreview && \(/)
+})
+
+test('the preview does not feed the rollout flag or any write path', () => {
+  const page = stripComments(LIBRARY_PAGE_RAW)
+  // submissionsEnabled stays the rollout flag and nothing else.
+  assert.match(page, /submissionsEnabled=\{promptSubmissionsEnabled\(\)\}/)
+  assert.doesNotMatch(page, /submissionsEnabled=\{requirementsPreview/)
+})
+
+// ===================================================== the editor panel
+
+test('the editor shows the questions TOGETHER in the one prompt panel', () => {
+  assert.match(EDITOR, /requirement\.components\.map/)
+  assert.match(EDITOR, /This essay must address/)
+  assert.match(EDITOR, /part\.optional &&/)
+})
+
+test('the editor shows the school’s own counter when it stated one', () => {
+  assert.match(EDITOR, /requirementCounts\.map/)
+  assert.match(EDITOR, /liveCountLabel\(\{/)
+})
+
+test('the editor distinguishes measured from unmeasured limits', () => {
+  assert.match(EDITOR, /requirementLimits\.map/)
+  assert.match(EDITOR, /limit\.measured/)
+  assert.match(EDITOR, /requirementLimits\.some\(\(limit\) => !limit\.measured\)/)
+  assert.match(EDITOR, /\{UNMEASURED_NOTICE\}/)
+})
+
+test('A LEGACY DRAFT KEEPS THE WORD-LIMIT LINE IT ALWAYS HAD', () => {
+  // The backward-compatibility guarantee, in the markup: with no structured
+  // requirement the panel renders wordLimitLabel and none of the new blocks.
+  assert.match(EDITOR, /\{requirement === null && \(/)
+  assert.match(EDITOR, /\{wordLimitLabel\(prompt\.statedMaxWords\)\}/)
+})
+
+test('the requirement prop defaults to null', () => {
+  assert.match(EDITOR, /requirement = null,/)
+})
+
+test('THE EDITOR PAGE PASSES THE STORED SNAPSHOT, NOT A PROJECTION', () => {
+  const page = stripComments(EDITOR_PAGE_RAW)
+  assert.match(page, /const requirement = parseRequirementSnapshot\(draft\.requirementSnapshot\)/)
+  assert.match(page, /requirement=\{requirement\}/)
+  // effectiveSnapshot would project an old draft's columns. It is not used.
+  assert.doesNotMatch(page, /effectiveSnapshot/)
+})
+
+test('the editor still touches no draft state when rendering a requirement', () => {
+  // The requirement is read-only reference data. No setter is wired to it.
+  assert.doesNotMatch(EDITOR, /setRequirement|requirement =>|dispatch\(\{[^}]*requirement/)
+})
+
+test('the editor renders the requirement’s unresolved notes', () => {
+  assert.match(EDITOR, /requirement\.notes\.map/)
+  assert.match(EDITOR, /requirementWarning !== null &&/)
+})
+
+test('THE SIDEBAR IS NOT TOUCHED BY ANY NEW COMPONENT', () => {
+  for (const [name, source] of [['checklist', CHECKLIST], ['preview', PREVIEW]] as const) {
+    assert.doesNotMatch(source, /SidebarContext|useSidebarCollapsed|sidebarCollapsed/, name)
+    assert.doesNotMatch(source, /lg:left-|lg:pl-6[04]|fixed inset-y/, name)
+  }
+})
+
+test('THE STRIPPER DOES NOT EAT CODE', () => {
+  // The bug this test file shipped with for one run: a JSX-comment regex that
+  // allowed whitespace between `{` and `/*` matched from an interface body's
+  // opening brace to a later `*/}` and deleted a third of the file, after
+  // which every doesNotMatch assertion above passed for the wrong reason.
+  for (const [name, stripped, raw] of [
+    ['checklist', CHECKLIST, CHECKLIST_RAW],
+    ['preview', PREVIEW, PREVIEW_RAW],
+    ['editor', EDITOR, EDITOR_RAW],
+    ['library', LIBRARY, LIBRARY_RAW],
+  ] as const) {
+    // Comments are a minority of every one of these files.
+    assert.ok(stripped.length > raw.length * 0.5,
+      `${name}: stripping removed ${raw.length - stripped.length} of ${raw.length} characters`)
+  }
+  // And the specific identifiers the assertions above depend on survive.
+  for (const needle of ['function LimitChips', 'limit.measured', 'actions.onStart']) {
+    assert.ok(CHECKLIST.includes(needle), needle)
+  }
+  assert.ok(EDITOR.includes('requirementLimits.map'))
+  assert.ok(PREVIEW.includes('RequirementChecklist'))
+})

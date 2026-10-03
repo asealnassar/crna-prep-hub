@@ -549,3 +549,52 @@ export function createPromptSelectionOf(
 ): CreatePromptSelectionCheck {
   return checkCreatePromptSelection(body[PROMPT_SELECTION_KEY])
 }
+
+// ---------------------------------------------------------------------------
+// Choosing a structured requirement, at creation time only
+// ---------------------------------------------------------------------------
+
+/**
+ * The key, named once. Anything else in a body is not a requirement selection.
+ *
+ * SEPARATE FROM PROMPT_SELECTION_KEY, and the two must never be read from one
+ * request: a prompt-backed draft and a requirement-backed draft are different
+ * shapes with different identity columns, and a body naming both is a caller
+ * that does not know which it wants. The route refuses that combination.
+ */
+export const REQUIREMENT_SELECTION_KEY = 'requirementId'
+
+export type RequirementSelectionRefusal = 'invalid-requirement'
+
+export type RequirementSelectionCheck =
+  | { readonly ok: true; readonly requirementId: string | null }
+  | { readonly ok: false; readonly code: RequirementSelectionRefusal }
+
+/**
+ * A create body's requirement selection, or a refusal.
+ *
+ * THE SAME NARROW DOOR THE PROMPT PATH USES, for the same reason. One key is
+ * read. A body carrying `requirementSnapshot`, `promptText`, `constraints`,
+ * `verification`, `schoolId` or any snake_case spelling reaches nothing,
+ * because those keys are not read here and the route has no other way to learn
+ * them. Everything that gets frozen onto the draft is read from the catalog
+ * under the caller's own client -- which is what makes a fabricated "verified"
+ * requirement impossible to submit rather than merely unlikely.
+ *
+ * NULL IS A REFUSAL, NOT A CLEAR. There is no update path for this field: a
+ * requirement is chosen when the draft is born and never afterwards, because
+ * changing it would mean the essay now answers a question its author did not
+ * start from. A create has nothing to clear, so an explicit null is a caller
+ * that meant to name one.
+ */
+export function checkRequirementSelection(value: unknown): RequirementSelectionCheck {
+  if (value === undefined) return { ok: true, requirementId: null }
+  if (!isPromptId(value)) return { ok: false, code: 'invalid-requirement' }
+  return { ok: true, requirementId: value }
+}
+
+export function requirementSelectionOf(
+  body: { readonly [key: string]: unknown },
+): RequirementSelectionCheck {
+  return checkRequirementSelection(body[REQUIREMENT_SELECTION_KEY])
+}

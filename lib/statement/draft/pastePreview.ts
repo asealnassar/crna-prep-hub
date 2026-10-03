@@ -50,6 +50,21 @@ export function reviewPreviewRequested(value: unknown): boolean {
 }
 
 /**
+ * The value that means "draw the school writing-requirement checklists with
+ * the research fixtures".
+ *
+ * A THIRD VALUE, STILL NOT A THIRD GATE. pastePreviewAllowed() decides this one
+ * too: development, an administrator who has passed the Studio gate, and an
+ * explicit parameter. What differs is only which screens get drawn.
+ */
+export const REQUIREMENTS_PREVIEW_VALUE = 'requirements'
+
+/** Whether the address asked for the requirement preview. Exact value, one of it. */
+export function requirementsPreviewRequested(value: unknown): boolean {
+  return value === REQUIREMENTS_PREVIEW_VALUE
+}
+
+/**
  * Whether the address asked for preview.
  *
  * EXACTLY ONE VALUE, EXACTLY ONE OCCURRENCE. Next hands a repeated parameter

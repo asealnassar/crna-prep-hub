@@ -35,6 +35,10 @@ const CLIENT_ENTRIES = [
   'app/statement-studio/components/LibraryClient.tsx',
   'app/statement-studio/components/NewDraftDialog.tsx',
   'app/statement-studio/components/PromptPicker.tsx',
+  // Reached transitively through LibraryClient, and listed anyway: a component
+  // that stops being imported from there would silently stop being guarded.
+  'app/statement-studio/components/RequirementChecklist.tsx',
+  'app/statement-studio/components/RequirementPreview.tsx',
 ]
 
 /** Resolve a specifier the way the project's tsconfig and Node would. */

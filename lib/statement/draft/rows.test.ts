@@ -151,7 +151,7 @@ test('revision: THERE IS NO SILENT FALLBACK TO 1 for any refused value', () => {
 
 // ----------------------------------------------------------- row normalisation
 
-test('row: a GENERIC row becomes a draft whose four prompt fields are null', () => {
+test('row: a GENERIC row becomes a draft whose prompt fields are all null', () => {
   const draft = draftFromRow(row())
   assert.deepEqual(draft, {
     id: 'd1e2f3a4-0000-4000-8000-000000000001',
@@ -165,14 +165,114 @@ test('row: a GENERIC row becomes a draft whose four prompt fields are null', () 
     promptId: null,
     promptText: null,
     statedMaxWords: null,
+    // THE ROW CARRIED NEITHER COLUMN, which is what every draft read looks
+    // like until 20261002_005 is applied. Both arrive as null rather than
+    // undefined, so a consumer cannot tell an unmigrated database from a
+    // general statement -- and does not need to, because both mean "read the
+    // prompt columns instead".
+    requirementId: null,
+    requirementSnapshot: null,
   })
   // PRESENT AND null, not absent: a consumer must be able to tell "no prompt"
   // from "this parser forgot".
-  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords']) {
+  for (const key of ['schoolId', 'promptId', 'promptText', 'statedMaxWords',
+    'requirementId', 'requirementSnapshot']) {
     assert.equal(key in (draft as object), true, `${key} must be present`)
     assert.equal((draft as Record<string, unknown>)[key], null)
   }
   assert.equal(JSON.stringify(draft).includes('undefined'), false)
+})
+
+test('row: AN UNMIGRATED ROW AND A REQUIREMENT-LESS ROW PARSE THE SAME WAY', () => {
+  // The columns absent entirely, versus present and NULL. Both are "this draft
+  // has no structured requirement", and the parsed draft must not distinguish
+  // them: the difference is a property of the deployment, not of the draft.
+  const absent = draftFromRow(row())
+  const present = draftFromRow(row({ requirement_id: null, requirement_snapshot: null }))
+  assert.deepEqual(absent, present)
+})
+
+/** A coherent requirement-backed row: school and wording set, prompt_id NULL. */
+const REQUIREMENT_ROW = {
+  school_id: 'cccccccc-0000-4000-8000-000000000003',
+  prompt_id: null,
+  prompt_text: 'Describe a significant challenge.',
+  stated_max_words: null,
+  requirement_id: 'aaaaaaaa-0000-4000-8000-000000000001',
+}
+
+test('row: a stored requirement is passed through UNPARSED', () => {
+  // rows.ts is a row-to-object mapper and knows nothing about what a
+  // requirement is. Parsing happens in requirements/snapshot.ts.
+  const snapshot = { requirementId: 'r1', setId: 's1', anything: ['at', 'all'] }
+  const draft = draftFromRow(row({ ...REQUIREMENT_ROW, requirement_snapshot: snapshot }))
+  assert.equal(draft?.requirementId, 'aaaaaaaa-0000-4000-8000-000000000001')
+  assert.deepEqual(draft?.requirementSnapshot, snapshot)
+})
+
+test('row: A REQUIREMENT-BACKED ROW NEEDS NO prompt_id', () => {
+  // The third shape. prompt_id means a public.statement_prompts row and must
+  // not carry a requirement's id, so a requirement-backed draft leaves it null
+  // and the parser accepts that -- which is what removed the overload.
+  const draft = draftFromRow(row({ ...REQUIREMENT_ROW, requirement_snapshot: {} }))
+  assert.notEqual(draft, null)
+  assert.equal(draft?.promptId, null)
+  assert.equal(draft?.schoolId, REQUIREMENT_ROW.school_id)
+  assert.equal(draft?.promptText, REQUIREMENT_ROW.prompt_text)
+  assert.equal(draft?.requirementId, REQUIREMENT_ROW.requirement_id)
+})
+
+test('row: A ROW CARRYING BOTH IDS IS REFUSED', () => {
+  // Two claims about one question. Whichever a reader joined on first would
+  // decide what the essay is judged against, so the row is unusable.
+  const both = draftFromRow(row({
+    ...REQUIREMENT_ROW,
+    prompt_id: 'bbbbbbbb-0000-4000-8000-000000000002',
+    requirement_snapshot: {},
+  }))
+  assert.equal(both, null)
+})
+
+test('row: A GENERIC ROW CANNOT CARRY A REQUIREMENT', () => {
+  // No school and no wording, but a requirement id. Reading this as a general
+  // statement would silently drop the question the essay answers and hand it
+  // to the analyser with six categories instead of seven.
+  const incoherent = draftFromRow(row({
+    requirement_id: 'aaaaaaaa-0000-4000-8000-000000000001',
+    requirement_snapshot: {},
+  }))
+  assert.equal(incoherent, null)
+})
+
+test('row: a school and wording with NEITHER id is refused', () => {
+  // Nothing can say where this question came from, so it must not be displayed
+  // as though something vouched for it.
+  const orphan = draftFromRow(row({
+    school_id: REQUIREMENT_ROW.school_id,
+    prompt_id: null,
+    prompt_text: REQUIREMENT_ROW.prompt_text,
+    stated_max_words: null,
+  }))
+  assert.equal(orphan, null)
+})
+
+test('row: A MALFORMED REQUIREMENT DOES NOT DESTROY THE DRAFT', () => {
+  // Unlike a malformed prompt snapshot, which makes the row unusable, a bad
+  // requirement copy must not lose somebody's essay. It is passed through and
+  // the snapshot parser downstream refuses it, falling back to the prompt
+  // columns -- which is a true description of what is stored.
+  for (const junk of ['not an object', 7, [], true]) {
+    const draft = draftFromRow(row({ ...REQUIREMENT_ROW, requirement_snapshot: junk }))
+    assert.notEqual(draft, null, String(junk))
+    assert.equal(draft?.essay, 'Opening line.')
+    assert.equal(draft?.requirementId, REQUIREMENT_ROW.requirement_id, String(junk))
+  }
+  // A non-string id is not an id. The row then has a school and wording with
+  // neither id, which is the orphan shape and is refused -- so the draft is
+  // null rather than silently read as a prompt-backed one.
+  assert.equal(draftFromRow(row({
+    ...REQUIREMENT_ROW, requirement_id: 7 as unknown as string,
+  })), null)
 })
 
 test('row: a string bigint revision is normalised to a number', () => {

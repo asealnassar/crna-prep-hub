@@ -356,13 +356,26 @@ test('the dialog POSTs to the gated API and builds no body of its own', () => {
   // The body is the pure module's, verbatim. No object literal is assembled here.
   assert.match(DIALOG, /body: JSON\.stringify\(request\.body\)/)
   assert.doesNotMatch(DIALOG, /title:\s*[a-zA-Z]/, 'the dialog must not assemble a payload')
-  // TWO REQUESTS, AND EXACTLY TWO: one that lists a school's prompts and one
-  // that creates. There is deliberately no third -- in particular no PATCH
-  // after the create, because the prompt rides the create itself.
-  assert.equal(DIALOG.split('fetch(NEW_DRAFT_ENDPOINT').length - 1, 1, 'one create request')
-  assert.equal(DIALOG.split('fetch(promptsPath(').length - 1, 1, 'one prompt-list request')
-  assert.equal(DIALOG.split('fetch(').length - 1, 2, 'and no other request anywhere')
+  // FIVE REQUESTS, AND EXACTLY FIVE, each accounted for:
+  //
+  //   2 x NEW_DRAFT_ENDPOINT   the prompt/paste/general create, and the
+  //                            requirement create. Two because a
+  //                            requirement-backed body carries requirementId
+  //                            and no promptId, and merging the two builders
+  //                            would mean one body that could be either.
+  //   2 x promptsPath          the prompt list, reached from the school screen
+  //                            and again from the checklist's "listed prompts"
+  //                            escape, which keeps the shipped flow reachable.
+  //   1 x requirementsPath     the requirement catalog, asked once per school.
+  //
+  // STILL NO PATCH. Whatever a draft is born against rides its create.
+  assert.equal(DIALOG.split('fetch(NEW_DRAFT_ENDPOINT').length - 1, 2, 'two create requests')
+  assert.equal(DIALOG.split('fetch(promptsPath(').length - 1, 2, 'two prompt-list requests')
+  assert.equal(DIALOG.split('fetch(requirementsPath(').length - 1, 1, 'one catalog request')
+  assert.equal(DIALOG.split('fetch(').length - 1, 5, 'and no other request anywhere')
   assert.doesNotMatch(DIALOG, /method: 'PATCH'|PATCH/, 'a created draft is never patched')
+  // AND THE REQUIREMENT BODY IS THE PURE MODULE'S TOO. No object literal.
+  assert.match(DIALOG, /body: JSON\.stringify\(requirementDraftRequest\(title, requirementId\)\)/)
 })
 
 test('the dialog holds a SYNCHRONOUS duplicate guard, set before the request', () => {
@@ -639,10 +652,17 @@ test('a card holds no nested control, and the page keeps one h1', () => {
   assert.equal(countOf(LIST, /<h1/g), 1, 'one page title, with the sections below it as h2')
 })
 
-test('the redesign added no dependency', () => {
+test('the library pulls in nothing it does not need', () => {
+  // A PIN, NOT A PROHIBITION, and it has now caught one addition on purpose:
+  // ./RequirementPreview is the development-only writing-requirement preview,
+  // which renders only when the server passes requirementsPreview -- false in
+  // every environment that is not a developer's own. It brings no new runtime
+  // dependency with it: the preview and the checklist it renders import only
+  // from lib/statement/requirements, which is pure TypeScript.
   const imported = [...LIST.matchAll(/from '([^']+)'/g)].map((found) => found[1])
   assert.deepEqual([...new Set(imported)].sort(), [
     './NewDraftDialog',
+    './RequirementPreview',
     '@/lib/SidebarContext',
     '@/lib/statement/draft/library',
     '@/lib/statement/draft/rows',
@@ -650,6 +670,23 @@ test('the redesign added no dependency', () => {
     'next/link',
     'react',
   ])
+})
+
+test('THE REQUIREMENT PREVIEW CANNOT RENDER WITHOUT THE SERVER SAYING SO', () => {
+  // The import is unconditional; the rendering is not. Default false, so a
+  // caller that does not pass it draws none.
+  assert.match(LIST, /requirementsPreview = false/)
+  // RENDERED INSTEAD OF THE LIBRARY. The `&&` form made it a second child of
+  // the flex root, which turned it into a column beside the page.
+  assert.match(LIST, /\{requirementsPreview \? \(/)
+  assert.doesNotMatch(LIST, /\{requirementsPreview && \(/)
+  // AND IT IS IN PLACE OF THE LIBRARY, not below it. This assertion used to
+  // say the opposite -- "below everything an applicant uses, not in place of
+  // it" -- which was the intent when the preview was appended to the page. The
+  // owner's approved behaviour is replacement, and appending it is what put it
+  // beside the content and squeezed the hero and the step cards.
+  assert.ok(LIST.indexOf('<RequirementPreview') < LIST.indexOf('visible.map('),
+    'the preview arm comes first, and the library arm is the else')
 })
 
 test('the page reserves the fixed nav width instead of sliding under it', () => {
@@ -674,7 +711,11 @@ test('every section shares one centred container', () => {
   // Hero, notice, workflow cards and the draft list are all inside the same
   // wrapper, so their left and right edges line up by construction rather than
   // by four widths that have to be kept in step by hand.
-  assert.equal(countOf(LIST, /max-w-7xl/g), 1, 'exactly one content container')
+  // TWO, AND THEY ARE THE TWO ARMS OF ONE CONDITIONAL, so exactly one
+  // renders. They are byte-identical specs, which is what guarantees the
+  // preview is centred and padded exactly as the library is.
+  assert.equal(countOf(LIST, /max-w-7xl/g), 2, 'one container spec per arm')
+  assert.equal(countOf(LIST, /<main\b/g), 2, 'and one <main> per arm')
   assert.match(LIST, /mx-auto w-full max-w-7xl/, 'centred inside the reserved workspace')
   assert.match(LIST, /px-4 pb-16 pt-6 sm:px-6 lg:px-10/, 'with real padding at every width')
 })
@@ -822,8 +863,12 @@ test('the stale-response guard wraps the prompt list, and reads a REF', () => {
   // must not land under a different school's name.
   assert.match(DIALOG, /mayApplyPrompts\(\{ requestedFor: option\.id, browsingNow: browsing\.current \}\)/)
   assert.match(DIALOG, /const browsing = useRef<string \| null>\(null\)/)
-  // Guarded on BOTH outcomes of the request, not just the happy one.
-  assert.equal(DIALOG.split('mayApplyPrompts(').length - 1, 2, 'the reply and the failure')
+  // Guarded on BOTH outcomes of EVERY request that can land late. Six: the
+  // prompt list's reply and failure, the requirement catalog's reply and
+  // failure, and the "listed prompts" escape's reply and failure. A school
+  // switched mid-flight must not show one school's requirements under
+  // another's name any more than it may show its prompts.
+  assert.equal(DIALOG.split('mayApplyPrompts(').length - 1, 6, 'every reply and every failure')
   // And a stale reply returns without writing anything.
   assert.match(DIALOG, /if \(!mayApplyPrompts\([^)]*\)\) return/)
 })
@@ -843,9 +888,10 @@ test('a withdrawn prompt reopens the list and creates nothing in its place', () 
 })
 
 test('the general path is offered wherever a school path can dead-end', () => {
-  // From the school screen (an unreadable or empty directory) and from the
-  // prompt screen (a school that lists none). Both keep the typed title.
-  assert.equal(DIALOG.split('onClick={startGeneral}').length - 1, 2)
+  // From the school screen (an unreadable or empty directory), the prompt
+  // screen (a school that lists none), and the checklist (a school whose
+  // documents the applicant does not want to write). All three keep the title.
+  assert.equal(DIALOG.split('onClick={startGeneral}').length - 1, 3)
   assert.match(DIALOG, /const startGeneral = useCallback\(\(\) => \{/)
   const general = DIALOG.slice(DIALOG.indexOf('const startGeneral'), DIALOG.indexOf('const goBack'))
   assert.doesNotMatch(general, /setTitle/, 'switching path must not clear the title')
@@ -854,8 +900,10 @@ test('the general path is offered wherever a school path can dead-end', () => {
 test('neither path is preselected', () => {
   assert.match(DIALOG, /useState<CreatePath \| null>\(null\)/)
   assert.match(DIALOG, /useState<NewDraftStep>\('choice'\)/)
-  // Both choices are explicit clicks, and there are exactly two of them.
-  assert.equal(DIALOG.split("setPath('school')").length - 1, 1)
+  // Both choices are explicit clicks. setPath('school') twice: the choice
+  // itself, and starting a requirement -- which is a school draft and must
+  // carry the school path even though it reached the title by another screen.
+  assert.equal(DIALOG.split("setPath('school')").length - 1, 2)
   assert.equal(DIALOG.split("setPath('general')").length - 1, 2, 'the choice, and the dead-end exit')
 })
 

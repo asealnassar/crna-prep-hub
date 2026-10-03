@@ -33,6 +33,14 @@ import {
   ANALYSIS_ACTION_LABELS, ANALYSIS_NO_CACHE_NOTICE, ANALYSIS_TIER_MESSAGE,
   ANALYSIS_UNAVAILABLE_MESSAGE, type AnalysisAction, type AnalysisAvailability,
 } from '@/lib/statement/draft/reviewAccess'
+import { UNMEASURED_NOTICE, liveCounts } from '@/lib/statement/requirements/constraints'
+import { labelledConstraints, liveCountLabel } from '@/lib/statement/requirements/constraintText'
+import { DOCUMENT_TYPE_LABELS } from '@/lib/statement/requirements/requirement'
+import type { RequirementSnapshot } from '@/lib/statement/requirements/snapshot'
+import {
+  FLOOR_UNREACHABLE, eligibilityForRequirement, shortfallLabel, tooShortLabel, wordFloorFits,
+} from '@/lib/statement/requirements/eligibility'
+import { SAVED_COPY_NOTICE } from '@/lib/statement/requirements/verification'
 import PromptPicker from './PromptPicker'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
 import {
@@ -134,6 +142,8 @@ export default function StatementStudioClient({
   analysisAllowed = false,
   analysisAvailable = 'unavailable',
   priorAnalysis = null,
+  requirement = null,
+  requirementAuthentic = false,
 }: {
   draft: StatementDraft
   schools: readonly SchoolOption[]
@@ -196,6 +206,32 @@ export default function StatementStudioClient({
     readonly result: Omit<ReviewResult, 'essay'>
     readonly action: AnalysisAction
   } | null
+  /**
+   * The draft's STORED structured requirement, when it has one.
+   *
+   * THE STORED ONE, NOT A PROJECTION, so a draft created before this feature
+   * renders exactly as it did: null here means every block below is absent and
+   * the panel is the single-prompt panel that shipped. snapshot.ts can project
+   * an old draft's columns into this shape, and that projection is deliberately
+   * NOT passed -- it would add a document header and a question count to drafts
+   * whose authors never chose either.
+   *
+   * null ON EVERY UNMIGRATED DEPLOYMENT, because the column is not even read
+   * unless STATEMENT_REQUIREMENTS is on.
+   */
+  requirement?: RequirementSnapshot | null
+  /**
+   * Whether the saved requirement still matches what the school publishes.
+   *
+   * COMPUTED ON THE SERVER AGAINST THE CATALOG, never read from the snapshot.
+   * The snapshot has its own `verification` object and the owner can PATCH it
+   * through PostgREST, so a warning keyed on that field could be switched off
+   * by the person it is warning. This prop cannot be.
+   *
+   * DEFAULTS TO false, so a page that does not pass it labels the panel as a
+   * saved copy rather than silently presenting it as official.
+   */
+  requirementAuthentic?: boolean
 }) {
   const router = useRouter()
   /** The nav is fixed and out of flow; this is how wide a space it reserves. */
@@ -1012,6 +1048,38 @@ export default function StatementStudioClient({
   })
   const essayOverLimit = overLimit({ words, statedMaxWords: prompt.statedMaxWords })
 
+  // ---- the structured requirement, when this draft has one ----------------
+  //
+  // EVERY NUMBER BELOW IS DERIVED, NEVER STORED. The counters recompute from
+  // the text in the textarea on each render, exactly as `words` does, so they
+  // cannot drift from what is on screen.
+  //
+  // THE ELIGIBILITY SHOWN HERE IS A COURTESY, NOT THE CONTROL. The endpoint
+  // decides and refuses; this exists so an applicant sees "320 of 500
+  // characters needed" instead of pressing a button that fails.
+  const requirementCounts = requirement === null ? [] : liveCounts(requirement.constraints)
+  const requirementLimits = requirement === null ? [] : labelledConstraints(requirement.constraints)
+  const requirementEligibility = requirement === null ? null : eligibilityForRequirement({
+    constraints: requirement.constraints, words,
+  })
+  // A CHARACTER MAXIMUM THE WORD FLOOR CANNOT FIT INSIDE. Explained rather than
+  // legislated: the endpoint refuses these, and this is where the applicant
+  // reads why instead of chasing a word target their school's limit excludes.
+  const floorUnreachable = requirement !== null && !wordFloorFits(requirement.constraints)
+  /**
+   * What the panel says about where these instructions stand.
+   *
+   * THE SERVER'S VERDICT DECIDES, not the snapshot's own verification field.
+   * An authenticated requirement is the school's current published one and
+   * needs no caveat. Anything else is a saved copy -- which covers a school
+   * that reworded its prompt, an entry withdrawn from the catalog, a set
+   * nobody has verified, and a row somebody edited directly -- and is labelled
+   * as one rather than presented as official.
+   */
+  const requirementWarning = requirement === null || requirementAuthentic
+    ? null
+    : SAVED_COPY_NOTICE
+
   /**
    * What the results block renders: the real analysis, or a sample.
    *
@@ -1125,6 +1193,22 @@ export default function StatementStudioClient({
               <span className="font-semibold text-slate-300">
                 {words.toLocaleString('en-US')} {words === 1 ? 'word' : 'words'}
               </span>
+              {/*
+                THE SCHOOL'S OWN COUNTER, FIRST, when it stated one. A 2,500
+                CHARACTER limit means an applicant watching a word count is
+                watching the wrong number, so the unit the school used leads.
+                The storage ceiling below is a different fact and stays.
+              */}
+              {requirement !== null && requirementCounts.map((kind) => (
+                <span key={kind} className="contents">
+                  <span aria-hidden="true">·</span>
+                  <span className="font-semibold text-slate-300">
+                    {liveCountLabel({
+                      kind, constraints: requirement.constraints, words, text: essay,
+                    })}
+                  </span>
+                </span>
+              ))}
               <span aria-hidden="true">·</span>
               <span>
                 {essay.length.toLocaleString('en-US')} of{' '}
@@ -1611,12 +1695,144 @@ export default function StatementStudioClient({
                           {promptSchool}
                         </p>
                       )}
+
+                      {/*
+                        WHICH DOCUMENT THIS IS, when the school asks for more
+                        than one. Without it an applicant with three drafts
+                        open cannot tell which tab is the diversity essay.
+                      */}
+                      {requirement !== null && (
+                        <p className="mt-1 flex flex-wrap items-baseline gap-x-2">
+                          <span className="text-sm font-bold text-slate-900">
+                            {requirement.label}
+                          </span>
+                          <span className="text-[11px] font-medium text-slate-500">
+                            {DOCUMENT_TYPE_LABELS[requirement.documentType]}
+                          </span>
+                        </p>
+                      )}
+
                       <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
                         {prompt.promptText}
                       </p>
-                      <p className="mt-2 text-xs text-slate-500">
-                        {wordLimitLabel(prompt.statedMaxWords)}
-                      </p>
+
+                      {/*
+                        THE SCHOOL'S QUESTIONS, TOGETHER, INSIDE THE ONE PANEL.
+                        One essay answers all of them, so they belong in this
+                        document's panel rather than becoming documents of their
+                        own. An optional one is marked, because omitting it is
+                        not a gap.
+                      */}
+                      {requirement !== null && requirement.components.length > 0 && (
+                        <>
+                          <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                            This essay must address{' '}
+                            {requirement.components.filter((part) => !part.optional).length}
+                            {' '}
+                            {requirement.components.filter((part) => !part.optional).length === 1
+                              ? 'question'
+                              : 'questions'}
+                          </p>
+                          <ol className="mt-2 grid gap-2">
+                            {requirement.components.map((part, index) => (
+                              <li
+                                key={part.id}
+                                className="flex gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm leading-relaxed text-slate-700"
+                              >
+                                <span className="font-semibold text-slate-400">{index + 1}.</span>
+                                <span>
+                                  {part.optional && (
+                                    <span className="mr-1.5 rounded border border-slate-300 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                      Optional
+                                    </span>
+                                  )}
+                                  {part.text}
+                                </span>
+                              </li>
+                            ))}
+                          </ol>
+                        </>
+                      )}
+
+                      {/*
+                        THE LIMITS, WITH THE MEASURED ONES VISIBLY DIFFERENT.
+                        A solid chip is a number the counter is watching; an
+                        outlined chip is the school's requirement that this
+                        editor cannot check. An applicant must never read a page
+                        count as something we are tracking for them.
+                      */}
+                      {requirement !== null && requirementLimits.length > 0 && (
+                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                          {requirementLimits.map((limit) => (
+                            <span
+                              key={`${limit.kind}-${limit.text}`}
+                              className={limit.measured
+                                ? 'rounded-md bg-slate-900 px-2 py-0.5 text-[11px] font-semibold text-white'
+                                : 'rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-medium text-slate-600'}
+                            >
+                              {limit.text}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/*
+                        THE LEGACY LINE, for a draft with no structured
+                        requirement. Unchanged, and still the only length line
+                        such a draft has ever shown.
+                      */}
+                      {requirement === null && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          {wordLimitLabel(prompt.statedMaxWords)}
+                        </p>
+                      )}
+
+                      {requirement !== null
+                        && requirementLimits.some((limit) => !limit.measured) && (
+                        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                          {UNMEASURED_NOTICE}
+                        </p>
+                      )}
+
+                      {/* WHAT IS STILL NEEDED, in the school's own unit. */}
+                      {floorUnreachable && (
+                        <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
+                          {FLOOR_UNREACHABLE}
+                        </p>
+                      )}
+                      {!floorUnreachable && requirementEligibility !== null
+                        && shortfallLabel(requirementEligibility) !== null && (
+                        <p className="mt-2 text-[11px] font-medium text-slate-500">
+                          {shortfallLabel(requirementEligibility)}
+                        </p>
+                      )}
+                      {requirementEligibility !== null
+                        && tooShortLabel(requirementEligibility) !== null && (
+                        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                          {tooShortLabel(requirementEligibility)}
+                        </p>
+                      )}
+
+                      {/* PROVENANCE, SAID PLAINLY. */}
+                      {requirementWarning !== null && (
+                        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
+                          {requirementWarning}
+                        </p>
+                      )}
+
+                      {/* UNRESOLVED CONFLICT IS SHOWN, NOT RESOLVED. */}
+                      {requirement !== null && requirement.notes.length > 0 && (
+                        <ul className="mt-2 grid gap-1.5">
+                          {requirement.notes.map((note) => (
+                            <li
+                              key={note}
+                              className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900"
+                            >
+                              {note}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   )}
 

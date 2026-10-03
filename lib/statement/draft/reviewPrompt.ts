@@ -1,5 +1,9 @@
 import { AUTHENTICITY_CONTRACT } from '../prompts.ts'
 import { RUBRIC, categoriesFor } from './rubric.ts'
+import { characterCount, unmeasurableKinds } from '../requirements/constraints.ts'
+import { constraintLines } from '../requirements/constraintText.ts'
+import { DOCUMENT_TYPE_LABELS } from '../requirements/requirement.ts'
+import type { RequirementSnapshot } from '../requirements/snapshot.ts'
 
 /**
  * What the model is told, and how the applicant's material reaches it.
@@ -29,7 +33,8 @@ import { RUBRIC, categoriesFor } from './rubric.ts'
  */
 
 /** The fences this module owns. Anything resembling one is removed from data. */
-const FENCES = /<\/?(?:applicant-essay|school-prompt|rubric)>/gi
+const FENCES =
+  /<\/?(?:applicant-essay|school-prompt|rubric|prompt-requirements|document)>/gi
 
 /** Removes anything that could close a fence or open a new one. */
 function defuse(value: string): string {
@@ -50,7 +55,36 @@ function rubricLines(promptAttached: boolean): string {
     .join('\n')
 }
 
-export function reviewSystemPrompt(promptAttached: boolean): string {
+/**
+ * What the model is additionally told when the school's requirements are
+ * structured rather than one blob of prose.
+ *
+ * THE COMPONENT LIST REPLACES THE MODEL'S OWN DECOMPOSITION. Without a
+ * structured requirement the model is asked to break the prompt into its parts
+ * itself, which it does well enough but inconsistently -- two runs of the same
+ * essay can disagree about how many things the school asked for. When the
+ * school has numbered them, that argument is settled by the school, so the
+ * model is told to use the given list verbatim and not to add to it.
+ *
+ * AND FORMATTING IS EXPLICITLY OFF LIMITS. A page count, a font or a margin is
+ * in front of the model because the applicant must satisfy it -- not because
+ * this system can check it. Left unsaid, a model asked to assess a draft
+ * against "2 double-spaced pages" will cheerfully estimate the page count from
+ * the word count, which is the invented conversion this whole feature refuses.
+ */
+export interface RequirementPromptFacts {
+  /** The school's own questions inside this one document. */
+  readonly componentCount: number
+  /** True when any optional question is present, so the model can be told. */
+  readonly hasOptionalComponent: boolean
+  /** True when a page, spacing, font, margin or citation rule is stated. */
+  readonly hasUnmeasurable: boolean
+}
+
+export function reviewSystemPrompt(
+  promptAttached: boolean,
+  requirement: RequirementPromptFacts | null = null
+): string {
   return `You are an experienced CRNA admissions reviewer giving a nurse anesthesia applicant honest, specific feedback on a personal statement draft.
 
 ${AUTHENTICITY_CONTRACT}
@@ -72,6 +106,10 @@ SCORING:
 - Be appropriately critical. A draft that is merely adequate is Developing, not Strong. Do not inflate scores to be encouraging.
 ${promptAttached
     ? `- Judge school-prompt alignment against the quoted prompt only. Do not invent requirements the prompt does not state.
+- You are assessing ONE document. If this school requires other writing, it is not in front of you and must not affect this assessment.${requirement !== null && requirement.componentCount > 0 ? `
+- THE SCHOOL'S OWN REQUIREMENTS ARE LISTED IN <prompt-requirements>. There are ${requirement.componentCount}. Return exactly one "components" entry for each, with its "component" field set to that requirement's text. Do not merge two of them, do not split one, and do not add a requirement that is not listed.${requirement.hasOptionalComponent ? `
+- A requirement marked OPTIONAL in that list is one the school invites but does not require. Report on it, but do NOT lower any score because it is absent.` : ''}` : ''}${requirement !== null && requirement.hasUnmeasurable ? `
+- SOME OF THIS SCHOOL'S REQUIREMENTS CANNOT BE CHECKED BY THIS SYSTEM -- page count, line spacing, font and margins among them. They are shown to you because the applicant must satisfy them. You must NOT score them, estimate them, convert a page count into a word count, or state whether the draft complies with them. You may remind the applicant that the requirement exists.` : ''}
 - BREAK THE PROMPT INTO ITS REQUIREMENTS and return one "components" entry for each. A prompt asking for professional goals, relevant past experience and expected contribution is THREE requirements, not one. For each, say whether the essay addresses it, addresses it weakly, or does not address it, and give the passage that does so or state plainly that none does.
 - Your explanation must say which requirements are covered, which are thin, and which are absent. Do not assert that "the prompt is addressed" on the strength of one sentence.
 - A 10 means the essay covers every requirement substantively. If any component is weak or missing, the score is not a 10, and your explanation must say why.
@@ -127,6 +165,16 @@ export function buildReviewUserMessage(input: {
   readonly statedMaxWords: number | null
   /** Counted on the server, from the text being analysed. */
   readonly words: number
+  /**
+   * The draft's frozen requirement, when it has one.
+   *
+   * THE SNAPSHOT, NOT THE CATALOG -- for the same reason promptText is the
+   * snapshot: a draft answers the question its author read, and an essay
+   * written to alternative (2) must never be assessed against alternative (1).
+   * Because the snapshot names ONE document, it is structurally impossible for
+   * a sibling requirement's wording to reach this message.
+   */
+  readonly requirement?: RequirementSnapshot | null
 }): string {
   const prompt = input.promptText === null
     ? '(this draft is a general statement and answers no school prompt)'
@@ -142,16 +190,65 @@ export function buildReviewUserMessage(input: {
       ? `The stored maximum is ${input.statedMaxWords} words, so this draft is ${input.words - input.statedMaxWords} words over it.`
       : `The stored maximum is ${input.statedMaxWords} words, so this draft is within it, with ${input.statedMaxWords - input.words} words to spare.`
 
+  // ---- the structured requirement, when there is one --------------------
+  //
+  // EVERY PART OF THIS IS DEFUSED TOO. A component's text and a free-text
+  // formatting instruction are catalog data, which is to say somebody typed
+  // them; they are quoted material exactly as the prompt and the essay are.
+  const requirement = input.requirement ?? null
+
+  const documentBlock = requirement === null ? '' : `
+<document>
+This is ONE document: ${defuse(requirement.label)} (${DOCUMENT_TYPE_LABELS[requirement.documentType]}).${requirement.choiceGroup === null ? '' : `
+The applicant chose this prompt from a set of alternatives. Assess it against THIS prompt only; the alternatives they did not choose are not part of this task.`}${requirement.optional ? `
+This document is an optional supplement, not a required one.` : ''}
+</document>
+`
+
+  const componentBlock = requirement === null || requirement.components.length === 0 ? '' : `
+<prompt-requirements>
+${requirement.components.map((part, index) =>
+    `${index + 1}. ${part.optional ? '[OPTIONAL] ' : ''}${defuse(part.text)}`).join('\n')}
+</prompt-requirements>
+`
+
+  // THE COUNT THE SCHOOL ACTUALLY USES. A character-limited response gets its
+  // character count stated as measured fact, in the school's own spaces rule,
+  // because a model told only a word count would reason about the wrong number.
+  const characters = requirement?.constraints.characters ?? null
+  const characterLine = characters === null ? '' : (() => {
+    const count = characterCount(input.essay, characters.spacesCount)
+    const rule = characters.spacesCount === true ? 'including spaces'
+      : characters.spacesCount === false ? 'excluding spaces'
+      : 'counting spaces, because the school does not state whether they count'
+    const against = characters.max === null ? '' : count > characters.max
+      ? ` The stated maximum is ${characters.max} characters, so this draft is ${count - characters.max} over it.`
+      : ` The stated maximum is ${characters.max} characters, so this draft is within it.`
+    return `\nThis draft is ${count} characters, ${rule}. That count is measured by this system and is exact.${against}`
+  })()
+
+  // WHAT THE SCHOOL STATED THAT THIS SYSTEM DID NOT MEASURE, named one by one
+  // so the model cannot treat silence as permission to estimate.
+  const unmeasured = requirement === null ? [] : unmeasurableKinds(requirement.constraints)
+  const unmeasuredLine = unmeasured.length === 0 ? '' : `
+This school also states requirements this system has NOT measured: ${
+  constraintLines(requirement!.constraints).map(defuse).join('; ')}. Page count, line spacing, font and margins cannot be observed in a plain-text editor. Do not score them, do not estimate them, and do not convert any of them into a word count.`
+
+  // UNRESOLVED AMBIGUITY TRAVELS TO THE MODEL rather than being settled for it.
+  const notesLine = requirement === null || requirement.notes.length === 0 ? '' : `
+The catalog records unresolved uncertainty about this requirement: ${
+  requirement.notes.map(defuse).join(' ')} Do not resolve it; if it bears on your assessment, say that it is unresolved.`
+
   return `<applicant-essay>
 ${defuse(input.essay)}
 </applicant-essay>
-
+${documentBlock}
 <school-prompt>
 ${prompt}
 </school-prompt>
-
-${counted}
-${limit}
+${componentBlock}
+${counted}${characterLine}
+${limit}${unmeasuredLine}${notesLine}
 Any other length requirement -- a minimum, a page count -- exists only in the prompt text above if it exists at all. This system has not parsed one, so you may discuss what the prompt states but must not claim this system has checked it.`
 }
 

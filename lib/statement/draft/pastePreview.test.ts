@@ -9,6 +9,8 @@ import {
   pastePreviewRequested,
   REVIEW_PREVIEW_VALUE,
   reviewPreviewRequested,
+  REQUIREMENTS_PREVIEW_VALUE,
+  requirementsPreviewRequested,
 } from './pastePreview.ts'
 
 const dev = { nodeEnv: 'development', isAdmin: true, requested: true }
@@ -99,6 +101,37 @@ test('asking for one preview does not grant the other', () => {
 
 test('the analyser preview still needs development and an administrator', () => {
   const requested = reviewPreviewRequested('analysis')
+  assert.equal(pastePreviewAllowed({ nodeEnv: 'production', isAdmin: true, requested }), false)
+  assert.equal(pastePreviewAllowed({ nodeEnv: 'development', isAdmin: false, requested }), false)
+  assert.equal(pastePreviewAllowed({ nodeEnv: 'development', isAdmin: true, requested }), true)
+})
+
+test('the requirement preview is a THIRD value, not a third gate', () => {
+  assert.equal(REQUIREMENTS_PREVIEW_VALUE, 'requirements')
+  assert.equal(requirementsPreviewRequested(REQUIREMENTS_PREVIEW_VALUE), true)
+  for (const other of ['', 'true', PASTE_PREVIEW_VALUE, REVIEW_PREVIEW_VALUE, 'Requirements',
+    ' requirements', undefined, null, true, {}, ['requirements']]) {
+    assert.equal(requirementsPreviewRequested(other), false, String(other))
+  }
+})
+
+test('THE THREE PREVIEW VALUES ARE MUTUALLY EXCLUSIVE', () => {
+  const values = [PASTE_PREVIEW_VALUE, REVIEW_PREVIEW_VALUE, REQUIREMENTS_PREVIEW_VALUE]
+  assert.equal(new Set(values).size, 3)
+  for (const [name, read] of [
+    [PASTE_PREVIEW_VALUE, pastePreviewRequested],
+    [REVIEW_PREVIEW_VALUE, reviewPreviewRequested],
+    [REQUIREMENTS_PREVIEW_VALUE, requirementsPreviewRequested],
+  ] as const) {
+    assert.equal(read(name), true, name)
+    for (const other of values.filter((v) => v !== name)) {
+      assert.equal(read(other), false, `${other} must not request ${name}`)
+    }
+  }
+})
+
+test('the requirement preview still needs development AND an administrator', () => {
+  const requested = requirementsPreviewRequested('requirements')
   assert.equal(pastePreviewAllowed({ nodeEnv: 'production', isAdmin: true, requested }), false)
   assert.equal(pastePreviewAllowed({ nodeEnv: 'development', isAdmin: false, requested }), false)
   assert.equal(pastePreviewAllowed({ nodeEnv: 'development', isAdmin: true, requested }), true)

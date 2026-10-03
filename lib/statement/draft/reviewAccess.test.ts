@@ -260,9 +260,22 @@ test('the stored row carries no essay, and no browser-supplied provenance', () =
   const sql = stripSql(SQL)
   assert.doesNotMatch(sql, /\bessay\b/, 'the draft already holds it')
   // Provenance is written from what the SERVER resolved against the catalog.
-  assert.match(stripTs(ROUTE), /provenance = await verifiedProvenance\(caller\.db/)
+  //
+  // THE CALL IS NOW draftProvenance, which routes a prompt-backed draft to
+  // verifiedProvenance unchanged and a requirement-backed one to a lookup in
+  // statement_requirements. The prompt verifier is INJECTED rather than
+  // imported by the requirements module, so the route still names it.
   const code = stripTs(ROUTE)
-  assert.ok(code.indexOf('verifiedProvenance') < code.indexOf('claimAnalysis(caller.db'))
+  assert.match(code, /const verdict = await draftProvenance\(/)
+  assert.match(code, /const provenance = verdict\.provenance/)
+  assert.match(code, /^\s*verifiedProvenance,$/m, 'the prompt verifier is passed in')
+  assert.ok(code.indexOf('draftProvenance(') < code.indexOf('claimAnalysis(caller.db'))
+  // NOTHING FROM THE SNAPSHOT DECIDES IT. The route hands over the parsed
+  // requirement and the draft's two prompt fields; it reads no verification
+  // field of its own, because an applicant can PATCH that column directly.
+  const call = code.slice(code.indexOf('const verdict = await draftProvenance('),
+    code.indexOf('const authoritative'))
+  assert.doesNotMatch(call, /verification|verifiedOn|sourceUrl|status/)
 })
 
 test('applicants may read their own analyses and write none', () => {

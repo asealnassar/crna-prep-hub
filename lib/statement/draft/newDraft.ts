@@ -36,7 +36,8 @@ import type { PromptChoice } from './picker.ts'
 export type CreatePath = 'school' | 'general'
 
 /** The screens, in the order they are reached. */
-export type NewDraftStep = 'choice' | 'school' | 'prompt' | 'paste' | 'title'
+export type NewDraftStep =
+  'choice' | 'school' | 'requirement' | 'prompt' | 'paste' | 'title'
 
 /**
  * Every word the dialog can show that is not already PICKER_MESSAGES'.
@@ -79,6 +80,15 @@ export const NEW_DRAFT_MESSAGES = {
   /** What a draft on a pasted prompt is labelled, everywhere it appears. */
   unverifiedBadge: 'User-provided prompt \u2014 Not yet verified by CRNAPREPHUB',
   pasteIncomplete: 'Add the prompt wording and confirm before creating the draft.',
+  /** The checklist screen's heading, and its one-line explanation. */
+  chooseRequirement: 'Choose a writing requirement',
+  requirementBody:
+    'This school asks for the documents below. Start whichever you want to write first '
+    + '— each one is saved and analysed separately, and you can come back for the rest.',
+  /** The escape to the older catalog, for a school that has rows in both. */
+  otherPrompts: 'Looking for a different prompt? See this school’s listed prompts.',
+  /** A requirement-backed create with an empty title. */
+  requirementTitleRequired: 'Name this draft before creating it.',
   /** Shown on the control itself when the backend for this is not switched on. */
   previewBlocked: 'Submission unavailable in preview',
   /**
@@ -124,6 +134,13 @@ export function stepBefore(step: NewDraftStep, path: CreatePath | null): NewDraf
       return null
     case 'school':
       return 'choice'
+    // The checklist is reached FROM the school list, and the prompt list is
+    // reached either from the school list (no requirements published) or from
+    // the checklist (a school that has both). Back from the prompt list
+    // therefore cannot name one fixed predecessor, so it returns to the school
+    // list -- which is reachable from either and loses nothing but one click.
+    case 'requirement':
+      return 'school'
     case 'prompt':
       return 'school'
     // The paste form is reached FROM the prompt list -- including from the
@@ -131,8 +148,13 @@ export function stepBefore(step: NewDraftStep, path: CreatePath | null): NewDraf
     case 'paste':
       return 'prompt'
     case 'title':
-      // The general path never saw the two middle screens, so its Back goes
-      // all the way to the choice rather than to a school it never picked.
+      // The general path never saw the middle screens, so its Back goes all
+      // the way to the choice rather than to a school it never picked.
+      //
+      // A REQUIREMENT-BACKED TITLE GOES BACK TO THE CHECKLIST, not the prompt
+      // list, and stepBeforeTitle() below is what decides that -- this
+      // function has only the path to go on, and both kinds of school draft
+      // share one path value.
       return path === 'school' ? 'prompt' : 'choice'
   }
 }
@@ -378,4 +400,26 @@ export function canCreatePasteNow(input: {
   if (!isPromptId(input.schoolId)) return false
   if (!pasteIsComplete(input.pasted)) return false
   return checkTitle(input.title).ok
+}
+
+/**
+ * The screen BACK goes to from the title, when a requirement may be in play.
+ *
+ * A SEPARATE FUNCTION BECAUSE stepBefore() DOES NOT HAVE THE ANSWER. Both kinds
+ * of school draft carry path === 'school', so the only thing that distinguishes
+ * "I chose a document from the checklist" from "I chose a prompt from the list"
+ * is whether a requirement id is held. Rather than widen stepBefore()'s
+ * signature and every call to it, this wraps it for the one screen that needs
+ * the distinction.
+ *
+ * SENDING A REQUIREMENT-BACKED DRAFT BACK TO THE PROMPT LIST would be the bug
+ * this prevents: that list is the other catalog, and the applicant would see
+ * questions they did not choose from with no way back to the one they did.
+ */
+export function stepBeforeTitle(input: {
+  readonly path: CreatePath | null
+  readonly requirementId: string | null
+}): NewDraftStep | null {
+  if (input.path === 'school' && input.requirementId !== null) return 'requirement'
+  return stepBefore('title', input.path)
 }

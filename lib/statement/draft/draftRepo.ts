@@ -46,6 +46,8 @@ import { draftFromRow, draftSummaryFromRow } from './rows.ts'
 import type {
   StatementDraft, StatementDraftRow, StatementDraftSummary, StatementDraftSummaryRow,
 } from './rows.ts'
+import { requirementsEnabled } from './rollout.ts'
+import { legacyProjection, type RequirementSnapshot } from '../requirements/snapshot.ts'
 
 const DRAFTS = 'statement_drafts'
 
@@ -59,9 +61,32 @@ const DRAFTS = 'statement_drafts'
  * snapshot. createDraft still sends three columns, so every new draft is
  * generic. SUMMARY_COLUMNS is deliberately not widened with them: see below.
  */
-const DRAFT_COLUMNS =
+const DRAFT_COLUMNS_BASE =
   'id, user_id, title, essay, revision, created_at, updated_at, '
   + 'school_id, prompt_id, prompt_text, stated_max_words'
+
+/**
+ * The columns a draft read asks for, which depends on whether the requirement
+ * migration has been applied.
+ *
+ * THIS IS THE ROLLOUT GATE DOING REAL WORK, not a feature toggle on a finished
+ * schema. requirement_id and requirement_snapshot are added by 20261002_005,
+ * which is written and NOT applied. Naming an absent column in a PostgREST
+ * select does not degrade -- it fails the whole request with a 42703, so every
+ * draft read in the product would break, not just a new feature. So the column
+ * list is computed per call from the flag: off, and the query is byte-identical
+ * to the one shipped today.
+ *
+ * READ PER CALL, NOT ONCE AT MODULE LOAD. A constant captured at import time
+ * would freeze whichever value the environment had when the first module in the
+ * process happened to pull this one in, which is not something a test or a
+ * deployment can reason about.
+ */
+function draftColumns(): string {
+  return requirementsEnabled()
+    ? `${DRAFT_COLUMNS_BASE}, requirement_id, requirement_snapshot`
+    : DRAFT_COLUMNS_BASE
+}
 
 /**
  * Columns the LIST projection asks for. No `essay`, and no `user_id`.
@@ -211,12 +236,30 @@ export async function createDraft(
   userId: string,
   input: DraftCreateInput,
   prompt?: StatementPromptSnapshot,
+  /**
+   * A structured requirement to be born against, instead of a prompt.
+   *
+   * MUTUALLY EXCLUSIVE WITH `prompt`, and refused below rather than merged:
+   * they are two descriptions of the same three columns, and a caller passing
+   * both has a bug that must not become a stored draft.
+   *
+   * REQUIRES THE ROLLOUT FLAG, because the two columns it writes do not exist
+   * until 20261002_005 is applied. Refused rather than silently downgraded to a
+   * prompt-only insert: a draft that kept the wording but lost the requirement
+   * identity would be analysed as an ordinary single-prompt draft, against a
+   * question whose components and character limit had been dropped.
+   */
+  requirement?: RequirementSnapshot,
 ): Promise<DraftRepoResult<StatementDraft>> {
   // BEFORE THE STATEMENT IS BUILT, for the reason updateDraft gives: a fourth
   // argument that is neither absent nor a snapshot is an internal error, and
   // the one outcome that must not follow from it is a draft existing anyway.
   // Refusing here means no row is inserted at all.
   if (!isCreatePrompt(prompt)) return badArgument('prompt')
+  if (requirement !== undefined) {
+    if (prompt !== undefined) return badArgument('requirement')
+    if (!requirementsEnabled()) return badArgument('requirement')
+  }
 
   const { data, error } = await db
     .from(DRAFTS)
@@ -231,8 +274,12 @@ export async function createDraft(
       title: input.title,
       essay: input.essay,
       ...promptColumns(prompt),
+      // SPREAD SECOND, AND NEVER ALONGSIDE A PROMPT: the branch above already
+      // refused both together, so these keys and promptColumns' keys can never
+      // both be present and no spread can quietly overwrite the other.
+      ...requirementColumns(requirement),
     })
-    .select(DRAFT_COLUMNS)
+    .select(draftColumns())
     .maybeSingle()
   if (error) return failure('create-failed', error)
   if (!data) return failure('create-failed', { code: 'NO_ROW', message: 'insert returned no row' })
@@ -258,7 +305,7 @@ export async function readDraft(
 ): Promise<DraftRepoResult<StatementDraft>> {
   const { data, error } = await db
     .from(DRAFTS)
-    .select(DRAFT_COLUMNS)
+    .select(draftColumns())
     .eq('id', draftId)
     .maybeSingle()
   if (error) return failure('read-failed', error)
@@ -354,6 +401,52 @@ function isPromptWrite(value: unknown): value is PromptWrite | undefined {
  */
 function isCreatePrompt(value: unknown): value is StatementPromptSnapshot | undefined {
   return value === undefined || isSnapshot(value)
+}
+
+/**
+ * The columns a draft born against a STRUCTURED requirement carries.
+ *
+ * SIX COLUMNS FROM ONE SOURCE. The requirement snapshot is the only input: the
+ * two new columns hold its identity and its frozen copy, and the prompt columns
+ * are PROJECTED from it by legacyProjection(). The caller does not get to pass
+ * a prompt snapshot as well, because two sources for prompt_text would
+ * eventually disagree and the draft would be analysed against whichever won.
+ *
+ * prompt_id IS EXPLICITLY NULL, and that is the correction this function
+ * exists to record. An earlier version wrote the REQUIREMENT's id into it,
+ * reasoning that the existing parser refused a partial prompt snapshot and that
+ * prompt_id has no foreign key. Both were true and the conclusion was still
+ * wrong: 20260930_001 documents prompt_id as "the canonical prompt, same uuid
+ * as public.statement_prompts.id", so a statement_requirements id in that
+ * column is a value that resolves to nothing in the table the column names.
+ * Anything later joining on it -- including verifiedProvenance, which looks the
+ * id up in statement_prompts -- gets a miss it cannot distinguish from a
+ * withdrawn prompt.
+ *
+ * THE PARSER WAS WIDENED INSTEAD. draftPromptFrom() now admits a third shape in
+ * which prompt_id is null and requirement_id carries the identity, so the
+ * all-or-none rule still holds for legacy drafts and this one needs no
+ * overload. requirement_id and requirement_snapshot are the authoritative
+ * identity and saved instructions for these drafts; prompt_id is left to mean
+ * what it has always meant.
+ */
+function requirementColumns(
+  requirement: RequirementSnapshot | undefined
+): Record<string, unknown> {
+  if (requirement === undefined) return {}
+  const legacy = legacyProjection(requirement)
+  return {
+    school_id: requirement.schoolId,
+    // NULL, NOT THE REQUIREMENT'S ID. See the note above: this column means a
+    // public.statement_prompts row and nothing else.
+    prompt_id: null,
+    prompt_text: legacy.promptText,
+    // NULL FOR A PAGE OR CHARACTER LIMIT, which is the truth: those schools
+    // stated no word maximum, and null already means that everywhere.
+    stated_max_words: legacy.statedMaxWords,
+    requirement_id: requirement.requirementId,
+    requirement_snapshot: requirement,
+  }
 }
 
 /**
@@ -463,7 +556,7 @@ export async function updateDraft(
     })
     .eq('id', draftId)
     .eq('revision', input.expectedRevision)
-    .select(DRAFT_COLUMNS)
+    .select(draftColumns())
     .maybeSingle()
   if (error) return failure('update-failed', error)
 
@@ -476,7 +569,7 @@ export async function updateDraft(
   // Zero rows matched. One read decides which of the two answers it is.
   const { data: current, error: readError } = await db
     .from(DRAFTS)
-    .select(DRAFT_COLUMNS)
+    .select(draftColumns())
     .eq('id', draftId)
     .maybeSingle()
   // A FAILED FOLLOW-UP READ IS NOT A CONFLICT. Reporting one would tell the

@@ -499,10 +499,17 @@ test('write: a GENERAL createDraft is unchanged -- three columns, no prompt meta
   for (const forbidden of [...PROMPT_KEYS, 'revision', 'id', 'created_at', 'updated_at']) {
     assert.equal(forbidden in payload, false, `insert must not carry ${forbidden}`)
   }
-  // The snapshot parameter is OPTIONAL. Three arguments is a whole call, and it
-  // produces the payload it produced before a prompt could be attached at all:
-  // promptColumns(undefined) spreads {}, so there is nothing extra to drop.
-  assert.equal(createDraft.length, 4, 'the fourth parameter exists')
+  // BOTH TRAILING PARAMETERS ARE OPTIONAL. Three arguments is a whole call, and
+  // it produces the payload it produced before a prompt could be attached at
+  // all: promptColumns(undefined) and requirementColumns(undefined) each spread
+  // {}, so there is nothing extra to drop. The deepEqual above is the real
+  // guarantee; this is the signature it rests on.
+  //
+  // FIVE, NOT FOUR, since the structured-requirement create was added. The
+  // fifth is a RequirementSnapshot and is refused outright unless
+  // STATEMENT_REQUIREMENTS is on, because the two columns it writes do not
+  // exist until 20261002_005 is applied.
+  assert.equal(createDraft.length, 5, 'the prompt and requirement parameters both exist')
 })
 
 test('write: a SCHOOL-SPECIFIC createDraft writes the snapshot in the SAME insert', async () => {

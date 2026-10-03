@@ -24,6 +24,12 @@ import {
 } from '@/lib/statement/draft/reviewAccess'
 // SERVER ONLY: this module imports node:crypto.
 import { analysisFingerprint } from '@/lib/statement/draft/analysisFingerprint'
+import { parseRequirementSnapshot } from '@/lib/statement/requirements/snapshot'
+import {
+  FLOOR_UNREACHABLE, eligibilityForRequirement, wordFloorFits,
+} from '@/lib/statement/requirements/eligibility'
+import { unmeasurableKinds } from '@/lib/statement/requirements/constraints'
+import { draftProvenance } from '@/lib/statement/requirements/provenance'
 import { claimAnalysis, settleAnalysis } from '@/lib/statement/draft/analysisRepo'
 import { analysisCacheEnabled } from '@/lib/statement/draft/rollout'
 
@@ -196,8 +202,72 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
   const words = wordCount(draft.essay)
   const promptAttached = draft.promptText !== null
 
+  // ---- the draft's STRUCTURED requirement, if it has one -----------------
+  //
+  // THE STORED SNAPSHOT, AND ONLY THAT. snapshot.ts can also PROJECT an old
+  // draft's prompt columns into a RequirementSnapshot, and that projection is
+  // the right thing for the editor to display -- but it must not be used here.
+  // Every decision below that reads this value feeds either the cache key or
+  // the model prompt, and a projected snapshot would change both for drafts
+  // that already exist: their cached analyses would miss and be paid for
+  // again, and their model input would gain a document header describing
+  // something they never chose. So a draft without a stored requirement is
+  // treated exactly as it was before this feature, byte for byte.
+  //
+  // null ON EVERY UNMIGRATED DEPLOYMENT, because the repository does not even
+  // select the column unless STATEMENT_REQUIREMENTS is on.
+  const requirement = parseRequirementSnapshot(draft.requirementSnapshot)
+
+  // ---- is this draft's requirement really the school's? ------------------
+  //
+  // RESOLVED BEFORE ANYTHING READS THE SNAPSHOT, which is the whole correction.
+  // public.statement_drafts grants `authenticated` table-level UPDATE and an
+  // own-rows policy, so an applicant can PATCH requirement_snapshot straight
+  // through PostgREST. Everything below that used to read it -- the eligibility
+  // floor, the component list handed to the model, the limits quoted to the
+  // model, the notes quoted as the catalog's -- was reading a column the
+  // applicant controls.
+  //
+  // THE SNAPSHOT IS NOT EVIDENCE OF ITSELF. draftProvenance looks the
+  // requirement up with the caller's own client and compares every attributed
+  // field against the catalog's current row. Nothing in the snapshot's own
+  // `verification` object is consulted.
+  const verdict = await draftProvenance(
+    caller.db,
+    { promptId: draft.promptId, promptText: draft.promptText },
+    requirement,
+    verifiedProvenance,
+  )
+  const provenance = verdict.provenance
+
+  // THE ONLY REQUIREMENT ANY DECISION BELOW MAY READ.
+  //
+  // null WHENEVER AUTHENTICATION FAILED, for any reason: a tampered field, a
+  // reworded catalog entry, a withdrawn requirement, an unverified set, a read
+  // error, or the rollout flag being off. The draft is then analysed exactly as
+  // a legacy single-prompt draft is -- against draft.promptText, with the word
+  // floor from stated_max_words and no structured extras -- which is a path
+  // that has shipped and is not influenced by the snapshot at all.
+  //
+  // THE SNAPSHOT IS NOT DELETED OR REWRITTEN. It stays on the row as the
+  // historical copy of what the applicant started from, and the editor still
+  // displays it; it simply carries no authority here. That is the difference
+  // between keeping a record and treating it as official.
+  const authoritative = verdict.authentic ? requirement : null
+
   // ---- eligibility, which costs nothing and is therefore checked first ----
-  const eligibility = eligibilityFor({ words, statedMaxWords: draft.statedMaxWords })
+  //
+  // ONE POLICY, ONE BRANCH. The word floor from rubric.ts, which is what every
+  // draft has always been held to.
+  //
+  // WHERE THE WORD MAXIMUM COMES FROM is the only thing the requirement
+  // changes, and it comes from the AUTHENTICATED requirement or not at all. A
+  // tampered `constraints.words.max` of 60 would otherwise have dropped the
+  // floor from 100 words to 48.
+  const eligibility = authoritative === null
+    ? eligibilityFor({ words, statedMaxWords: draft.statedMaxWords })
+    : eligibilityForRequirement({ constraints: authoritative.constraints, words })
+
   if (eligibility.kind === 'prompt-too-short') {
     return NextResponse.json({
       error: MESSAGES.promptTooShort,
@@ -217,6 +287,23 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     }, { status: 422 })
   }
 
+  // A STATED CHARACTER MAXIMUM THAT THE WORD FLOOR CANNOT FIT INSIDE.
+  //
+  // REFUSED, AND SAID PLAINLY, rather than silently given a lower floor. The
+  // bound is arithmetic and not an estimate: 100 words cannot occupy fewer
+  // than 199 characters counting the separators between them. What should
+  // happen for those responses is an owner decision nobody has taken.
+  //
+  // READ FROM THE AUTHENTICATED REQUIREMENT, so a fabricated character limit
+  // cannot be used to refuse -- or to permit -- an analysis.
+  if (authoritative !== null && !wordFloorFits(authoritative.constraints)) {
+    return NextResponse.json({
+      error: FLOOR_UNREACHABLE,
+      code: 'prompt-too-short',
+      statedMaxWords: null,
+    }, { status: 422 })
+  }
+
   // ---- has this exact work already been done? ----------------------------
   // CONTENT-ADDRESSED. The fingerprint covers the essay, the saved prompt
   // snapshot, the school, the word limit and the rubric and schema versions --
@@ -228,13 +315,18 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     schoolId: draft.schoolId,
     promptId: draft.promptId,
     statedMaxWords: draft.statedMaxWords,
-  })
-
-  // Resolved before the claim, because the claim stores it: 'catalog' only when
-  // the catalog agrees, never because an id looked real.
-  const provenance = await verifiedProvenance(caller.db, {
-    promptId: draft.promptId,
-    promptText: draft.promptText,
+    // THE STORED SNAPSHOT, NOT THE AUTHENTICATED ONE, AND DELIBERATELY SO.
+    // The fingerprint's job is to identify what was analysed, not to say
+    // whether it was trustworthy. Keying on the snapshot as stored means a
+    // tampered draft gets its OWN cache row: it can neither read the authentic
+    // analysis nor write over it, and reverting the tampering returns to the
+    // authentic key. Keying on the authenticated value instead would collapse
+    // every tampered variant onto one key and let the first one answer for all
+    // of them.
+    requirement,
+    // AND THE VERDICT, so an outdated or altered requirement cannot retrieve a
+    // row stored while it was still the school's. See the field's own note.
+    requirementAuthentic: verdict.authentic,
   })
 
   let claimId: string | null = null
@@ -318,7 +410,18 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
       {
         model: MODEL,
         messages: [
-          { role: 'system', content: reviewSystemPrompt(promptAttached) },
+          {
+            role: 'system',
+            // THE AUTHENTICATED REQUIREMENT, so a fabricated component list
+            // cannot reach the instruction that says "there are N, return one
+            // entry for each" -- which is how a tampered draft would have been
+            // scored against requirements it wrote for itself.
+            content: reviewSystemPrompt(promptAttached, authoritative === null ? null : {
+              componentCount: authoritative.components.length,
+              hasOptionalComponent: authoritative.components.some((part) => part.optional),
+              hasUnmeasurable: unmeasurableKinds(authoritative.constraints).length > 0,
+            }),
+          },
           {
             role: 'user',
             content: buildReviewUserMessage({
@@ -330,6 +433,14 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
               // Measured here, so the model is told the count rather than
               // asking the applicant to check something already known.
               words,
+              // THE AUTHENTICATED REQUIREMENT. Everything this block would put
+              // in front of the model as the school's own -- the numbered
+              // questions, the label, the limits, the free-text formatting
+              // instructions, the "catalog records unresolved uncertainty"
+              // sentence -- is omitted entirely unless the catalog confirmed it.
+              // The essay is still assessed against draft.promptText, exactly
+              // as a legacy single-prompt draft is.
+              requirement: authoritative,
             }),
           },
         ],

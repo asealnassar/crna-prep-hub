@@ -19,6 +19,9 @@ import {
 // nothing a client component imports may.
 import { analysisFingerprint } from '@/lib/statement/draft/analysisFingerprint'
 import { analysisFor } from '@/lib/statement/draft/analysisRepo'
+import { parseRequirementSnapshot } from '@/lib/statement/requirements/snapshot'
+import { draftProvenance } from '@/lib/statement/requirements/provenance'
+import { verifiedProvenance } from '@/lib/statement/draft/submissionRepo'
 import { analysisCacheEnabled } from '@/lib/statement/draft/rollout'
 import StatementStudioClient from '../components/StatementStudioClient'
 
@@ -184,6 +187,45 @@ export default async function StatementStudioPage({
     requested: reviewPreviewRequested(params_[PASTE_PREVIEW_PARAM]),
   })
 
+  // ---- the draft's structured requirement, if it has one -----------------
+  //
+  // PARSED HERE, ON THE SERVER, and handed down as plain data. The STORED
+  // snapshot only: effectiveSnapshot() would also project an old draft's prompt
+  // columns into this shape, and passing that would give drafts created before
+  // this feature a document header and a question count their authors never
+  // chose. null is the right answer for them, and null is what the editor's
+  // single-prompt panel has always rendered.
+  //
+  // null ON EVERY UNMIGRATED DEPLOYMENT: draftRepo does not select the column
+  // unless STATEMENT_REQUIREMENTS is on, so there is nothing to parse.
+  const requirement = parseRequirementSnapshot(draft.requirementSnapshot)
+
+  // ---- does the saved copy still match what the school publishes? ---------
+  //
+  // ASKED ON THE SERVER, AND NOT OF THE SNAPSHOT. The snapshot carries its own
+  // `verification` object, and statement_drafts grants the owner UPDATE on
+  // their own row -- so an applicant can write `status: 'verified'` into it and
+  // suppress any warning keyed on it. The verdict below is computed by reading
+  // the catalog with the caller's own client and comparing every attributed
+  // field, so it cannot be set from the browser.
+  //
+  // THE SNAPSHOT IS STILL DISPLAYED EITHER WAY. It is the historical record of
+  // what this applicant started from, and losing it would be worse than
+  // labelling it. What changes is only whether the panel presents it as the
+  // school's current requirement or as a saved copy that no longer matches.
+  //
+  // ONE EXTRA READ, ONLY FOR A DRAFT THAT HAS A REQUIREMENT, and skipped
+  // entirely while the rollout flag is off -- requirementProvenance returns
+  // without querying in that case, because the tables do not exist.
+  const requirementVerdict = requirement === null
+    ? null
+    : await draftProvenance(
+      db,
+      { promptId: draft.promptId, promptText: draft.promptText },
+      requirement,
+      verifiedProvenance,
+    )
+
   // ---- what the analyser may offer, decided on the server -----------------
   //
   // THE PLAN IS CHECKED HERE ONLY TO DECIDE WHAT TO SHOW. The endpoint checks it
@@ -207,12 +249,21 @@ export default async function StatementStudioPage({
   // GATED. With the cache off nothing queries statement_analyses -- the table
   // does not exist until 20261002_004 is applied -- and the editor offers a
   // fresh analysis, which is exactly today's behaviour.
+  //
+  // THE SAME INPUTS THE ROUTE USES, AND THAT IS NOT OPTIONAL. This key is what
+  // the editor looks a stored analysis up by; the route is what stored it. An
+  // earlier version of this call omitted `requirement` entirely, so for a
+  // requirement-backed draft the two computed different keys and the editor
+  // could never find its own analysis -- "View previous analysis" would have
+  // been permanently absent for exactly the drafts this feature adds.
   const currentFingerprint = analysisFingerprint({
     essay: draft.essay,
     promptText: draft.promptText,
     schoolId: draft.schoolId,
     promptId: draft.promptId,
     statedMaxWords: draft.statedMaxWords,
+    requirement,
+    requirementAuthentic: requirementVerdict?.authentic === true,
   })
   let priorAnalysis = null
   if (analysisAllowed && analysisCacheEnabled()) {
@@ -254,6 +305,8 @@ export default async function StatementStudioPage({
       sampleReviews={analysisPreview
         ? { general: generalSample(), school: schoolSample() }
         : null}
+      requirement={requirement}
+      requirementAuthentic={requirementVerdict?.authentic === true}
     />
   )
 }

@@ -58,3 +58,33 @@ export function analysisCacheEnabled(
 ): boolean {
   return env[ANALYSIS_CACHE_ENV] === 'on'
 }
+
+/**
+ * Whether the structured school-requirement catalog is switched on.
+ *
+ * A THIRD, INDEPENDENT FLAG, for the same reason the second one exists.
+ * Applicant-submitted prompts, the analysis cache and the requirement catalog
+ * are three features with three migrations, and one variable would mean turning
+ * on whichever was ready last. Nothing here touches PROMPT_SUBMISSIONS_ENV or
+ * its migrations.
+ *
+ * OFF MEANS NO QUERY NAMES THE NEW TABLES. 20261002_005 is written but not
+ * applied, so public.statement_requirement_sets, public.statement_requirements
+ * and the two new statement_drafts columns do not exist. With this unset the
+ * picker reads statement_prompts exactly as it does today and no draft is
+ * written with a requirement -- which is what keeps the live Arkansas State
+ * prompt, and every saved draft, working against the unmigrated database.
+ *
+ * AND OFF LOSES NOTHING THAT EXISTS. The single-prompt path is not a degraded
+ * mode; it is the shipped product. This flag adds a capability rather than
+ * replacing one, so the off state is simply today.
+ *
+ * FAILS CLOSED, like both flags above: anything but the exact string 'on' is off.
+ */
+export const REQUIREMENTS_ENV = 'STATEMENT_REQUIREMENTS'
+
+export function requirementsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env[REQUIREMENTS_ENV] === 'on'
+}

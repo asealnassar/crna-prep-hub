@@ -253,13 +253,13 @@ test('no new pricing: the existing analyse operation is recorded', () => {
 
 test('provenance is resolved against the catalog, and does not gate analysis', () => {
   const code = stripTs(ROUTE)
-  assert.match(code, /verifiedProvenance\(caller\.db, \{/)
+  assert.match(code, /const verdict = await draftProvenance\(\s*caller\.db,/)
   // It informs the response and the stored row; it is not a condition on
   // running the analysis. The response carries it, whatever its value.
   assert.doesNotMatch(code, /if \([^)]*provenance[^)]*\)\s*\{[\s\S]{0,120}return/)
   assert.match(code, /^\s*provenance,$/m, 'carried in the response')
   // And it is resolved before the claim, because the stored row records it.
-  assert.ok(code.indexOf('verifiedProvenance(caller.db') < code.indexOf('claimAnalysis(caller.db'))
+  assert.ok(code.indexOf('draftProvenance(') < code.indexOf('claimAnalysis(caller.db'))
 })
 
 test('the result is bound to the revision and word count that were judged', () => {

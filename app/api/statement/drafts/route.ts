@@ -4,10 +4,14 @@ import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAut
 import {
   STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
 } from '@/lib/statement/studioGate'
-import { checkDraftCreate, createPromptSelectionOf } from '@/lib/statement/draft/validate'
+import {
+  PROMPT_SELECTION_KEY, checkDraftCreate, createPromptSelectionOf, requirementSelectionOf,
+} from '@/lib/statement/draft/validate'
 import { checkPromptSubmission } from '@/lib/statement/draft/promptSubmission'
 import { createDraftWithSubmission, verifySchoolListed } from '@/lib/statement/draft/submissionRepo'
-import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
+import { promptSubmissionsEnabled, requirementsEnabled } from '@/lib/statement/draft/rollout'
+import { readActiveRequirement } from '@/lib/statement/requirements/repo'
+import { snapshotOf } from '@/lib/statement/requirements/snapshot'
 import { createDraft, listDrafts } from '@/lib/statement/draft/draftRepo'
 import type { StatementPromptSnapshot } from '@/lib/statement/draft/promptRepo'
 import { readActivePrompt } from '@/lib/statement/draft/promptRepo'
@@ -200,6 +204,23 @@ async function createPromptFor(
   return failed(resolved.reason)
 }
 
+/**
+ * What a caller is told when a requirement selection cannot be honoured.
+ *
+ * ONE FIXED SENTENCE FOR EVERY REASON, with a machine code beside it. Whether
+ * the id is unknown, withdrawn, or belongs to a set nobody has verified is not
+ * an applicant's business and is not something to leak: they are all "this is
+ * not available", and distinguishing them in the response would describe the
+ * catalog's contents to anybody who asked.
+ */
+const REQUIREMENT_REFUSED = 'That writing requirement is not available.'
+
+/** The flag is off, so the feature does not exist for this deployment. */
+const REQUIREMENT_UNAVAILABLE_BODY = {
+  error: 'School writing requirements are not available yet.',
+  code: 'requirements-unavailable',
+}
+
 /** Lists the caller's drafts. Metadata only -- no essay bodies leave here. */
 export async function GET(): Promise<NextResponse> {
   const caller = await admit()
@@ -311,6 +332,73 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { draft: publicDraft(made.value.draft), submissionId: made.value.submissionId },
       { status: 201 },
     )
+  }
+
+  // ------------------------------------------------- a structured requirement
+  // A SCHOOL'S SEPARATE WRITING DOCUMENT, chosen from the requirement catalog.
+  //
+  // GATED, AND OFF BY DEFAULT. Until 20261002_005 is applied there are no
+  // requirement tables and no requirement columns on statement_drafts, so with
+  // the flag unset this branch answers 404 and the body key is never read --
+  // the route behaves exactly as it does today for every other request.
+  //
+  // THE BODY SENDS ONE ID AND NOTHING ELSE. requirementSelectionOf() reads a
+  // single key; the document type, label, wording, every limit, the chosen
+  // alternative and the provenance all come out of the catalog under the
+  // caller's own client. A body carrying `requirementSnapshot` or a fabricated
+  // `verification` object reaches nothing, because nothing reads those keys.
+  const requirementChoice = requirementSelectionOf(shape.body)
+  if (!requirementChoice.ok) {
+    return NextResponse.json(
+      { error: REQUIREMENT_REFUSED, code: requirementChoice.code },
+      { status: 400 },
+    )
+  }
+
+  if (requirementChoice.requirementId !== null) {
+    if (!requirementsEnabled()) {
+      return NextResponse.json(REQUIREMENT_UNAVAILABLE_BODY, { status: 404 })
+    }
+
+    // TWO SOURCES FOR ONE QUESTION IS A BUG, NOT A MERGE. A body naming both a
+    // prompt and a requirement cannot be honoured: they write the same three
+    // columns from different catalogs. Refused before any read.
+    if (shape.body[PROMPT_SELECTION_KEY] !== undefined) {
+      return NextResponse.json(
+        { error: REQUIREMENT_REFUSED, code: 'prompt-and-requirement' },
+        { status: 400 },
+      )
+    }
+
+    const resolved = await readActiveRequirement(caller.db, requirementChoice.requirementId)
+    if (!resolved.ok) {
+      // UNKNOWN, WITHDRAWN AND UNVERIFIED ARE ONE ANSWER, and 422 rather than
+      // 404: the request was well formed and the selection cannot be honoured.
+      // RLS admits a requirement only when its set is active, and the
+      // migration's CHECK makes an active set a verified one with a source and
+      // a date -- so "not-found" here covers a requirement that exists but is
+      // not fit to be shown to an applicant. NO DRAFT IS CREATED.
+      if (resolved.reason === 'not-found' || resolved.reason === 'disabled') {
+        return NextResponse.json(
+          { error: REQUIREMENT_REFUSED, code: 'requirement-not-found' },
+          { status: 422 },
+        )
+      }
+      return NextResponse.json(SERVER_ERROR_BODY, { status: 500 })
+    }
+
+    // FROZEN FROM THE CATALOG'S OWN ROW. snapshotOf needs a schoolName for the
+    // set type and the draft never stores one, so the resolved set is widened
+    // with an empty name rather than the route inventing a school's name.
+    const snapshot = snapshotOf(
+      { ...resolved.value.set, schoolName: '', requirements: [] },
+      resolved.value.requirement,
+    )
+
+    const born = await createDraft(
+      caller.db, caller.userId, checked.input, undefined, snapshot)
+    if (!born.ok) return failed(born.reason)
+    return NextResponse.json({ draft: publicDraft(born.value) }, { status: 201 })
   }
 
   // THE PROMPT IS RESOLVED AFTER THE TITLE, cheapest first and matching the

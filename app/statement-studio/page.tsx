@@ -7,6 +7,7 @@ import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
 import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
 import {
   PASTE_PREVIEW_PARAM, pastePreviewAllowed, pastePreviewRequested,
+  requirementsPreviewRequested,
 } from '@/lib/statement/draft/pastePreview'
 import LibraryClient from './components/LibraryClient'
 
@@ -124,6 +125,18 @@ export default async function StatementStudioLibraryPage({
     requested: pastePreviewRequested(params[PASTE_PREVIEW_PARAM]),
   })
 
+  // A DEVELOPMENT-ONLY VISUAL PREVIEW of the school writing-requirement
+  // checklists, decided exactly as the paste preview above is: after the gate,
+  // NODE_ENV from the process, and an explicit query parameter that is not
+  // sufficient on its own. It changes what is drawn and never what is possible
+  // -- the fixtures are TypeScript constants, so there is nothing for it to
+  // read, write or charge.
+  const requirementsPreview = pastePreviewAllowed({
+    nodeEnv: process.env.NODE_ENV,
+    isAdmin: isAdminEmail(auth.email),
+    requested: requirementsPreviewRequested(params[PASTE_PREVIEW_PARAM]),
+  })
+
   // Newest edit first, exactly as the repository ordered it. The client does not
   // re-sort: one ordering, decided by the index that serves the query.
   return (
@@ -133,6 +146,7 @@ export default async function StatementStudioLibraryPage({
       schoolsUnavailable={!schools.ok}
       submissionsEnabled={promptSubmissionsEnabled()}
       pastePreview={pastePreview}
+      requirementsPreview={requirementsPreview}
     />
   )
 }
