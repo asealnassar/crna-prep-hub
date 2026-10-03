@@ -6,9 +6,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { draftProvenance, requirementProvenance } from './provenance.ts'
 import { snapshotOf, type RequirementSnapshot } from './snapshot.ts'
 import { requirementDigest } from './digest.ts'
-import { BUFFALO, MINNESOTA, SIUE, UC_DAVIS } from './fixtures.ts'
+import {
+  BUFFALO, MINNESOTA, SIUE, SOUTHERN_MISS, SOUTH_DAKOTA, UC_DAVIS, UT_KNOXVILLE, WAYNE_STATE,
+} from './fixtures.ts'
 import type { RequirementSet, WritingRequirement } from './requirement.ts'
 import { REQUIREMENTS_ENV } from '../draft/rollout.ts'
+import { pageLimit } from './constraints.ts'
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 
@@ -46,18 +49,26 @@ function requirementRow(requirement: WritingRequirement): Record<string, unknown
     components: requirement.components.map((part) => ({ ...part })),
     min_words: c.words?.min ?? null,
     max_words: c.words?.max ?? null,
+    words_enforcement: c.words?.enforcement ?? null,
+    words_stated_as: c.words?.statedAs ?? null,
     min_characters: c.characters?.min ?? null,
     max_characters: c.characters?.max ?? null,
     characters_include_spaces: c.characters?.spacesCount ?? null,
+    characters_enforcement: c.characters?.enforcement ?? null,
+    characters_stated_as: c.characters?.statedAs ?? null,
     min_pages: c.pages?.min ?? null,
     max_pages: c.pages?.max ?? null,
     page_spacing: c.pages?.spacing ?? null,
+    pages_enforcement: c.pages?.enforcement ?? null,
+    pages_stated_as: c.pages?.statedAs ?? null,
     font_size_pt: c.typography?.fontSizePt ?? null,
     font_family: c.typography?.fontFamily ?? null,
     margins_inches: c.typography?.marginsInches ?? null,
     citation_style: c.citation?.statedAs ?? null,
     citation_family: c.citation?.family ?? null,
     min_references: c.citation?.minReferences ?? null,
+    unenforced_length: c.unenforcedLength?.text ?? null,
+    unenforced_length_verbatim: c.unenforcedLength?.verbatim ?? null,
     other_instructions: [...c.otherInstructions],
     choice_group: requirement.choiceGroup,
     is_optional: requirement.optional,
@@ -219,13 +230,20 @@ test('TAMPERING WITH A WORD LIMIT IS REFUSED', async () => {
 })
 
 test('TAMPERING WITH A CHARACTER LIMIT IS REFUSED', async () => {
-  const s = scenario(UC_DAVIS)
+  // UT Knoxville, the school with a real character limit. UC Davis stood here
+  // and has none at all, which made the `null` case below vacuous.
+  const s = scenario(UT_KNOXVILLE)
   for (const characters of [
-    { min: null, max: 2500, spacesCount: false },  // flips the counting rule
-    { min: null, max: 25_000, spacesCount: true }, // ten times the limit
-    { min: null, max: 150, spacesCount: true },    // below the word floor's bound
+    // flips the counting rule, which is worth about a sixth of the text
+    { min: 5000, max: 18_000, spacesCount: true, enforcement: 'enforced', statedAs: null },
+    // ten times the limit
+    { min: 5000, max: 180_000, spacesCount: false, enforcement: 'enforced', statedAs: null },
+    // below the word floor's provable bound, which would refuse the analysis
+    { min: null, max: 150, spacesCount: false, enforcement: 'enforced', statedAs: null },
+    // drops the minimum, so a 200-character answer looks compliant
+    { min: null, max: 18_000, spacesCount: false, enforcement: 'enforced', statedAs: null },
     null,
-  ]) {
+  ] as const) {
     const forged: RequirementSnapshot = {
       ...s.snapshot,
       constraints: { ...s.snapshot.constraints, characters },
@@ -233,6 +251,44 @@ test('TAMPERING WITH A CHARACTER LIMIT IS REFUSED', async () => {
     const { db } = stubDb({ requirement: s.requirement, set: s.set })
     assert.equal((await on(() => requirementProvenance(db, forged))).refusal, 'contents-differ',
       JSON.stringify(characters))
+  }
+})
+
+test('TAMPERING WITH A LENGTH REGISTER IS REFUSED', async () => {
+  // THE NEW FIELDS ARE AUTHENTICATED LIKE EVERY OTHER ATTRIBUTED FIELD. The
+  // register decides whether the applicant and the model are told a figure is a
+  // rule, so promoting a suggestion to a maximum -- or demoting a real maximum
+  // to a suggestion, which is the dangerous direction -- is a change to the
+  // instructions this product attributes to the school.
+  const s = scenario(UC_DAVIS)
+  const original = s.snapshot.constraints.words!
+  assert.equal(original.enforcement, 'suggested', 'the fixture under test')
+  for (const words of [
+    { ...original, enforcement: 'enforced' as const },
+    { ...original, enforcement: 'truncated' as const },
+    { ...original, enforcement: 'target' as const },
+    { ...original, enforcement: 'unknown' as const },
+    // And the quotation, which is shown to the applicant as the school's words.
+    { ...original, statedAs: 'Maximum of 250 words. This is a strict limit.' },
+    { ...original, statedAs: null },
+  ]) {
+    const forged: RequirementSnapshot = {
+      ...s.snapshot,
+      constraints: { ...s.snapshot.constraints, words },
+    }
+    const { db } = stubDb({ requirement: s.requirement, set: s.set })
+    assert.equal((await on(() => requirementProvenance(db, forged))).refusal, 'contents-differ',
+      JSON.stringify(words))
+  }
+})
+
+test('AN UNTOUCHED REGISTER STILL AUTHENTICATES', async () => {
+  // The other half: the register must not make the happy path fail.
+  for (const set of [UC_DAVIS, UT_KNOXVILLE, SOUTHERN_MISS, SOUTH_DAKOTA, WAYNE_STATE]) {
+    const s = scenario(set)
+    const { db } = stubDb({ requirement: s.requirement, set: s.set })
+    assert.deepEqual(await on(() => requirementProvenance(db, s.snapshot)),
+      { origin: 'catalog', refusal: null }, set.schoolName)
   }
 })
 
@@ -253,7 +309,7 @@ test('TAMPERING WITH FORMATTING INSTRUCTIONS IS REFUSED', async () => {
 test('TAMPERING WITH PAGE, FONT OR CITATION RULES IS REFUSED', async () => {
   const s = scenario(MINNESOTA)
   for (const constraints of [
-    { ...s.snapshot.constraints, pages: { min: null, max: 40, spacing: 'single' as const } },
+    { ...s.snapshot.constraints, pages: pageLimit({ min: null, max: 40, spacing: 'single' as const, enforcement: 'enforced' }) },
     { ...s.snapshot.constraints, typography: { fontSizePt: 8, fontFamily: null, marginsInches: null } },
     { ...s.snapshot.constraints, citation: { family: 'apa' as const, statedAs: 'APA', minReferences: null } },
   ]) {
@@ -508,4 +564,29 @@ test('the verifier is injected, so the requirements layer imports no draft repo'
   const code = read('./provenance.ts')
   assert.doesNotMatch(code, /from '\.\.\/draft\/submissionRepo/)
   assert.match(code, /verifyPrompt: \(/)
+})
+
+test('TAMPERING WITH THE VERBATIM FLAG IS REFUSED', () => {
+  // AN APPLICANT COULD OTHERWISE PROMOTE A SUMMARY INTO A QUOTATION on their
+  // own draft row, and the editor would then introduce the catalog's paraphrase
+  // as the school's sentence. The flag is attributed content like any other, so
+  // the digest covers it and the catalog decides it.
+  const s = scenario(WAYNE_STATE)
+  const original = s.snapshot.constraints.unenforcedLength!
+  assert.equal(original.verbatim, true, 'the fixture under test')
+  return (async () => {
+    for (const unenforcedLength of [
+      { ...original, verbatim: false },
+      { text: 'no more than one page', verbatim: true },
+      null,
+    ]) {
+      const forged: RequirementSnapshot = {
+        ...s.snapshot,
+        constraints: { ...s.snapshot.constraints, unenforcedLength },
+      }
+      const { db } = stubDb({ requirement: s.requirement, set: s.set })
+      assert.equal((await on(() => requirementProvenance(db, forged))).refusal,
+        'contents-differ', JSON.stringify(unenforcedLength))
+    }
+  })()
 })

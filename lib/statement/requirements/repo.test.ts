@@ -1,11 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { REQUIREMENT_READ_COLUMNS, listRequirementSets, readActiveRequirement, requirementFromRow } from './repo.ts'
+import {
+  REQUIREMENT_READ_COLUMNS, listRequirementSets, readActiveRequirement, requirementFromRow,
+} from './repo.ts'
 import { createDraft } from '../draft/draftRepo.ts'
-import { legacyProjection, snapshotOf } from './snapshot.ts'
+import { legacyProjection, parseRequirementSnapshot, snapshotOf } from './snapshot.ts'
 import { BUFFALO, RUTGERS, UC_DAVIS } from './fixtures.ts'
 import { REQUIREMENTS_ENV } from '../draft/rollout.ts'
+import { parseEnforcement } from './constraints.ts'
 
 /**
  * A recording stub. Every call is logged so a test can assert that NO QUERY WAS
@@ -88,9 +91,19 @@ test('with the flag ON the expected tables and columns are read', async () => {
 test('the column lists name only columns the migration creates', async () => {
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
-  const sql = readFileSync(
-    fileURLToPath(new URL('../../../supabase/migrations/20261002_005_statement_requirements.sql',
-      import.meta.url)), 'utf8').replace(/^\s*--.*$/gm, '')
+  // BOTH MIGRATIONS, because 006 adds the length-register columns to the table
+  // 005 creates and this select list names them. Reading only 005 would let a
+  // typo in a register column name through, and the first catalog read in
+  // production would fail closed with nobody knowing why.
+  const files = [
+    '20261002_005_statement_requirements.sql',
+    '20261002_006_statement_requirement_length_register.sql',
+  ]
+  const sql = files
+    .map((name) => readFileSync(
+      fileURLToPath(new URL(`../../../supabase/migrations/${name}`, import.meta.url)), 'utf8'))
+    .join('\n')
+    .replace(/^\s*--.*$/gm, '')
   for (const columns of Object.values(REQUIREMENT_READ_COLUMNS)) {
     for (const column of columns.split(',').map((c) => c.trim())) {
       assert.ok(sql.includes(column), `${column} is not in the migration`)
@@ -105,9 +118,11 @@ test('a requirement row parses into the model', () => {
     id: 'r1', set_id: 's1', school_id: 'c1', document_type: 'diversity-statement',
     label: 'Diversity Essay', prompt_text: 'Why does equity matter?',
     components: [{ id: 'a', text: 'one', optional: false }, { id: 'b', text: 'two', optional: true }],
-    min_words: null, max_words: 500,
+    min_words: null, max_words: 500, words_enforcement: null, words_stated_as: null,
     min_characters: null, max_characters: null, characters_include_spaces: null,
+    characters_enforcement: null, characters_stated_as: null,
     min_pages: null, max_pages: null, page_spacing: null,
+    pages_enforcement: null, pages_stated_as: null,
     font_size_pt: null, font_family: null, margins_inches: null,
     citation_style: null, citation_family: null, min_references: null,
     other_instructions: ['no cover page'], choice_group: null, is_optional: false,
@@ -115,7 +130,10 @@ test('a requirement row parses into the model', () => {
   })
   assert.ok(parsed)
   assert.equal(parsed.documentType, 'diversity-statement')
-  assert.deepEqual(parsed.constraints.words, { min: null, max: 500 })
+  // A NULL REGISTER COLUMN READS AS THE STRICT DEFAULT -- "not recorded" is
+  // treated as the hard cap this product has always treated a maximum as.
+  assert.deepEqual(parsed.constraints.words,
+    { min: null, max: 500, enforcement: 'enforced', statedAs: null })
   assert.equal(parsed.constraints.characters, null, 'all-null columns yield NO section')
   assert.equal(parsed.constraints.pages, null)
   assert.equal(parsed.constraints.typography, null)
@@ -165,8 +183,53 @@ test('a page-only row carries pages and NO words', () => {
   const parsed = requirementFromRow({
     id: 'r', label: 'L', prompt_text: 'q', max_pages: 1, page_spacing: 'double',
   })
-  assert.deepEqual(parsed?.constraints.pages, { min: null, max: 1, spacing: 'double' })
+  assert.deepEqual(parsed?.constraints.pages,
+    { min: null, max: 1, spacing: 'double', enforcement: 'enforced', statedAs: null })
   assert.equal(parsed?.constraints.words, null, 'one page is not a word count')
+})
+
+test('THE REGISTER COLUMNS ARE READ, AND AN UNKNOWN ONE DEGRADES TO STRICT', () => {
+  const suggested = requirementFromRow({
+    id: 'r', label: 'L', prompt_text: 'q', max_words: 250,
+    words_enforcement: 'suggested', words_stated_as: 'Suggested Length: Maximum of 250 words',
+  })
+  assert.equal(suggested?.constraints.words?.enforcement, 'suggested')
+  assert.equal(suggested?.constraints.words?.statedAs, 'Suggested Length: Maximum of 250 words')
+
+  const truncated = requirementFromRow({
+    id: 'r', label: 'L', prompt_text: 'q', max_pages: 2, page_spacing: 'double',
+    pages_enforcement: 'truncated', pages_stated_as: 'Only the first two pages will be read.',
+  })
+  assert.equal(truncated?.constraints.pages?.enforcement, 'truncated')
+
+  // A VALUE THIS BUILD DOES NOT KNOW BECOMES THE STRICT DEFAULT, not a guess at
+  // which soft register was meant. Being stricter than the school is survivable;
+  // being looser is what costs somebody an application.
+  for (const junk of ['advisory-ish', '', 7, null, undefined, {}]) {
+    const parsed = requirementFromRow({
+      id: 'r', label: 'L', prompt_text: 'q', max_words: 500, words_enforcement: junk,
+    })
+    assert.equal(parsed?.constraints.words?.enforcement, 'enforced', String(junk))
+  }
+})
+
+test('THE CATALOG READER AND THE SNAPSHOT READER DEGRADE IDENTICALLY', () => {
+  // IF THESE EVER DIVERGE, EVERY REQUIREMENT FAILS AUTHENTICATION AT ONCE.
+  // requirementProvenance() compares a stored snapshot's digest against a
+  // reconstruction read from the catalog. One parser reads jsonb and the other
+  // reads columns; both must turn the same unrecognised register into the same
+  // value, so both call parseEnforcement().
+  for (const junk of ['advisory-ish', 'ENFORCED', 7, null, [], 'truncated']) {
+    const fromRow = requirementFromRow({
+      id: 'r', label: 'L', prompt_text: 'q', max_words: 500, words_enforcement: junk,
+    })!.constraints.words!.enforcement
+    const fromSnapshot = parseRequirementSnapshot({
+      requirementId: 'r', setId: 's', schoolId: 'c', label: 'L', promptText: 'q',
+      constraints: { words: { min: null, max: 500, enforcement: junk } },
+    })!.constraints.words!.enforcement
+    assert.equal(fromRow, fromSnapshot, `diverged on ${JSON.stringify(junk)}`)
+    assert.equal(fromRow, parseEnforcement(junk))
+  }
 })
 
 test('a margin arriving as a numeric STRING is still read', () => {

@@ -258,3 +258,104 @@ test('THE STRIPPER DOES NOT EAT CODE', () => {
   assert.ok(EDITOR.includes('requirementLimits.map'))
   assert.ok(PREVIEW.includes('RequirementChecklist'))
 })
+
+// ===========================================================================
+// THE LENGTH REGISTER IN THE EDITOR
+// ===========================================================================
+// STRUCTURAL ASSERTIONS, BY THE HOUSE CONVENTION. next/navigation and
+// next/headers do not resolve under `node --test`, so this component cannot be
+// rendered here. These read the source with comments stripped, exactly as the
+// existing assertions in this file do.
+//
+// AND THE PANEL CANNOT BE EXERCISED IN A BROWSER EITHER, which is why the
+// structural check carries the weight. It renders only for a requirement-backed
+// draft, and that needs 20261002_005 and _006 applied, STATEMENT_REQUIREMENTS
+// set, and a catalog row -- none of which exists.
+
+test('THE EDITOR SHOWS THE REGISTER NOTICE, NOT JUST THE NUMBER', () => {
+  // "250 words suggested" next to a counter is, at a glance, a number next to a
+  // counter. The sentence is what stops an applicant cutting an essay to it.
+  assert.match(EDITOR, /hasAdvisoryLength\(requirement\.constraints\)/)
+  assert.match(EDITOR, /\{requirementAdvisory && requirementUnenforcedNotice === null && \(/)
+  assert.match(EDITOR, /\{ADVISORY_LENGTH_NOTICE\}/)
+})
+
+test('AN UNENFORCED LENGTH GETS ITS OWN NOTICE, AND REPLACES THE GENERIC ONE', () => {
+  // THE MORE SPECIFIC STATEMENT WINS. "Some of this school's lengths are
+  // guidance" and "this school publishes a length but does not say whether it
+  // is a maximum" are both true for an Option A document, and showing both
+  // would be two paragraphs saying one thing. The second answers the question
+  // the applicant actually has: why is nothing counting this?
+  assert.match(EDITOR, /unenforcedLengthNotice\(requirement\.constraints\)/)
+  assert.match(EDITOR, /\{requirementUnenforcedNotice !== null && \(/)
+  assert.match(EDITOR, /\{requirementUnenforcedNotice\}/)
+  // The generic one stands down rather than stacking.
+  assert.match(EDITOR, /requirementAdvisory && requirementUnenforcedNotice === null/)
+  // AND THE NOTICE IS CHOSEN BY THE HELPER, not by the component -- so a
+  // summary can never be given the quotation notice by a JSX edit.
+  assert.doesNotMatch(EDITOR, /UNENFORCED_LENGTH_NOTICE\b/,
+    'the component must not hard-code one of the two notices')
+})
+
+test('THE SCHOOL’S OWN SENTENCE IS RENDERED, NOT JUST THE CLASSIFICATION', () => {
+  assert.match(EDITOR, /statedWordings\(requirement\.constraints\)/)
+  assert.match(EDITOR, /requirementWordings\.length > 0/)
+  assert.match(EDITOR, /requirementWordings\.map\(/)
+})
+
+test('THE TRUNCATION POLICY IS RENDERED AS THE SCHOOL’S POLICY', () => {
+  assert.match(EDITOR, /truncationNotice\(requirement\.constraints\)/)
+  assert.match(EDITOR, /\{requirementTruncation !== null && \(/)
+  // IT IS NOT COMPARED AGAINST THE DRAFT ANYWHERE in this component: no
+  // arithmetic on a page count, because there is none to do.
+  assert.doesNotMatch(EDITOR, /requirementTruncation.*words|pages.*>.*words/)
+})
+
+test('EVERY NEW PANEL IS INSIDE THE requirement !== null BRANCH', () => {
+  // A length register belongs to a structured requirement. A legacy draft has
+  // none, and its single length line is unchanged -- that line is what every
+  // such draft has shown since the feature shipped.
+  assert.match(EDITOR, /\{requirement === null && \(/)
+  assert.match(EDITOR, /\{wordLimitLabel\(prompt\.statedMaxWords\)\}/)
+  for (const guard of ['requirementAdvisory', 'requirementTruncation',
+    'requirementUnenforcedNotice']) {
+    const derivation = new RegExp(
+      `const ${guard} = requirement (?:===|!==) null\\s*\\n?\\s*[?&]`)
+    assert.match(EDITOR, derivation, guard)
+  }
+  assert.match(EDITOR,
+    /const requirementWordings = requirement === null \? \[\] : statedWordings\(/)
+  // AND IT TAKES NO CLAIM OF STANDING OFF THE SNAPSHOT. The applicant holds
+  // UPDATE on their own row, so `verification` decides nothing here; the
+  // summary-versus-quotation distinction comes from a field the digest covers
+  // and provenance authenticates. access.test.ts pins the wider rule.
+  assert.doesNotMatch(EDITOR, /requirement\.verification/)
+})
+
+test('THE EDITOR STILL CONVERTS NO UNIT', () => {
+  // The guard that matters most, re-checked after adding three length panels.
+  assert.doesNotMatch(EDITOR, /wordsPerPage|charsPerWord|WORDS_PER_|PER_PAGE/i)
+  assert.doesNotMatch(EDITOR, /about \$\{[^}]*\} words|roughly \$\{/i)
+})
+
+test('THE STORAGE CEILING IS LABELLED AS A CEILING, not as "characters"', () => {
+  // TWO CHARACTER COUNTS SIT IN THE SAME ROW for a character-limited school:
+  // the school's (UT Knoxville's, excluding spaces) and this editor's storage
+  // ceiling (including them). Both previously ended in the bare word
+  // "characters", which is the unexplained number this row exists to avoid.
+  assert.match(EDITOR, /MAX_SAVED_CHARS\.toLocaleString\('en-US'\)\} characters stored/)
+  assert.match(EDITOR, /this editor’s own limit, spaces included/)
+  // AND THE CLARIFICATION ONLY APPEARS WHERE IT IS NEEDED -- beside a character
+  // counter, not on every draft in the product.
+  assert.match(EDITOR, /requirementCounts\.includes\('characters'\)/)
+})
+
+test('THE SCHOOL’S COUNTER COMES FROM liveCountLabel, which carries its own rule', () => {
+  // The editor never formats a character count itself; if it did, the
+  // "excluding spaces" rule could drift out of the label.
+  assert.match(EDITOR, /\{liveCountLabel\(\{/)
+  assert.match(EDITOR, /kind, constraints: requirement\.constraints, words, text: essay,/)
+  // No hand-rolled character arithmetic against a requirement anywhere.
+  assert.doesNotMatch(EDITOR, /replace\(\/\\s\+\/g, ''\)/)
+  assert.doesNotMatch(EDITOR, /characterCount\(/)
+})

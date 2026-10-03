@@ -7,7 +7,7 @@ import { analysisFingerprint } from '../draft/analysisFingerprint.ts'
 import { buildReviewUserMessage, reviewSystemPrompt } from '../draft/reviewPrompt.ts'
 import { eligibilityForRequirement, wordFloorFits } from './eligibility.ts'
 import { eligibilityFor } from '../draft/rubric.ts'
-import { unmeasurableKinds } from './constraints.ts'
+import { unmeasurableKinds, characterLimit, wordLimit,} from './constraints.ts'
 import { BUFFALO, SIUE, UC_DAVIS } from './fixtures.ts'
 import type { RequirementSet, WritingRequirement } from './requirement.ts'
 import { REQUIREMENTS_ENV } from '../draft/rollout.ts'
@@ -183,7 +183,7 @@ test('a forged word limit cannot lower the eligibility floor', async () => {
   const s = scenario(BUFFALO)
   const forged: RequirementSnapshot = {
     ...s.snapshot,
-    constraints: { ...s.snapshot.constraints, words: { min: null, max: 60 } },
+    constraints: { ...s.snapshot.constraints, words: wordLimit({ min: null, max: 60, enforcement: 'enforced' }) },
   }
   // 60 words would scale the floor to 48, admitting a 50-word essay.
   assert.deepEqual(eligibilityFor({ words: 50, statedMaxWords: 60 }),
@@ -200,7 +200,7 @@ test('a forged character limit cannot refuse or permit an analysis', async () =>
   const s = scenario(UC_DAVIS)
   const forged: RequirementSnapshot = {
     ...s.snapshot,
-    constraints: { ...s.snapshot.constraints, characters: { min: null, max: 150, spacesCount: true } },
+    constraints: { ...s.snapshot.constraints, characters: characterLimit({ min: null, max: 150, spacesCount: true, enforcement: 'enforced' }) },
   }
   // 150 is below the provable 199-character bound, so an authenticated
   // requirement with that limit would be refused outright.
@@ -295,7 +295,7 @@ test('EVERY TAMPERED VARIANT GETS ITS OWN CACHE ROW', async () => {
     s.snapshot,
     { ...s.snapshot, components: [] },
     { ...s.snapshot, components: [{ id: 'x', text: 'anything', optional: false }] },
-    { ...s.snapshot, constraints: { ...s.snapshot.constraints, words: { min: null, max: 60 } } },
+    { ...s.snapshot, constraints: { ...s.snapshot.constraints, words: wordLimit({ min: null, max: 60, enforcement: 'enforced' }) } },
     { ...s.snapshot, constraints: { ...s.snapshot.constraints, otherInstructions: ['forged'] } },
     { ...s.snapshot, documentType: 'diversity-statement' },
     { ...s.snapshot, choiceGroup: 'forged' },

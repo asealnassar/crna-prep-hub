@@ -11,6 +11,7 @@ import { snapshotOf } from './snapshot.ts'
 import { legacyProjection } from './snapshot.ts'
 import { ALBANY, BUFFALO, MINNESOTA, RUTGERS, SIUE, UC_DAVIS } from './fixtures.ts'
 import { REQUIREMENTS_ENV } from '../draft/rollout.ts'
+import { characterLimit, pageLimit, wordLimit } from './constraints.ts'
 import {
   canCreateRequirementNow, requirementDraftRequest, requirementStepFrom, requirementsPath,
 } from './newDraftFlow.ts'
@@ -464,9 +465,9 @@ test('A GOOD RESPONSE SURVIVES THE WIRE, constraints and all', () => {
         components: [{ id: 'q1', text: 'one', optional: false },
           { id: 'q2', text: 'two', optional: true }],
         constraints: {
-          words: { min: null, max: 1000 },
-          characters: { min: null, max: 2500, spacesCount: true },
-          pages: { min: null, max: 2, spacing: 'double' },
+          words: wordLimit({ min: null, max: 1000, enforcement: 'enforced' }),
+          characters: characterLimit({ min: null, max: 2500, spacesCount: true, enforcement: 'enforced' }),
+          pages: pageLimit({ min: null, max: 2, spacing: 'double', enforcement: 'enforced' }),
           typography: { fontSizePt: 12, fontFamily: 'Times New Roman', marginsInches: 1 },
           citation: { family: 'apa', statedAs: 'APA 7th edition', minReferences: 3 },
           otherInstructions: ['no cover page'],
@@ -491,9 +492,12 @@ test('A GOOD RESPONSE SURVIVES THE WIRE, constraints and all', () => {
   assert.equal(set.verification.status, 'verified')
   const requirement = set.requirements[0]!
   assert.equal(requirement.components.length, 2)
-  assert.deepEqual(requirement.constraints.words, { min: null, max: 1000 })
-  assert.deepEqual(requirement.constraints.characters, { min: null, max: 2500, spacesCount: true })
-  assert.deepEqual(requirement.constraints.pages, { min: null, max: 2, spacing: 'double' })
+  assert.deepEqual(requirement.constraints.words,
+    { min: null, max: 1000, enforcement: 'enforced', statedAs: null })
+  assert.deepEqual(requirement.constraints.characters,
+    { min: null, max: 2500, spacesCount: true, enforcement: 'enforced', statedAs: null })
+  assert.deepEqual(requirement.constraints.pages,
+    { min: null, max: 2, spacing: 'double', enforcement: 'enforced', statedAs: null })
   assert.equal(requirement.constraints.typography?.fontFamily, 'Times New Roman')
   assert.equal(requirement.constraints.citation?.statedAs, 'APA 7th edition')
   assert.deepEqual([...requirement.constraints.otherInstructions], ['no cover page'])

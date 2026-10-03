@@ -245,3 +245,161 @@ test('the rollout flag is what gates it, and the flag is off by default', async 
   // The migration says so too, so an operator reading the file knows.
   assert.match(RAW, /STATEMENT_REQUIREMENTS=on/)
 })
+
+// ===========================================================================
+// 20261002_006 -- THE LENGTH REGISTER
+// ===========================================================================
+
+const RAW_006 = read('../../../supabase/migrations/20261002_006_statement_requirement_length_register.sql')
+const SQL_006 = stripSql(RAW_006)
+
+test('006 IS ADDITIVE: eight nullable columns and nothing else', () => {
+  const columns: readonly (readonly [string, string])[] = [
+    ['words_enforcement', 'text'], ['words_stated_as', 'text'],
+    ['characters_enforcement', 'text'], ['characters_stated_as', 'text'],
+    ['pages_enforcement', 'text'], ['pages_stated_as', 'text'],
+    ['unenforced_length', 'text'], ['unenforced_length_verbatim', 'boolean'],
+  ]
+  for (const [column, type] of columns) {
+    assert.match(SQL_006,
+      new RegExp(`add column if not exists ${column}\\s+${type};`), column)
+  }
+  // No table is created, dropped or renamed, and no column is removed.
+  assert.doesNotMatch(SQL_006, /create table/i)
+  assert.doesNotMatch(SQL_006, /drop table|drop column|rename/i)
+  // `not null` would reject every existing row; there are none today, and the
+  // ban is what keeps that true if any appear before this is applied.
+  assert.doesNotMatch(SQL_006, /add column[^;]*not null/i)
+})
+
+test('006 TOUCHES ONLY statement_requirements', () => {
+  const altered = new Set(
+    [...SQL_006.matchAll(/alter table (?:if exists )?(\S+)/gi)].map((m) => m[1]!))
+  assert.deepEqual([...altered], ['public.statement_requirements'])
+})
+
+test('006 BACKFILLS, DELETES AND REWRITES NOTHING', () => {
+  for (const forbidden of [/\bupdate\s+public\./i, /\bdelete\s+from/i, /\binsert\s+into/i,
+    /\btruncate\b/i]) {
+    assert.doesNotMatch(SQL_006, forbidden, String(forbidden))
+  }
+})
+
+test('006 GRANTS NOTHING: adding a column to an already-granted SELECT needs none', () => {
+  assert.doesNotMatch(SQL_006, /^\s*(grant|revoke)\b/mi)
+})
+
+test('NO DEFAULT IS SET ON A REGISTER COLUMN', () => {
+  // `default 'enforced'` would write the strict register onto every future row
+  // that forgot to state one, making "not recorded" indistinguishable from
+  // "checked, and it really is a cap". NULL keeps the two apart in the
+  // database; parseEnforcement() applies the strict reading in one place.
+  for (const column of ['words_enforcement', 'characters_enforcement', 'pages_enforcement']) {
+    assert.doesNotMatch(SQL_006,
+      new RegExp(`add column if not exists ${column}[^;]*default`, 'i'), column)
+  }
+})
+
+test('THE DATABASE REFUSES A REGISTER IT DOES NOT KNOW', () => {
+  for (const column of ['words_enforcement', 'characters_enforcement', 'pages_enforcement']) {
+    const check = SQL_006.match(
+      new RegExp(`${column} in \\(([^)]*)\\)`, 'i'))
+    assert.ok(check, `${column} has no value constraint`)
+    for (const register of ['truncated', 'enforced', 'target', 'suggested', 'unknown']) {
+      assert.match(check![1]!, new RegExp(`'${register}'`), `${column}: ${register}`)
+    }
+  }
+})
+
+test('EVERY REGISTER CHECK ALLOWS NULL EXPLICITLY', () => {
+  // A CHECK passes on TRUE **or NULL**, which has bitten this schema before.
+  // Each condition is written so the NULL case is the one it means to allow.
+  for (const column of ['words_enforcement', 'characters_enforcement', 'pages_enforcement',
+    'words_stated_as', 'characters_stated_as', 'pages_stated_as']) {
+    assert.match(SQL_006, new RegExp(`${column} is null`), column)
+  }
+})
+
+test('A REGISTER REQUIRES A LIMIT TO DESCRIBE', () => {
+  // 'suggested' with no bound renders as an empty chip and is invisible in the
+  // digest, so it is refused.
+  assert.match(SQL_006, /words_enforcement is null or min_words is not null or max_words is not null/)
+  assert.match(SQL_006, /characters_enforcement is null\s*\n?\s*or min_characters is not null or max_characters is not null/)
+  // Page spacing alone IS a page requirement, so the page register is allowed
+  // there too -- matching what 005 already builds a PageLimit from.
+  assert.match(SQL_006, /pages_enforcement is null\s*\n?\s*or min_pages is not null or max_pages is not null or page_spacing is not null/)
+})
+
+test('TRUNCATION REQUIRES A MAXIMUM TO TRUNCATE AT', () => {
+  // "We read only the first N" is meaningless without N, and a minimum cannot
+  // be truncated at.
+  for (const [register, bound] of [['words_enforcement', 'max_words'],
+    ['characters_enforcement', 'max_characters'], ['pages_enforcement', 'max_pages']] as const) {
+    assert.match(SQL_006,
+      new RegExp(`${register} is distinct from 'truncated' or ${bound} is not null`), register)
+  }
+})
+
+test('006 DERIVES NO UNIT FROM ANOTHER EITHER', () => {
+  // The register must not become a back door for the conversion 005 forbids.
+  assert.doesNotMatch(SQL_006, /estimated_words|words_per_page|approx|equivalent_words/i)
+})
+
+test('006 SAYS IT MUST BE APPLIED WITH 005 AND BEFORE THE FLAG', () => {
+  // The ordering is load-bearing: repo.ts names these columns in its SELECT, so
+  // 005-applied-and-006-missing is a broken read rather than a degraded one.
+  assert.match(RAW_006, /20261002_005/)
+  assert.match(RAW_006, /STATEMENT_REQUIREMENTS/)
+  assert.match(RAW_006, /NOT APPLIED/)
+})
+
+// ===========================================================================
+// 006 section 1b -- A LENGTH SHOWN AND NOT ENFORCED (Option A)
+// ===========================================================================
+
+test('unenforced_length NEEDS NO BOUND, which is the whole point of it', () => {
+  // The register columns require min/max in their unit before they may carry a
+  // value. This column must NOT, because it exists to hold a length sentence
+  // for a document that has no stored bound at all.
+  assert.doesNotMatch(SQL_006,
+    /unenforced_length is null\s*\n?\s*or min_words is not null/,
+    'a bound requirement was copied onto the one column that must not have it')
+  assert.match(SQL_006, /add column if not exists unenforced_length\s+text;/)
+})
+
+test('THE VERBATIM FLAG HAS NO DEFAULT AND NEEDS A SENTENCE', () => {
+  // NO DEFAULT: "not recorded" and "recorded as false" stay distinguishable in
+  // the database; the under-claiming reading is applied once, in TypeScript.
+  assert.doesNotMatch(SQL_006,
+    /add column if not exists unenforced_length_verbatim[^;]*default/i)
+  assert.match(SQL_006, /add column if not exists unenforced_length_verbatim\s+boolean;/)
+  // A FLAG WITHOUT TEXT CLAIMS "verbatim" ABOUT NOTHING, and is refused.
+  assert.match(SQL_006,
+    /unenforced_length_verbatim is null or unenforced_length is not null/)
+})
+
+test('THE DATABASE REFUSES A ROW THAT BOTH SHOWS AND BOUNDS A LENGTH', () => {
+  // "We do not know whether this is a limit" and "the maximum is 1,000" cannot
+  // both be true of one document. A row carrying both would hand the interface
+  // two answers.
+  const check = SQL_006.match(
+    /statement_requirements_unenforced_length_has_no_bound\s+check \(([\s\S]*?)\);/)
+  assert.ok(check, 'the contradiction is not refused')
+  const body = check![1]!
+  assert.match(body, /unenforced_length is null/, 'NULL is allowed, as every CHECK must')
+  for (const column of ['min_words', 'max_words', 'min_characters', 'max_characters',
+    'min_pages', 'max_pages']) {
+    assert.match(body, new RegExp(`${column} is null`), column)
+  }
+})
+
+test('unenforced_length is bounded in LENGTH and refuses a blank', () => {
+  assert.match(SQL_006,
+    /unenforced_length is null\s*\n?\s*or char_length\(btrim\(unenforced_length\)\) between 1 and 2000/)
+})
+
+test('006 STILL DERIVES NO UNIT FROM ANOTHER, with the new column', () => {
+  // The new column holds PROSE. If a words-per-page figure were ever going to
+  // appear in this schema, this is where it would be.
+  assert.doesNotMatch(SQL_006, /estimated_words|words_per_page|equivalent_words|approx/i)
+})

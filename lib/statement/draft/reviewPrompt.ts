@@ -1,7 +1,11 @@
 import { AUTHENTICITY_CONTRACT } from '../prompts.ts'
 import { RUBRIC, categoriesFor } from './rubric.ts'
-import { characterCount, unmeasurableKinds } from '../requirements/constraints.ts'
-import { constraintLines } from '../requirements/constraintText.ts'
+import {
+  characterCount, hasAdvisoryLength, isStrict, unmeasurableKinds,
+} from '../requirements/constraints.ts'
+import {
+  constraintLines, labelledConstraints, statedWordings,
+} from '../requirements/constraintText.ts'
 import { DOCUMENT_TYPE_LABELS } from '../requirements/requirement.ts'
 import type { RequirementSnapshot } from '../requirements/snapshot.ts'
 
@@ -221,10 +225,83 @@ ${requirement.components.map((part, index) =>
     const rule = characters.spacesCount === true ? 'including spaces'
       : characters.spacesCount === false ? 'excluding spaces'
       : 'counting spaces, because the school does not state whether they count'
+    // THE REGISTER IS NAMED, so an over-count against a suggested figure is not
+    // reported to the model as a breach of a maximum. "stated maximum" is
+    // reserved for a bound the school made one.
+    const bound = isStrict(characters.enforcement)
+      ? 'stated maximum'
+      : characters.enforcement === 'suggested' ? 'suggested length'
+        : characters.enforcement === 'target' ? 'length the school describes, which it does '
+          + 'NOT call a maximum'
+          : 'figure the school states without saying whether it is a limit'
     const against = characters.max === null ? '' : count > characters.max
-      ? ` The stated maximum is ${characters.max} characters, so this draft is ${count - characters.max} over it.`
-      : ` The stated maximum is ${characters.max} characters, so this draft is within it.`
+      ? ` The ${bound} is ${characters.max} characters, so this draft is ${count - characters.max} over that figure.`
+      : ` The ${bound} is ${characters.max} characters, so this draft is within it.`
     return `\nThis draft is ${count} characters, ${rule}. That count is measured by this system and is exact.${against}`
+  })()
+
+  // THE MEASURED LENGTH REQUIREMENTS, IN THE SCHOOL'S OWN WORDING.
+  //
+  // THIS LINE WAS MISSING AND THE REGISTER EXPOSED IT. Only the UNMEASURED
+  // requirements were ever listed for the model, on the reasoning that a word
+  // maximum already arrived as `statedMaxWords`. That held while every stored
+  // maximum was a hard cap -- it stops holding the moment a maximum can be a
+  // suggestion, because legacyProjection() refuses to project one, so the model
+  // would otherwise be told "no maximum word count is stored" and never learn
+  // that the school suggests 250 words at all.
+  const measuredLines = requirement === null ? [] : labelledConstraints(requirement.constraints)
+    .filter((line) => line.measured)
+    .map((line) => defuse(line.text))
+  const statedLengthLine = measuredLines.length === 0 ? '' : `
+This school's stated length requirements, in its own words: ${measuredLines.join('; ')}.`
+
+  // ---- length registers -------------------------------------------------
+  //
+  // WITHOUT THIS THE MODEL WOULD DO THE CONVERSION THE PRODUCT REFUSES TO. It
+  // reads "250 words suggested" in the constraint lines and, absent an
+  // instruction, is perfectly capable of reporting a 400-word draft as over a
+  // limit and marking it down. So the softer registers are named explicitly,
+  // the school's own sentences are quoted, and the model is told what the
+  // product itself is told: a suggestion is not a cap.
+  const advisoryLine = requirement === null || !hasAdvisoryLength(requirement.constraints)
+    ? ''
+    : `
+Some of this school's stated lengths are GUIDANCE, NOT LIMITS, and the lines above say which. Do not describe a draft as over a limit, non-compliant, or too long because it passes a suggested length or a stated length the school never called a maximum. You may observe that it is longer than the school suggests. Only a figure described above as a maximum or a minimum is a rule.`
+
+  // The school's own sentences about length, so a classification above is never
+  // the only thing the model has to go on.
+  const wordings = requirement === null ? [] : statedWordings(requirement.constraints)
+  const wordingLine = wordings.length === 0 ? '' : `
+The school's own wording about length: ${wordings.map((text) => `"${defuse(text)}"`).join(' ')}`
+
+  // A LENGTH THE SCHOOL STATED AND THIS PRODUCT DOES NOT BOUND.
+  //
+  // THE MODEL MUST BE TOLD NOT TO PENALISE IT, in so many words. Left to
+  // itself, a model reading "1-2 pages" in the constraint lines will mark a
+  // longer draft down for non-compliance -- which is the owner's approved
+  // policy being broken by inference rather than by code. So the figure travels
+  // with the reason it is not a rule, and with the instruction.
+  //
+  // AND WHICH KIND OF TEXT IT IS. A quotation and a summary are different
+  // evidence: the model may repeat the school's own sentence back to the
+  // applicant, and must not attribute a paraphrase to the school. The same
+  // distinction the interface draws, drawn here.
+  const unenforcedLength = requirement?.constraints.unenforcedLength ?? null
+  const unenforcedLine = unenforcedLength === null ? '' : `
+This school publishes a length for this document. ${unenforcedLength.verbatim
+  ? `Their exact wording is: "${defuse(unenforcedLength.text)}".`
+  : `This system holds a SUMMARY of it, not the school's wording: ${defuse(unenforcedLength.text)}. Do not quote that back as the school's sentence or attribute those words to them.`} The school does NOT say whether that figure is a maximum, a minimum or a suggestion. No bound is stored for it and this system has checked nothing against it. Do NOT treat exceeding or falling short of that figure as a violation, as non-compliance, or as a reason to mark the writing down. You may note that the school publishes it and that its standing is unconfirmed.`
+
+  // A SCHOOL THAT STOPS READING. Stated as the school's policy, never as a
+  // measurement, because the truncated bound is usually a page count.
+  const truncation = requirement === null ? null : requirement.constraints
+  const truncatedLine = truncation === null ? '' : (() => {
+    const strictTruncation = [truncation.words, truncation.characters, truncation.pages]
+      .some((limit) => limit?.enforcement === 'truncated')
+    return strictTruncation
+      ? `
+This school states that it reads only up to its stated limit and that anything beyond it may not be read. Mention that when length is relevant. Do not attempt to judge where the cut would fall -- this system has not measured it.`
+      : ''
   })()
 
   // WHAT THE SCHOOL STATED THAT THIS SYSTEM DID NOT MEASURE, named one by one
@@ -248,7 +325,7 @@ ${prompt}
 </school-prompt>
 ${componentBlock}
 ${counted}${characterLine}
-${limit}${unmeasuredLine}${notesLine}
+${limit}${statedLengthLine}${unmeasuredLine}${advisoryLine}${unenforcedLine}${wordingLine}${truncatedLine}${notesLine}
 Any other length requirement -- a minimum, a page count -- exists only in the prompt text above if it exists at all. This system has not parsed one, so you may discuss what the prompt states but must not claim this system has checked it.`
 }
 

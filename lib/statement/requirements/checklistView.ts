@@ -21,7 +21,11 @@
  */
 
 import { liveCounts, type LiveCount } from './constraints.ts'
-import { constraintSummary, labelledConstraints, showUnmeasuredNotice, type LabelledConstraint } from './constraintText.ts'
+import {
+  constraintSummary, labelledConstraints, showUnmeasuredNotice, statedWordings,
+  truncationNotice, unenforcedLengthIsVerbatim, unenforcedLengthNotice,
+  type LabelledConstraint,
+} from './constraintText.ts'
 import {
   DOCUMENT_TYPE_LABELS, checklist, requiredDocumentCount, type ChecklistEntry,
   type RequirementSet, type WritingRequirement,
@@ -63,6 +67,39 @@ export interface RequirementCard {
   readonly constraints: readonly LabelledConstraint[]
   readonly constraintSummary: string
   readonly showUnmeasuredNotice: boolean
+  /**
+   * The school's own sentences about length, verbatim.
+   *
+   * ON THE CARD BECAUSE A CLASSIFICATION MUST NEVER BE THE ONLY EVIDENCE.
+   * Deciding that "Suggested Length: Maximum of 250 words" is advisory is a
+   * judgement somebody made; the sentence is not. Empty for a plain enforced
+   * limit, where "500 words maximum" already says everything there is.
+   */
+  readonly statedWordings: readonly string[]
+  /**
+   * The school's stated policy of not reading past its limit, or null.
+   *
+   * A POLICY, NOT A VERDICT. The truncated bound is normally a page count, which
+   * this product cannot measure, so this says what the school said and makes no
+   * claim about the applicant's draft.
+   */
+  readonly truncationNotice: string | null
+  /**
+   * The notice for a length the school published and this product does not bound.
+   *
+   * ON THE CARD, NOT ONLY IN THE EDITOR. An applicant choosing which document to
+   * start should know before they start that this school's length is guidance
+   * only, because it changes how they plan the piece.
+   */
+  readonly unenforcedLengthNotice: string | null
+  /**
+   * Whether that shown length is the school's own words.
+   *
+   * ON THE CARD SO THE CARD CAN SAY SO. A summary and a quotation need
+   * different notices, and the component must not have to look inside
+   * `constraints` to work out which it is holding.
+   */
+  readonly unenforcedLengthVerbatim: boolean
   readonly liveCounts: readonly LiveCount[]
   readonly optional: boolean
   readonly notes: readonly string[]
@@ -136,6 +173,10 @@ function cardFor(
     constraints: labelledConstraints(requirement.constraints),
     constraintSummary: constraintSummary(requirement.constraints),
     showUnmeasuredNotice: showUnmeasuredNotice(requirement.constraints),
+    statedWordings: statedWordings(requirement.constraints),
+    truncationNotice: truncationNotice(requirement.constraints),
+    unenforcedLengthNotice: unenforcedLengthNotice(requirement.constraints),
+    unenforcedLengthVerbatim: unenforcedLengthIsVerbatim(requirement.constraints),
     liveCounts: liveCounts(requirement.constraints),
     optional: requirement.optional,
     notes: requirement.notes,

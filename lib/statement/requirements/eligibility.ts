@@ -34,22 +34,61 @@
 import {
   MIN_ANALYSIS_WORDS, SHORT_PROMPT_CEILING, eligibilityFor, type Eligibility,
 } from '../draft/rubric.ts'
-import type { Constraints } from './constraints.ts'
+import { isStrict, type Constraints } from './constraints.ts'
 
 /**
- * The word maximum this requirement states, or null.
+ * The word figure this requirement publishes, in any register, or null.
  *
- * THE ONLY FIELD ELIGIBILITY READS. A page count, a character count, a
- * minimum, a font: none of them is a word maximum, and all of them yield null
- * -- which is what the existing code already reads as "the school stated no
- * word limit" and handles correctly.
+ * A DISPLAY ACCESSOR. It answers "did the school publish a word figure?", which
+ * is what a card, a counter and a limit line need. It does NOT answer "is there
+ * a cap?", and eligibility no longer asks it -- see enforcedWordMaximum().
+ *
+ * A page count, a character count, a font: none of them is a word figure, and
+ * all of them yield null, which every existing path already reads as "the
+ * school stated no word limit".
  */
 export function statedWordMaximum(constraints: Constraints): number | null {
   return constraints.words?.max ?? null
 }
 
 /**
+ * The word maximum eligibility may act on: a figure the school made a RULE.
+ *
+ * THE SHORT-PROMPT EXCEPTION ONLY MAKES SENSE FOR A CAP, and that is the whole
+ * reason this function exists separately. The owner-approved policy in rubric.ts
+ * says two things about a stated maximum: below 50 words the rubric does not
+ * apply at all, and below 100 words the ordinary floor drops to 80% of the
+ * maximum. Both exist because A CAP MAKES THE 100-WORD FLOOR UNREACHABLE -- an
+ * applicant told "no more than 80 words" cannot write 100 without breaking the
+ * rule, so holding them to 100 would be absurd.
+ *
+ * THAT RATIONALE EVAPORATES FOR A SUGGESTION. A school that SUGGESTS 80 words,
+ * or describes an 80-word statement without calling it a limit, has forbidden
+ * nothing: the applicant may write 150 and break no rule, so the 100-word floor
+ * is perfectly reachable and the exception must not fire. Handing a suggested 80
+ * to eligibilityFor() would lower the floor to 64 on the strength of a limit
+ * that does not exist, and a suggested 40 would refuse the analysis outright.
+ * Both are the "treated as a strict maximum" error.
+ *
+ * THE APPROVED POLICY IS UNCHANGED AND STILL LIVES IN rubric.ts. Not a constant
+ * moves, no threshold is invented, and no character count is converted into
+ * words. What narrowed is which figures count as a MAXIMUM for a rule that was
+ * only ever about maxima.
+ *
+ * AND NO EXISTING DRAFT MOVES. A legacy draft's stated_max_words parses as
+ * 'enforced', so it reaches this unchanged; statement_requirements has no rows.
+ */
+export function enforcedWordMaximum(constraints: Constraints): number | null {
+  const words = constraints.words
+  if (words === null || words.max === null) return null
+  return isStrict(words.enforcement) ? words.max : null
+}
+
+/**
  * Whether this draft may be analysed, by the approved word rules.
+ *
+ * IT READS THE ENFORCED MAXIMUM ONLY. See enforcedWordMaximum(): the floor and
+ * the short-prompt ceiling are rules about CAPS, and a suggestion is not one.
  *
  * RETURNS rubric.ts's OWN Eligibility TYPE, deliberately. An earlier version
  * returned a parallel type carrying a `unit`, which existed only to describe
@@ -62,7 +101,10 @@ export function eligibilityForRequirement(input: {
 }): Eligibility {
   return eligibilityFor({
     words: input.words,
-    statedMaxWords: statedWordMaximum(input.constraints),
+    // THE ENFORCED MAXIMUM, NOT THE PUBLISHED FIGURE. A suggested or target
+    // length is not a cap, so it must not trigger a rule that exists only
+    // because a cap makes the ordinary floor unreachable.
+    statedMaxWords: enforcedWordMaximum(input.constraints),
   })
 }
 
@@ -87,9 +129,9 @@ export function minimumCharactersFor(words: number): number {
  * stated character maximum.
  *
  * TRUE WHENEVER IT IS NOT PROVABLY IMPOSSIBLE. No character limit, a limit
- * above the bound, or a limit that excludes spaces and still clears it: all
- * true. Only a maximum strictly below the bound returns false, and that is a
- * fact rather than a judgement.
+ * above the bound, a limit that excludes spaces and still clears it, or a limit
+ * the school did not make a rule: all true. Only an ENFORCED maximum strictly
+ * below the bound returns false, and that is a fact rather than a judgement.
  *
  * IT DECIDES NOTHING. eligibilityForRequirement() does not call this, and the
  * route does not gate on it. Its only consumer is the explanation shown beside
@@ -102,6 +144,13 @@ export function minimumCharactersFor(words: number): number {
 export function wordFloorFits(constraints: Constraints): boolean {
   const characters = constraints.characters
   if (characters === null || characters.max === null) return true
+  // A SUGGESTED CHARACTER LIMIT MAKES NOTHING UNREACHABLE, for the same reason
+  // a suggested word limit does not lower the floor: it forbids nothing. This
+  // function's whole output is a REFUSAL -- "your school's limit is shorter than
+  // this analysis supports" -- and refusing an applicant an analysis over a
+  // figure their school called a suggestion would be the strictest possible
+  // reading of the softest possible instruction.
+  if (!isStrict(characters.enforcement)) return true
   // Excluding spaces, the separators do not count toward the school's limit,
   // so the bound is the word count itself.
   const bound = characters.spacesCount === false

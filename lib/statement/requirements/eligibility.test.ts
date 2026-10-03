@@ -3,19 +3,26 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { MIN_ANALYSIS_WORDS, SHORT_PROMPT_CEILING, eligibilityFor } from '../draft/rubric.ts'
-import { NO_CONSTRAINTS, type Constraints } from './constraints.ts'
 import {
-  FLOOR_UNREACHABLE, eligibilityForRequirement, minimumCharactersFor, shortfallLabel,
-  statedWordMaximum, tooShortLabel, wordFloorFits,
+  NO_CONSTRAINTS, type Constraints, wordLimit, characterLimit, pageLimit,
+  ENFORCEMENTS,
+  type Enforcement,
+} from './constraints.ts'
+import {
+  FLOOR_UNREACHABLE, eligibilityForRequirement, enforcedWordMaximum, minimumCharactersFor,
+  shortfallLabel, statedWordMaximum, tooShortLabel, wordFloorFits,
 } from './eligibility.ts'
-import { ALBANY, BUFFALO, MINNESOTA, RUTGERS, SIUE, UC_DAVIS } from './fixtures.ts'
+import {
+  ALBANY, BUFFALO, MINNESOTA, RUTGERS, SIUE, UC_DAVIS, UT_KNOXVILLE,
+} from './fixtures.ts'
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
-const words = (max: number | null): Constraints => ({ ...NO_CONSTRAINTS, words: { min: null, max } })
+const words = (max: number | null): Constraints => ({ ...NO_CONSTRAINTS,
+  words: wordLimit({ max, enforcement: 'enforced' }) })
 const chars = (max: number | null, spacesCount: boolean | null = true): Constraints =>
-  ({ ...NO_CONSTRAINTS, characters: { min: null, max, spacesCount } })
+  ({ ...NO_CONSTRAINTS, characters: characterLimit({ max, spacesCount, enforcement: 'enforced' }) })
 const pages = (max: number): Constraints =>
-  ({ ...NO_CONSTRAINTS, pages: { min: null, max, spacing: 'double' } })
+  ({ ...NO_CONSTRAINTS, pages: pageLimit({ max, spacing: 'double', enforcement: 'enforced' }) })
 
 // ===================================================== the invented policy is gone
 
@@ -116,7 +123,8 @@ test('only a WORD MAXIMUM is read, and nothing else is', () => {
   assert.equal(statedWordMaximum(pages(2)), null)
   assert.equal(statedWordMaximum(NO_CONSTRAINTS), null)
   // A minimum is not a maximum.
-  assert.equal(statedWordMaximum({ ...NO_CONSTRAINTS, words: { min: 500, max: null } }), null)
+  assert.equal(statedWordMaximum({ ...NO_CONSTRAINTS,
+    words: wordLimit({ min: 500, max: null, enforcement: 'enforced' }) }), null)
   // Formatting rules are not a maximum.
   assert.equal(statedWordMaximum({
     ...NO_CONSTRAINTS,
@@ -231,9 +239,190 @@ test('EVERY RESEARCH FIXTURE IS ANALYSABLE AT 100 WORDS', () => {
   }
 })
 
-test('UC Davis’ 2,500 characters comfortably clears the bound', () => {
-  const requirement = UC_DAVIS.requirements[0]!
-  assert.equal(requirement.constraints.characters?.max, 2500)
-  assert.ok(2500 > minimumCharactersFor(MIN_ANALYSIS_WORDS))
+test('UT Knoxville’s 18,000 characters comfortably clears the bound', () => {
+  // UC Davis stood here and has no character limit at all.
+  const requirement = UT_KNOXVILLE.requirements[0]!
+  assert.equal(requirement.constraints.characters?.max, 18_000)
+  assert.ok(18_000 > minimumCharactersFor(MIN_ANALYSIS_WORDS))
   assert.equal(wordFloorFits(requirement.constraints), true)
+})
+
+// ===========================================================================
+// THE SHORT-PROMPT EXCEPTION IS ABOUT CAPS ONLY
+// ===========================================================================
+// THESE REPLACE AN EARLIER PIN THAT SAID THE OPPOSITE. The first version of
+// this feature pinned "eligibility ignores the register", on the reasoning that
+// the owner-approved word policy must not be touched. Reviewing it, that was
+// the wrong reading: the policy's two clauses -- refuse below 50, drop the floor
+// to 80% below 100 -- exist BECAUSE A CAP MAKES THE 100-WORD FLOOR UNREACHABLE.
+// A suggestion forbids nothing, so the floor is reachable and the exception has
+// nothing to apply to. Treating a suggestion as a cap there is exactly the
+// error. No constant in rubric.ts moved.
+
+const withRegister = (max: number, enforcement: Enforcement): Constraints =>
+  ({ ...NO_CONSTRAINTS, words: wordLimit({ max, enforcement, statedAs: 'the school’s words' }) })
+
+test('AN ENFORCED MAXIMUM BELOW 100 STILL LOWERS THE FLOOR, exactly as approved', () => {
+  // Unchanged behaviour, pinned first so the correction cannot be mistaken for
+  // a relaxation of the policy.
+  const cap = withRegister(80, 'enforced')
+  assert.equal(enforcedWordMaximum(cap), 80)
+  assert.deepEqual(eligibilityForRequirement({ constraints: cap, words: 70 }),
+    eligibilityFor({ words: 70, statedMaxWords: 80 }))
+  assert.equal(eligibilityForRequirement({ constraints: cap, words: 64 }).kind, 'eligible',
+    '80% of 80 is 64')
+  assert.equal(eligibilityForRequirement({ constraints: cap, words: 63 }).kind, 'too-short')
+})
+
+test('AN ENFORCED MAXIMUM BELOW THE CEILING STILL REFUSES, exactly as approved', () => {
+  const tiny = withRegister(40, 'enforced')
+  assert.equal(eligibilityForRequirement({ constraints: tiny, words: 100 }).kind,
+    'prompt-too-short')
+})
+
+test('A TRUNCATED MAXIMUM IS A CAP TOO, so it behaves like an enforced one', () => {
+  // The school reads only the first N: that is the strictest cap there is.
+  const truncated = withRegister(80, 'truncated')
+  assert.equal(enforcedWordMaximum(truncated), 80)
+  assert.deepEqual(eligibilityForRequirement({ constraints: truncated, words: 70 }),
+    eligibilityForRequirement({ constraints: withRegister(80, 'enforced'), words: 70 }))
+})
+
+test('A SUGGESTED LENGTH DOES NOT LOWER THE 100-WORD FLOOR', () => {
+  // THE CORRECTION. "80 words suggested" forbids nothing, so an applicant can
+  // reach 100 and the exception must not fire.
+  const suggested = withRegister(80, 'suggested')
+  assert.equal(statedWordMaximum(suggested), 80, 'the figure is still published')
+  assert.equal(enforcedWordMaximum(suggested), null, 'and is not a cap')
+  assert.deepEqual(eligibilityForRequirement({ constraints: suggested, words: 70 }),
+    eligibilityFor({ words: 70, statedMaxWords: null }),
+    'the ordinary floor applies, as for a school that stated nothing')
+  assert.equal(eligibilityForRequirement({ constraints: suggested, words: 70 }).kind,
+    'too-short')
+  assert.equal(eligibilityForRequirement({ constraints: suggested, words: 70 }).minimumWords,
+    MIN_ANALYSIS_WORDS)
+  assert.equal(eligibilityForRequirement({ constraints: suggested, words: 100 }).kind,
+    'eligible')
+})
+
+test('A TARGET LENGTH DOES NOT LOWER THE FLOOR EITHER', () => {
+  // South Dakota's shape: "A written 500 word statement", never called a limit.
+  const target = withRegister(80, 'target')
+  assert.equal(enforcedWordMaximum(target), null)
+  assert.deepEqual(eligibilityForRequirement({ constraints: target, words: 70 }),
+    eligibilityFor({ words: 70, statedMaxWords: null }))
+})
+
+test('A SUGGESTED LENGTH UNDER THE CEILING IS NOT REFUSED AS A SHORT PROMPT', () => {
+  // The other direction, and the more damaging one. A school SUGGESTING 40
+  // words has not capped anything; refusing the analysis outright would deny an
+  // applicant a feature over a limit that does not exist.
+  for (const soft of ['suggested', 'target', 'unknown'] as const) {
+    const constraints = withRegister(40, soft)
+    const decision = eligibilityForRequirement({ constraints, words: 100 })
+    assert.notEqual(decision.kind, 'prompt-too-short', soft)
+    assert.equal(decision.kind, 'eligible', soft)
+  }
+  // And an enforced 40 is still refused.
+  assert.equal(
+    eligibilityForRequirement({ constraints: withRegister(40, 'enforced'), words: 100 }).kind,
+    'prompt-too-short')
+})
+
+test('AN UNKNOWN REGISTER IS NOT A CAP FOR ELIGIBILITY', () => {
+  // 'unknown' means the school published a figure and no standing for it. Using
+  // it to refuse or to lower a floor would be asserting the standing.
+  const unknown = withRegister(80, 'unknown')
+  assert.equal(enforcedWordMaximum(unknown), null)
+  assert.deepEqual(eligibilityForRequirement({ constraints: unknown, words: 70 }),
+    eligibilityFor({ words: 70, statedMaxWords: null }))
+})
+
+test('EVERY REGISTER AT OR ABOVE THE FLOOR BEHAVES IDENTICALLY', () => {
+  // Where the figure is 100 or more the register cannot matter, because neither
+  // clause of the policy applies. UC Davis's 250 is in this band, so the
+  // correction changes nothing for any real school in the research record.
+  for (const enforcement of ENFORCEMENTS) {
+    const constraints = withRegister(250, enforcement)
+    assert.deepEqual(eligibilityForRequirement({ constraints, words: 99 }),
+      eligibilityFor({ words: 99, statedMaxWords: null }), enforcement)
+    assert.equal(eligibilityForRequirement({ constraints, words: 100 }).kind, 'eligible',
+      enforcement)
+  }
+})
+
+test('A PAGE-ONLY REQUIREMENT HAS NO WORD MAXIMUM IN ANY REGISTER', () => {
+  // The oldest guarantee in this module, re-checked against the register: a
+  // page count yields no word bound, so it can never reach the exception.
+  for (const enforcement of ENFORCEMENTS) {
+    const pageOnly: Constraints = {
+      ...NO_CONSTRAINTS,
+      pages: pageLimit({ min: 1, max: 2, spacing: 'double', enforcement, statedAs: 'x' }),
+    }
+    assert.equal(statedWordMaximum(pageOnly), null, enforcement)
+    assert.equal(enforcedWordMaximum(pageOnly), null, enforcement)
+    assert.deepEqual(eligibilityForRequirement({ constraints: pageOnly, words: 100 }),
+      eligibilityFor({ words: 100, statedMaxWords: null }), enforcement)
+    assert.equal(wordFloorFits(pageOnly), true, enforcement)
+  }
+})
+
+test('A SUGGESTED CHARACTER LIMIT NEVER REFUSES AN ANALYSIS', () => {
+  // wordFloorFits()'s entire output is a refusal. A character figure the school
+  // did not make a rule must not produce one, however small it is.
+  const tiny = 10
+  assert.equal(wordFloorFits({
+    ...NO_CONSTRAINTS,
+    characters: characterLimit({ max: tiny, spacesCount: true, enforcement: 'enforced' }),
+  }), false, 'an enforced tiny limit is still provably unreachable')
+  for (const soft of ['suggested', 'target', 'unknown'] as const) {
+    assert.equal(wordFloorFits({
+      ...NO_CONSTRAINTS,
+      characters: characterLimit({ max: tiny, spacesCount: true, enforcement: soft,
+        statedAs: 'x' }),
+    }), true, soft)
+  }
+})
+
+test('NO CONVERSION OR NEW THRESHOLD ENTERED THIS MODULE', () => {
+  // The correction narrowed which figures count as a cap. It introduced no
+  // characters-per-word figure and no new numeric policy.
+  const source = read('./eligibility.ts').replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+  assert.doesNotMatch(source, /charsPerWord|CHARS_PER_|wordsPerChar|AVERAGE_/i)
+  // The only numbers left are the provable bound's own arithmetic.
+  const literals = source.match(/\b\d+\b/g) ?? []
+  assert.deepEqual([...new Set(literals)].sort(), ['0', '1'],
+    `unexpected numeric literals: ${[...new Set(literals)].join(', ')}`)
+})
+
+
+test('AN UNENFORCED LENGTH LEAVES THE APPROVED ELIGIBILITY RULES UNTOUCHED', () => {
+  // THE OWNER'S SEVENTH CONDITION. A length shown and not bounded must not move
+  // the word floor, must not refuse a short prompt, and must not be convertible
+  // into either -- the figures are inside a sentence and nothing reads them.
+  const shown: Constraints = {
+    ...NO_CONSTRAINTS,
+    unenforcedLength: 'A 2-3 page essay describing your interest in nurse anesthesia',
+  }
+  assert.equal(statedWordMaximum(shown), null)
+  assert.equal(enforcedWordMaximum(shown), null)
+  assert.deepEqual(eligibilityForRequirement({ constraints: shown, words: 100 }),
+    eligibilityFor({ words: 100, statedMaxWords: null }))
+  assert.equal(eligibilityForRequirement({ constraints: shown, words: 99 }).kind, 'too-short')
+  assert.equal(eligibilityForRequirement({ constraints: shown, words: 99 }).minimumWords,
+    MIN_ANALYSIS_WORDS, 'the ordinary floor, unmoved')
+  // AND IT NEVER REFUSES AN ANALYSIS. wordFloorFits() reads a character
+  // maximum; prose is not one.
+  assert.equal(wordFloorFits(shown), true)
+})
+
+test('A SENTENCE CONTAINING A TINY NUMBER STILL DOES NOT REFUSE AN ANALYSIS', () => {
+  // The hazard in reverse: "a 40 word answer" inside prose must not become a
+  // short-prompt refusal, because nothing parsed it and nothing should.
+  const shown: Constraints = {
+    ...NO_CONSTRAINTS, unenforcedLength: 'a 40 word answer is usually enough',
+  }
+  assert.equal(eligibilityForRequirement({ constraints: shown, words: 100 }).kind, 'eligible')
+  assert.equal(wordFloorFits(shown), true)
 })

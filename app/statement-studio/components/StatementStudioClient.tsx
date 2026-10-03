@@ -33,8 +33,13 @@ import {
   ANALYSIS_ACTION_LABELS, ANALYSIS_NO_CACHE_NOTICE, ANALYSIS_TIER_MESSAGE,
   ANALYSIS_UNAVAILABLE_MESSAGE, type AnalysisAction, type AnalysisAvailability,
 } from '@/lib/statement/draft/reviewAccess'
-import { UNMEASURED_NOTICE, liveCounts } from '@/lib/statement/requirements/constraints'
-import { labelledConstraints, liveCountLabel } from '@/lib/statement/requirements/constraintText'
+import {
+  UNMEASURED_NOTICE, hasAdvisoryLength, liveCounts,
+} from '@/lib/statement/requirements/constraints'
+import {
+  ADVISORY_LENGTH_NOTICE, labelledConstraints, liveCountLabel, statedWordings,
+  truncationNotice, unenforcedLengthNotice,
+} from '@/lib/statement/requirements/constraintText'
 import { DOCUMENT_TYPE_LABELS } from '@/lib/statement/requirements/requirement'
 import type { RequirementSnapshot } from '@/lib/statement/requirements/snapshot'
 import {
@@ -1059,6 +1064,33 @@ export default function StatementStudioClient({
   // characters needed" instead of pressing a button that fails.
   const requirementCounts = requirement === null ? [] : liveCounts(requirement.constraints)
   const requirementLimits = requirement === null ? [] : labelledConstraints(requirement.constraints)
+  // THE SCHOOL'S OWN SENTENCES ABOUT LENGTH, and its policy of not reading past
+  // the limit. Both exist because a register is a judgement somebody made and
+  // the applicant is entitled to the wording it was made from.
+  // ONLY WHAT IS ATTRIBUTABLE, AND NOT BY ASKING THE SNAPSHOT.
+  //
+  // AN EARLIER VERSION OF THIS LINE GATED ON requirement.verification.verbatim
+  // AND THAT WAS WRONG. The snapshot is the applicant's own row: they hold
+  // table-level UPDATE on it through PostgREST, so a `verification` object that
+  // says "verbatim" is worth nothing, and this editor takes every claim of
+  // STANDING from the server's verdict instead -- which is the rule a test in
+  // access.test.ts pins and which that line broke.
+  //
+  // THE DISTINCTION STILL HOLDS, from a field the digest covers and provenance
+  // authenticates: statedWordings() withholds a summarised length by itself, so
+  // nothing reaches this heading that is not offered as a quotation.
+  const requirementWordings = requirement === null ? [] : statedWordings(requirement.constraints)
+  const requirementTruncation = requirement === null
+    ? null
+    : truncationNotice(requirement.constraints)
+  // A LENGTH SHOWN AND NOT CHECKED. Its own notice, because the generic
+  // advisory sentence does not explain why no counter is watching it -- and a
+  // DIFFERENT notice when what is shown is a recorded summary rather than the
+  // school's sentence, because then there are two open questions and not one.
+  const requirementUnenforcedNotice = requirement === null
+    ? null
+    : unenforcedLengthNotice(requirement.constraints)
+  const requirementAdvisory = requirement !== null && hasAdvisoryLength(requirement.constraints)
   const requirementEligibility = requirement === null ? null : eligibilityForRequirement({
     constraints: requirement.constraints, words,
   })
@@ -1209,10 +1241,25 @@ export default function StatementStudioClient({
                   </span>
                 </span>
               ))}
+              {/*
+                THE STORAGE CEILING, LABELLED AS ONE.
+
+                IT USED TO READ "5 of 100,000 characters", WHICH IS A DIFFERENT
+                NUMBER FROM THE ONE BESIDE IT. For a character-limited school
+                this row shows two character counts under two different rules:
+                UT Knoxville's limit excludes spaces, and this ceiling counts
+                every character including them. Two numbers both labelled
+                "characters", three centimetres apart, is the unexplained number
+                this row is supposed to prevent -- so this one says whose limit
+                it is and that spaces count toward it.
+              */}
               <span aria-hidden="true">·</span>
               <span>
                 {essay.length.toLocaleString('en-US')} of{' '}
-                {MAX_SAVED_CHARS.toLocaleString('en-US')} characters
+                {MAX_SAVED_CHARS.toLocaleString('en-US')} characters stored
+                {requirement !== null && requirementCounts.includes('characters')
+                  ? ' (this editor’s own limit, spaces included)'
+                  : ''}
               </span>
               <span aria-hidden="true">·</span>
               <span>Revision {save.revision}</span>
@@ -1791,6 +1838,66 @@ export default function StatementStudioClient({
                         && requirementLimits.some((limit) => !limit.measured) && (
                         <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
                           {UNMEASURED_NOTICE}
+                        </p>
+                      )}
+
+                      {/*
+                        A LENGTH THAT IS NOT A LIMIT, SAID ONCE.
+
+                        WITHOUT THIS THE NUMBER CARRIES THE WHOLE MESSAGE. "250
+                        words suggested" is accurate and is also, at a glance,
+                        just a number next to a counter -- and an applicant who
+                        reads it as a cap will cut an essay to it. So the
+                        distinction is stated in a sentence, and the school's own
+                        wording is shown underneath it.
+                      */}
+                      {/*
+                        THE UNENFORCED LENGTH FIRST, when there is one. It is the
+                        more specific statement and it answers the question the
+                        applicant actually has -- "why is nothing counting this?"
+                        -- so the generic advisory sentence stands down for it
+                        rather than both appearing.
+                      */}
+                      {requirementUnenforcedNotice !== null && (
+                        <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
+                          {requirementUnenforcedNotice}
+                        </p>
+                      )}
+
+                      {requirementAdvisory && requirementUnenforcedNotice === null && (
+                        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                          {ADVISORY_LENGTH_NOTICE}
+                        </p>
+                      )}
+
+                      {requirementWordings.length > 0 && (
+                        <ul className="mt-2 space-y-1">
+                          {requirementWordings.map((wording) => (
+                            <li
+                              key={wording}
+                              className="text-[11px] leading-relaxed text-slate-500"
+                            >
+                              <span className="font-medium text-slate-600">
+                                The school&rsquo;s wording:
+                              </span>
+                              {' '}
+                              &ldquo;{wording}&rdquo;
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+
+                      {/*
+                        THE SCHOOL'S TRUNCATION POLICY, AS A POLICY.
+
+                        NOT A VERDICT ON THIS DRAFT. The truncated bound is a
+                        page count in every verified example, and this editor
+                        has no pages -- so this says what the school said and
+                        makes no claim about whether this draft passes it.
+                      */}
+                      {requirementTruncation !== null && (
+                        <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
+                          {requirementTruncation}
                         </p>
                       )}
 

@@ -1,7 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { checklistView, progressLabel, type StartedDraft } from './checklistView.ts'
-import { ALBANY, BUFFALO, MINNESOTA, OHIO_STATE, RUTGERS, SIUE, UC_DAVIS } from './fixtures.ts'
+import { NO_CONSTRAINTS, type Constraints, wordLimit } from './constraints.ts'
+import { constraintSummary } from './constraintText.ts'
+import {
+  ALBANY, BUFFALO, LOYOLA, MINNESOTA, OHIO_STATE, RUTGERS, SIUE, SOUTHERN_MISS, SOUTH_DAKOTA,
+  UC_DAVIS, UT_KNOXVILLE, WAYNE_STATE,
+} from './fixtures.ts'
 
 const draft = (requirementId: string, over: Partial<StartedDraft> = {}): StartedDraft => ({
   id: `draft-${requirementId}`, requirementId, title: 'A draft',
@@ -10,17 +15,18 @@ const draft = (requirementId: string, over: Partial<StartedDraft> = {}): Started
 
 // ===================================================== nothing is eager
 
-test('a five-document school starts with FIVE OFFERS AND NO DRAFTS', () => {
+test('a six-document school starts with SIX OFFERS AND NO DRAFTS', () => {
+  // UC Davis publishes six prompts. The fixture modelled five and omitted one.
   const view = checklistView({ set: UC_DAVIS, drafts: [] })
-  assert.equal(view.rows.length, 5)
-  assert.equal(view.requiredCount, 5)
+  assert.equal(view.rows.length, 6)
+  assert.equal(view.requiredCount, 6)
   assert.equal(view.startedCount, 0)
   for (const row of view.rows) {
     assert.equal(row.kind, 'document')
     assert.equal(row.kind === 'document' && row.card.action, 'start')
     assert.equal(row.kind === 'document' && row.card.started, null)
   }
-  assert.equal(progressLabel(view), '5 required documents')
+  assert.equal(progressLabel(view), '6 required documents')
 })
 
 test('starting one does not touch the others', () => {
@@ -28,16 +34,16 @@ test('starting one does not touch the others', () => {
     set: UC_DAVIS, drafts: [draft('fixture-uc-davis-leadership')],
   })
   const actions = view.rows.map((r) => r.kind === 'document' ? r.card.action : 'choice')
-  assert.deepEqual(actions, ['start', 'continue', 'start', 'start', 'start'])
+  assert.deepEqual(actions, ['start', 'start', 'continue', 'start', 'start', 'start'])
   assert.equal(view.startedCount, 1)
-  assert.equal(progressLabel(view), '1 of 5 started')
+  assert.equal(progressLabel(view), '1 of 6 started')
 })
 
 test('every document started reads as all started', () => {
   const view = checklistView({
     set: UC_DAVIS, drafts: UC_DAVIS.requirements.map((r) => draft(r.id)),
   })
-  assert.equal(progressLabel(view), 'All 5 started')
+  assert.equal(progressLabel(view), 'All 6 started')
 })
 
 // ===================================================== one draft per document
@@ -139,12 +145,72 @@ test('every card shows its own limits, in its own unit', () => {
     assert.equal(row.kind === 'document' && row.card.constraintSummary, '500 words maximum')
     assert.deepEqual(row.kind === 'document' ? [...row.card.liveCounts] : null, ['words'])
   }
+  // A SUGGESTED LENGTH NEVER READS AS A MAXIMUM ON A CARD. The word "maximum"
+  // is reserved for bounds the school made one.
   const davis = checklistView({ set: UC_DAVIS, drafts: [] })
   for (const row of davis.rows) {
-    assert.equal(row.kind === 'document' && row.card.constraintSummary,
-      '2,500 characters maximum including spaces')
-    assert.deepEqual(row.kind === 'document' ? [...row.card.liveCounts] : null, ['characters'])
+    assert.equal(row.kind === 'document' && row.card.constraintSummary, '250 words suggested')
+    assert.deepEqual(row.kind === 'document' ? [...row.card.liveCounts] : null, ['words'])
   }
+  // And the character case, on a school that really has one.
+  const utk = checklistView({ set: UT_KNOXVILLE, drafts: [] })
+  const utkCard = utk.rows[0]!.kind === 'document' ? utk.rows[0]!.card : null
+  assert.match(utkCard!.constraintSummary, /5,000–18,000 characters excluding spaces/)
+  assert.match(utkCard!.constraintSummary, /3–5 pages \(double-spaced\)/)
+  assert.deepEqual([...utkCard!.liveCounts], ['characters'])
+})
+
+test('EVERY REGISTER GETS ITS OWN WORDING ON A CARD', () => {
+  // The five registers, side by side, as an applicant would read them.
+  const summaryOf = (set: Parameters<typeof checklistView>[0]['set']) => {
+    const row = checklistView({ set, drafts: [] }).rows[0]!
+    return row.kind === 'document' ? row.card.constraintSummary : ''
+  }
+  assert.equal(summaryOf(ALBANY), '500 words maximum', 'enforced')
+  assert.equal(summaryOf(UC_DAVIS), '250 words suggested', 'suggested')
+  assert.equal(summaryOf(SOUTH_DAKOTA), '500 words (the stated length, not a maximum)', 'target')
+  // Wayne State is the OPTION A case now: the sentence is shown and no bound is
+  // stored, so there is no "1-2 pages" chip to render at all.
+  assert.match(summaryOf(WAYNE_STATE), /The school states: /)
+  assert.match(summaryOf(WAYNE_STATE), /not enforced here/)
+  // The 'unknown' REGISTER still renders, for a row that stores a bound whose
+  // standing a reviewer has recorded as undetermined.
+  const unknownRegister: Constraints = {
+    ...NO_CONSTRAINTS,
+    words: wordLimit({ max: 500, enforcement: 'unknown', statedAs: 'the school’s words' }),
+  }
+  assert.equal(constraintSummary(unknownRegister),
+    '500 words stated, without saying whether it is a limit')
+  assert.match(summaryOf(SOUTHERN_MISS), /2 pages maximum \(double-spaced\)/)
+  assert.match(summaryOf(SOUTHERN_MISS), /the school reads only this much/)
+  // AND NOT ONE OF THEM MENTIONS A WORD COUNT FOR A PAGE LIMIT.
+  for (const set of [WAYNE_STATE, SOUTHERN_MISS]) {
+    assert.doesNotMatch(summaryOf(set), /\bwords?\b/i, set.schoolName)
+  }
+})
+
+test('THE SCHOOL’S OWN SENTENCE REACHES THE CARD FOR EVERY SOFT REGISTER', () => {
+  for (const set of [UC_DAVIS, SOUTH_DAKOTA, WAYNE_STATE, SOUTHERN_MISS]) {
+    const row = checklistView({ set, drafts: [] }).rows[0]!
+    const card = row.kind === 'document' ? row.card : null
+    assert.ok(card!.statedWordings.length > 0, set.schoolName)
+  }
+  // A plain enforced limit needs no quotation and has none invented for it.
+  const albany = checklistView({ set: ALBANY, drafts: [] }).rows[0]!
+  assert.deepEqual(albany.kind === 'document' ? [...albany.card.statedWordings] : null, [])
+})
+
+test('A TRUNCATION POLICY IS SHOWN AS THE SCHOOL’S POLICY, NOT AS A MEASUREMENT', () => {
+  const row = checklistView({ set: SOUTHERN_MISS, drafts: [] }).rows[0]!
+  const card = row.kind === 'document' ? row.card : null
+  assert.ok(card!.truncationNotice)
+  assert.match(card!.truncationNotice!, /reads only the first 2 pages/)
+  assert.match(card!.truncationNotice!, /Only the first two pages will be read/)
+  // NO CLAIM ABOUT THIS DRAFT. There is no draft, and pages are unmeasurable.
+  assert.doesNotMatch(card!.truncationNotice!, /your draft|this draft|you are over/i)
+  // And a school with no such policy gets no notice.
+  const albany = checklistView({ set: ALBANY, drafts: [] }).rows[0]!
+  assert.equal(albany.kind === 'document' ? albany.card.truncationNotice : 'x', null)
 })
 
 test('A PAGE-LIMITED CARD SHOWS PAGES AND NO WORD ESTIMATE', () => {
@@ -162,7 +228,8 @@ test('A PAGE-LIMITED CARD SHOWS PAGES AND NO WORD ESTIMATE', () => {
 })
 
 test('a card with nothing stated says so', () => {
-  const view = checklistView({ set: OHIO_STATE, drafts: [] })
+  // Loyola, whose two official page limits disagree, so none is stored.
+  const view = checklistView({ set: LOYOLA, drafts: [] })
   const card = view.rows[0]!.kind === 'document' ? view.rows[0] : null
   assert.equal(card!.kind === 'document' && card!.card.constraintSummary,
     'No length requirement stated')
@@ -185,12 +252,14 @@ test('AN UNVERIFIED SET CARRIES ITS WARNING', () => {
 })
 
 test('a conflicting set says sources disagree, and both readings reach the card', () => {
-  const view = checklistView({ set: OHIO_STATE, drafts: [] })
+  // Loyola is the conflicting example now. Ohio State's disagreement was
+  // resolved by the verification and its limit is stored.
+  const view = checklistView({ set: LOYOLA, drafts: [] })
   assert.match(view.verificationNotice!, /disagree/)
   const notes = view.rows[0]!.kind === 'document' ? view.rows[0]!.card.notes : []
-  assert.match(notes.join(' '), /three SINGLE-spaced pages/)
-  assert.match(notes.join(' '), /three DOUBLE-spaced pages/)
-  assert.match(view.notes.join(' '), /flags this entry as conflicting/)
+  assert.match(notes.join(' '), /maximum of two pages/)
+  assert.match(notes.join(' '), /limited to one page/)
+  assert.match(view.notes.join(' '), /live on the same official site/)
 })
 
 test('the research text travels so the structuring can be audited', () => {

@@ -27,6 +27,7 @@
 
 import {
   NO_CONSTRAINTS, type Citation, type Constraints, type PageLimit, type Spacing,
+  type StatedLength, isStrict, parseEnforcement,
 } from './constraints.ts'
 import { UNVERIFIED, isIsoDate, type Verification, type VerificationStatus } from './verification.ts'
 import {
@@ -107,11 +108,35 @@ export interface LegacyPromptColumns {
  * from a page count, not from a character count, not from a minimum, not from a
  * guess. Every other unit projects to null, and null already means "no stated
  * word limit" everywhere in the existing code.
+ *
+ * AND ONLY WHEN THE SCHOOL MADE IT A RULE. This column is not merely stored --
+ * it is what overLimit() reads, what the editor's "you are over the stated
+ * maximum" banner reads, and what is written onto every stored analysis row. A
+ * suggested length landing in it would produce a violation banner for UC Davis
+ * applicants over a figure UC Davis calls a suggestion, which is the precise
+ * failure the register was added to prevent. So a non-strict register projects
+ * to NULL here.
+ *
+ * NULL IS NOT A LOSS OF INFORMATION. The number, its register and the school's
+ * own sentence are all in the snapshot, which is what the editor renders and
+ * what the analyser is given. The legacy column is a compatibility shim for one
+ * specific question -- "is there a hard word cap?" -- and the honest answer for
+ * a suggestion is no.
+ *
+ * ELIGIBILITY DOES NOT READ THIS COLUMN FOR A STRUCTURED REQUIREMENT. It asks
+ * enforcedWordMaximum() instead, which applies the same rule this function
+ * does: a figure counts as a maximum only where the school made it one. The two
+ * therefore agree by construction rather than by coincidence. See
+ * eligibility.ts for why the short-prompt exception is about caps only.
  */
 export function legacyProjection(snapshot: RequirementSnapshot): LegacyPromptColumns {
+  const words = snapshot.constraints.words
+  const statedMaxWords = words !== null && words.max !== null && isStrict(words.enforcement)
+    ? words.max
+    : null
   return {
     promptText: snapshot.promptText.length > 0 ? snapshot.promptText : null,
-    statedMaxWords: snapshot.constraints.words?.max ?? null,
+    statedMaxWords,
   }
 }
 
@@ -146,9 +171,20 @@ export function snapshotFromLegacy(input: {
     label: 'Personal Statement',
     promptText: input.promptText,
     components: [],
+    // 'enforced' AND NOT 'unknown', EVEN THOUGH NOBODY RECORDED A REGISTER.
+    // stated_max_words has been treated as a hard cap by every path that reads
+    // it since the feature shipped, so this is a statement of the behaviour the
+    // draft already has, not a new claim about the school. Softening it here
+    // would quietly withdraw the over-limit warning from every existing draft.
+    // There is no statedAs, because no wording was ever captured for these.
     constraints: input.statedMaxWords === null
       ? NO_CONSTRAINTS
-      : { ...NO_CONSTRAINTS, words: { min: null, max: input.statedMaxWords } },
+      : {
+        ...NO_CONSTRAINTS,
+        words: {
+          min: null, max: input.statedMaxWords, enforcement: 'enforced', statedAs: null,
+        },
+      },
     choiceGroup: null,
     optional: false,
     applicationCycle: null,
@@ -182,9 +218,17 @@ function parseConstraints(value: unknown): Constraints {
   if (value === null || typeof value !== 'object') return NO_CONSTRAINTS
   const raw = value as Record<string, unknown>
 
+  // AN ABSENT REGISTER BECOMES THE DEFAULT, which is how every snapshot stored
+  // before this field existed is read -- as the hard maximum it has always been
+  // treated as. parseEnforcement() is shared with repo.ts so a stored snapshot
+  // and a catalog row can never degrade an unknown value differently and break
+  // provenance for every draft at once.
   const wordsRaw = raw.words as Record<string, unknown> | null | undefined
   const words = wordsRaw == null ? null : {
-    min: posInt(wordsRaw.min), max: posInt(wordsRaw.max),
+    min: posInt(wordsRaw.min),
+    max: posInt(wordsRaw.max),
+    enforcement: parseEnforcement(wordsRaw.enforcement),
+    statedAs: str(wordsRaw.statedAs),
   }
 
   const charsRaw = raw.characters as Record<string, unknown> | null | undefined
@@ -192,6 +236,8 @@ function parseConstraints(value: unknown): Constraints {
     min: posInt(charsRaw.min),
     max: posInt(charsRaw.max),
     spacesCount: nullableBool(charsRaw.spacesCount),
+    enforcement: parseEnforcement(charsRaw.enforcement),
+    statedAs: str(charsRaw.statedAs),
   }
 
   const pagesRaw = raw.pages as Record<string, unknown> | null | undefined
@@ -202,6 +248,8 @@ function parseConstraints(value: unknown): Constraints {
     min: posInt(pagesRaw.min),
     max: posInt(pagesRaw.max),
     spacing,
+    enforcement: parseEnforcement(pagesRaw.enforcement),
+    statedAs: str(pagesRaw.statedAs),
   }
 
   const typoRaw = raw.typography as Record<string, unknown> | null | undefined
@@ -226,8 +274,23 @@ function parseConstraints(value: unknown): Constraints {
     minReferences: posInt(citeRaw.minReferences),
   }
 
+  // BLANK IS ABSENT, as in repo.ts. A quotation with nothing in it is not a
+  // quotation, and would render as empty quote marks beside a notice. AN ABSENT
+  // verbatim FLAG READS AS false, so a snapshot stored without one -- including
+  // every snapshot stored before this field existed -- is shown as a summary
+  // and never as the school's sentence.
+  const unenforcedRaw = raw.unenforcedLength
+  const unenforcedObject = unenforcedRaw !== null && typeof unenforcedRaw === 'object'
+    ? unenforcedRaw as Record<string, unknown>
+    : null
+  const unenforcedText = str(unenforcedObject?.text)
+  const unenforcedLength: StatedLength | null =
+    unenforcedText !== null && unenforcedText.trim().length > 0
+      ? { text: unenforcedText, verbatim: unenforcedObject?.verbatim === true }
+      : null
   return {
     words, characters, pages, typography, citation,
+    unenforcedLength,
     otherInstructions: strings(raw.otherInstructions),
   }
 }

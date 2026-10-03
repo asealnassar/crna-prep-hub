@@ -25,7 +25,10 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { requirementsEnabled } from '../draft/rollout.ts'
-import { NO_CONSTRAINTS, type Citation, type Constraints, type Spacing } from './constraints.ts'
+import {
+  NO_CONSTRAINTS, type Citation, type Constraints, type Spacing, type StatedLength,
+  parseEnforcement,
+} from './constraints.ts'
 import {
   isDocumentType, type RequirementComponent, type RequirementSet, type WritingRequirement,
 } from './requirement.ts'
@@ -62,11 +65,23 @@ const SET_COLUMNS =
   'id, school_id, application_cycle, verification_status, source_url, verified_on, '
   + 'is_verbatim, original_text, notes, display_order'
 
+// THE SIX REGISTER COLUMNS ARE ADDED BY 20261002_006 AND ARE NAMED HERE, which
+// means this select FAILS if 006 has not been applied -- and failing is the
+// correct behaviour. requirementProvenance() turns a read error into
+// 'read-failed' and refuses to vouch for the requirement, so a half-migrated
+// database withholds authority instead of authenticating requirements whose
+// registers it cannot see. 005 and 006 must both be applied before
+// STATEMENT_REQUIREMENTS is turned on; migration.test.ts pins that this list
+// names nothing the two migration files do not create.
 const REQUIREMENT_COLUMNS =
   'id, set_id, school_id, document_type, label, prompt_text, components, '
-  + 'min_words, max_words, min_characters, max_characters, characters_include_spaces, '
-  + 'min_pages, max_pages, page_spacing, font_size_pt, font_family, margins_inches, '
-  + 'citation_style, citation_family, min_references, other_instructions, '
+  + 'min_words, max_words, words_enforcement, words_stated_as, '
+  + 'min_characters, max_characters, characters_include_spaces, '
+  + 'characters_enforcement, characters_stated_as, '
+  + 'min_pages, max_pages, page_spacing, pages_enforcement, pages_stated_as, '
+  + 'font_size_pt, font_family, margins_inches, '
+  + 'citation_style, citation_family, min_references, '
+  + 'unenforced_length, unenforced_length_verbatim, other_instructions, '
   + 'choice_group, is_optional, notes, display_order'
 
 // ---------------------------------------------------------------------------
@@ -84,6 +99,14 @@ const posInt = (value: unknown): number | null =>
 const posNum = (value: unknown): number | null =>
   (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null)
 const bool = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null)
+const nonBlank = (value: unknown): string | null => {
+  const text = str(value)
+  return text !== null && text.trim().length > 0 ? text : null
+}
+
+/** Shared with snapshot.ts's parser, so the two cannot read a flag differently. */
+const statedLengthFrom = (text: string | null, verbatim: unknown): StatedLength | null =>
+  (text === null ? null : { text, verbatim: verbatim === true })
 
 function strings(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return []
@@ -139,17 +162,44 @@ function constraintsFromRow(row: Record<string, unknown>): Constraints {
   }
 
   return {
-    words: minWords === null && maxWords === null ? null : { min: minWords, max: maxWords },
+    words: minWords === null && maxWords === null ? null : {
+      min: minWords,
+      max: maxWords,
+      enforcement: parseEnforcement(row.words_enforcement),
+      statedAs: str(row.words_stated_as),
+    },
     characters: minChars === null && maxChars === null
       ? null
-      : { min: minChars, max: maxChars, spacesCount: bool(row.characters_include_spaces) },
+      : {
+        min: minChars,
+        max: maxChars,
+        spacesCount: bool(row.characters_include_spaces),
+        enforcement: parseEnforcement(row.characters_enforcement),
+        statedAs: str(row.characters_stated_as),
+      },
     pages: minPages === null && maxPages === null && spacing === null
       ? null
-      : { min: minPages, max: maxPages, spacing },
+      : {
+        min: minPages,
+        max: maxPages,
+        spacing,
+        enforcement: parseEnforcement(row.pages_enforcement),
+        statedAs: str(row.pages_stated_as),
+      },
     typography: fontSize === null && fontFamily === null && margins === null
       ? null
       : { fontSizePt: fontSize, fontFamily, marginsInches: margins },
     citation,
+    // THE SCHOOL'S LENGTH SENTENCE, WITH NO BOUND BESIDE IT. Blank is absent:
+    // an empty column is not an instruction, and must not render as a quotation
+    // with nothing in it.
+    //
+    // A MISSING VERBATIM FLAG READS AS false, so a row written without one is
+    // shown as a summary rather than quoted. Under-claiming is the safe
+    // direction: a quotation shown as a summary loses a little authority, and a
+    // summary shown as a quotation invents a sentence the school never wrote.
+    unenforcedLength: statedLengthFrom(
+      nonBlank(row.unenforced_length), row.unenforced_length_verbatim),
     otherInstructions: strings(row.other_instructions),
   }
 }

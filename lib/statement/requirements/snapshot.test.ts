@@ -1,12 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { NO_CONSTRAINTS } from './constraints.ts'
+import { NO_CONSTRAINTS, characterLimit, pageLimit, wordLimit,} from './constraints.ts'
 import { UNVERIFIED } from './verification.ts'
 import type { RequirementSet, WritingRequirement } from './requirement.ts'
 import {
   effectiveSnapshot, legacyProjection, parseRequirementSnapshot, snapshotFromLegacy, snapshotOf,
 } from './snapshot.ts'
-import { BUFFALO, MINNESOTA, RUTGERS, SIUE, UC_DAVIS } from './fixtures.ts'
+import {
+  ALBANY, BUFFALO, MINNESOTA, RUTGERS, SIUE, SOUTHERN_MISS, SOUTH_DAKOTA, UC_DAVIS,
+  UT_KNOXVILLE,
+} from './fixtures.ts'
 
 function req(over: Partial<WritingRequirement> & { id: string }): WritingRequirement {
   return {
@@ -75,13 +78,55 @@ test('A PAGE LIMIT PROJECTS TO NULL, not to an invented word count', () => {
 })
 
 test('A CHARACTER LIMIT PROJECTS TO NULL TOO', () => {
+  // UT Knoxville, which is the verified character-limit school. UC Davis used
+  // to stand here and does not have a character limit at all; see
+  // 05_FIXTURE_CORRECTIONS.md.
+  const snap = snapshotOf(UT_KNOXVILLE, UT_KNOXVILLE.requirements[0]!)
+  assert.equal(snap.constraints.characters?.max, 18_000)
+  assert.equal(snap.constraints.characters?.spacesCount, false)
+  assert.equal(legacyProjection(snap).statedMaxWords, null)
+})
+
+test('A SUGGESTED WORD MAXIMUM PROJECTS TO NULL, BECAUSE IT IS NOT A MAXIMUM', () => {
+  // THE HEADLINE CONSEQUENCE OF THE REGISTER. stated_max_words is what
+  // overLimit() reads and what the editor's violation banner reads. UC Davis
+  // publishes "Suggested Length: Maximum of 250 words"; projecting 250 into
+  // that column would give every UC Davis applicant a broken-limit banner over
+  // a figure their school calls a suggestion.
   const snap = snapshotOf(UC_DAVIS, UC_DAVIS.requirements[0]!)
-  assert.equal(snap.constraints.characters?.max, 2500)
+  assert.equal(snap.constraints.words?.max, 250, 'the number is still stored')
+  assert.equal(snap.constraints.words?.enforcement, 'suggested')
+  assert.equal(legacyProjection(snap).statedMaxWords, null, 'and is NOT a hard cap')
+})
+
+test('A TARGET LENGTH PROJECTS TO NULL TOO', () => {
+  // South Dakota: "A written 500 word statement" -- a length, never called a
+  // maximum. Same number as a real cap elsewhere, different standing.
+  const snap = snapshotOf(SOUTH_DAKOTA, SOUTH_DAKOTA.requirements[0]!)
+  assert.equal(snap.constraints.words?.max, 500)
+  assert.equal(snap.constraints.words?.enforcement, 'target')
+  assert.equal(legacyProjection(snap).statedMaxWords, null)
+})
+
+test('AN ENFORCED WORD MAXIMUM STILL PROJECTS, exactly as before', () => {
+  // The other half of the guarantee: nothing was relaxed for a real cap.
+  const snap = snapshotOf(ALBANY, ALBANY.requirements[0]!)
+  assert.equal(snap.constraints.words?.enforcement, 'enforced')
+  assert.equal(legacyProjection(snap).statedMaxWords, 500)
+})
+
+test('A TRUNCATED LIMIT IS NOT A WORD LIMIT AND STILL PROJECTS TO NULL', () => {
+  // Southern Mississippi's truncated bound is a PAGE count. The strictest
+  // register there is does not create a word maximum out of nothing.
+  const snap = snapshotOf(SOUTHERN_MISS, SOUTHERN_MISS.requirements[0]!)
+  assert.equal(snap.constraints.pages?.enforcement, 'truncated')
+  assert.equal(snap.constraints.words, null)
   assert.equal(legacyProjection(snap).statedMaxWords, null)
 })
 
 test('a word MINIMUM alone projects to null -- a floor is not a ceiling', () => {
-  const r = req({ id: 'r', constraints: { ...NO_CONSTRAINTS, words: { min: 500, max: null } } })
+  const r = req({ id: 'r', constraints: { ...NO_CONSTRAINTS,
+    words: wordLimit({ min: 500, max: null, enforcement: 'enforced' }) } })
   assert.equal(legacyProjection(snapshotOf(set([r]), r)).statedMaxWords, null)
 })
 
@@ -102,7 +147,11 @@ test('BACKWARD COMPATIBILITY: an existing single-prompt draft reads as one docum
   assert.equal(legacy.setId, 'prompt-x', 'no set exists; the prompt id is truthful about that')
   assert.equal(legacy.documentType, 'personal-statement')
   assert.deepEqual([...legacy.components], [], 'one undivided prompt')
-  assert.deepEqual(legacy.constraints.words, { min: null, max: 1000 })
+  assert.deepEqual(legacy.constraints.words,
+    { min: null, max: 1000, enforcement: 'enforced', statedAs: null },
+    'an old draft\u2019s maximum keeps being the hard cap it has always been treated as')
+  assert.equal(legacyProjection(legacy).statedMaxWords, 1000,
+    'and still projects, so no existing draft loses its over-limit warning')
   assert.equal(legacy.constraints.pages, null)
   assert.equal(legacy.choiceGroup, null)
   assert.equal(legacy.verification.status, 'unverified')
@@ -195,17 +244,23 @@ test('AN UNRECOGNISED VERIFICATION STATUS DEGRADES TO UNVERIFIED, never to verif
 test('a malformed limit degrades to NO limit, which is never enforced', () => {
   const full = JSON.parse(JSON.stringify(snapshotOf(BUFFALO, BUFFALO.requirements[0]!)))
   full.constraints = {
-    words: { min: 'lots', max: -5 },
-    characters: { min: null, max: 0, spacesCount: 'yes' },
-    pages: { min: null, max: 2.5, spacing: 'triple' },
+    words: wordLimit({ min: 'lots', max: -5, enforcement: 'enforced' }),
+    characters: characterLimit({ min: null, max: 0, spacesCount: 'yes', enforcement: 'enforced' }),
+    pages: pageLimit({ min: null, max: 2.5, spacing: 'triple', enforcement: 'enforced' }),
     typography: { fontSizePt: 0, fontFamily: 7, marginsInches: -1 },
     citation: { family: 'mla' },
     otherInstructions: ['keep', 7, null],
   }
   const parsed = parseRequirementSnapshot(full)!
-  assert.deepEqual(parsed.constraints.words, { min: null, max: null })
-  assert.deepEqual(parsed.constraints.characters, { min: null, max: null, spacesCount: null })
-  assert.deepEqual(parsed.constraints.pages, { min: null, max: null, spacing: null })
+  // THE REGISTER SURVIVES A MALFORMED BOUND, and defaults where it is absent.
+  // A limit with no bounds is never enforced against anything, so a strict
+  // register on an empty limit is inert rather than dangerous.
+  assert.deepEqual(parsed.constraints.words,
+    { min: null, max: null, enforcement: 'enforced', statedAs: null })
+  assert.deepEqual(parsed.constraints.characters,
+    { min: null, max: null, spacesCount: null, enforcement: 'enforced', statedAs: null })
+  assert.deepEqual(parsed.constraints.pages,
+    { min: null, max: null, spacing: null, enforcement: 'enforced', statedAs: null })
   assert.deepEqual(parsed.constraints.typography, { fontSizePt: null, fontFamily: null, marginsInches: null })
   assert.equal(parsed.constraints.citation, null, 'a style with no wording is not a style')
   assert.deepEqual([...parsed.constraints.otherInstructions], ['keep'])

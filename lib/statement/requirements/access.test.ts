@@ -254,3 +254,40 @@ test('THE SNAPSHOT IS NEVER DELETED OR REWRITTEN BY THE ANALYSER', () => {
   assert.doesNotMatch(ROUTE_BODY, /requirement_snapshot/)
   assert.doesNotMatch(ROUTE_BODY, /\.update\(|\.upsert\(/)
 })
+
+// ===========================================================================
+// THE LENGTH REGISTER AND THE ROLLOUT GATE
+// ===========================================================================
+
+test('THE REGISTER COLUMNS ARE BEHIND THE SAME GATE AS THE REST', () => {
+  // 20261002_006 adds them and is not applied, so the catalog read that names
+  // them must not run until the flag is set. requirementProvenance() already
+  // returns early on !requirementsEnabled(); this records that the register
+  // bought no new way past it.
+  assert.match(REPO, /if \(!requirementsEnabled\(\)\)/)
+  const columnList = REPO.slice(REPO.indexOf('const REQUIREMENT_COLUMNS'))
+    .slice(0, REPO.slice(REPO.indexOf('const REQUIREMENT_COLUMNS')).indexOf('\n\n'))
+  for (const column of ['words_enforcement', 'characters_enforcement', 'pages_enforcement']) {
+    assert.ok(columnList.includes(column), `${column} is not in the select list`)
+  }
+})
+
+test('A HALF-APPLIED MIGRATION FAILS CLOSED, NOT OPEN', () => {
+  // With 005 applied and 006 missing, the SELECT above errors. The reader turns
+  // a read error into a refusal rather than a verification, so a database that
+  // cannot show its register columns vouches for nothing.
+  assert.match(REPO, /read-failed/)
+  const provenance = read('./provenance.ts')
+  assert.match(provenance, /if \(found\.error\) return UNVERIFIED_RESULT\('read-failed'\)/)
+  assert.doesNotMatch(provenance, /found\.error[^\n]*origin: 'catalog'/)
+})
+
+test('NOTHING READS A REGISTER OFF THE DRAFT TO DECIDE ANYTHING', () => {
+  // The snapshot's register is parsed and displayed, and is compared against
+  // the catalog by the digest -- but the route acts only on `authoritative`,
+  // which is null unless that comparison passed. No new field changed that.
+  const route = read('../../../app/api/statement/drafts/[id]/analyze/route.ts')
+  assert.match(route, /const authoritative = verdict\.authentic \? requirement : null/)
+  assert.doesNotMatch(route, /requirement\.constraints\.words\?\.enforcement/)
+  assert.doesNotMatch(route, /requirement\.constraints\.pages\?\.enforcement/)
+})

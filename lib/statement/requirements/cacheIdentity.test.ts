@@ -4,8 +4,11 @@ import { createHash } from 'node:crypto'
 import { analysisFingerprint } from '../draft/analysisFingerprint.ts'
 import { RUBRIC_VERSION } from '../draft/rubric.ts'
 import { REVIEW_SCHEMA_VERSION } from '../draft/reviewSchema.ts'
-import { snapshotFromLegacy, snapshotOf } from './snapshot.ts'
-import { BUFFALO, MINNESOTA, SIUE, UC_DAVIS } from './fixtures.ts'
+import { parseRequirementSnapshot, snapshotFromLegacy, snapshotOf } from './snapshot.ts'
+import { ALBANY, BUFFALO, MINNESOTA, SIUE, UC_DAVIS, WAYNE_STATE } from './fixtures.ts'
+import { ENFORCEMENTS } from './constraints.ts'
+import { requirementDigest } from './digest.ts'
+import { characterLimit, pageLimit, wordLimit } from './constraints.ts'
 
 const LEGACY = {
   essay: 'My statement about becoming a nurse anesthetist.',
@@ -109,7 +112,89 @@ test('A DIFFERENT DOCUMENT IN THE SAME SET IS A DIFFERENT ANALYSIS', () => {
 test('every UC Davis response has its own identity', () => {
   const prints = UC_DAVIS.requirements.map((r) =>
     analysisFingerprint({ ...LEGACY, requirement: snapshotOf(UC_DAVIS, r) }))
-  assert.equal(new Set(prints).size, 5, 'five responses, five distinct cache keys')
+  assert.equal(new Set(prints).size, 6, 'six responses, six distinct cache keys')
+})
+
+// ===================================================== the length register
+
+test('AN OLD SNAPSHOT’S FINGERPRINT IS UNCHANGED BY THE REGISTER FIELDS', () => {
+  // THE BACKWARD-COMPATIBILITY GUARANTEE, PINNED AT THE BYTE. A snapshot saved
+  // before `enforcement` and `statedAs` existed has no register, parses as the
+  // strict default, and produces the instructions it always produced -- so it
+  // must produce the digest it always produced, or every draft saved to date
+  // would silently lose its cached analysis and have to be paid for again.
+  //
+  // The expected digest is rebuilt here from the PRE-REGISTER field order, so
+  // this is a pin on the value rather than a restatement of the code.
+  const stored = {
+    requirementId: 'r1', setId: 's1', schoolId: 'c1', label: 'Personal Statement',
+    promptText: 'Describe your goals.', documentType: 'personal-statement',
+    components: [{ id: 'q1', text: 'one', optional: false }],
+    constraints: { words: { min: null, max: 500 } },
+    optional: false, choiceGroup: null, applicationCycle: null, notes: ['a note'],
+  }
+  const parsed = parseRequirementSnapshot(stored)!
+  assert.equal(parsed.constraints.words?.enforcement, 'enforced')
+
+  const NUL = '\u0000'
+  const expected = [
+    'r1', 's1', 'c1', 'personal-statement', `${NUL}null`, 'false', 'Describe your goals.',
+    ['q1', 'false', 'one'].join(`${NUL}\u0002`),
+    'words', `${NUL}null`, '500',
+    'chars', `${NUL}null`, `${NUL}null`, `${NUL}null`,
+    'pages', `${NUL}null`, `${NUL}null`, `${NUL}null`,
+    'type', `${NUL}null`, `${NUL}null`, `${NUL}null`,
+    'cite', `${NUL}null`, `${NUL}null`, `${NUL}null`,
+    'other',
+    'label', 'Personal Statement',
+    'notes', 'a note',
+  ].join(`${NUL}\u0003`)
+  assert.equal(requirementDigest(parsed), expected,
+    'no register segment appears when every register is the default')
+})
+
+test('A NON-DEFAULT REGISTER DOES CHANGE THE FINGERPRINT, and must', () => {
+  // The other half. "250 words suggested" is a different instruction from "250
+  // words maximum": different constraint lines, different over-limit sentence,
+  // and the analyser is told explicitly not to treat one as a cap. A result
+  // produced under one is not an answer to the other.
+  const base = snapshotOf(UC_DAVIS, UC_DAVIS.requirements[0]!)
+  assert.equal(base.constraints.words?.enforcement, 'suggested')
+  const asMaximum = {
+    ...base,
+    constraints: {
+      ...base.constraints,
+      words: { ...base.constraints.words!, enforcement: 'enforced' as const },
+    },
+  }
+  assert.notEqual(
+    analysisFingerprint({ ...LEGACY, requirement: base }),
+    analysisFingerprint({ ...LEGACY, requirement: asMaximum }))
+
+  // AND SO DOES THE SCHOOL'S QUOTED SENTENCE, which the applicant reads and
+  // which travels into the analyser's prompt.
+  const requoted = {
+    ...base,
+    constraints: {
+      ...base.constraints,
+      words: { ...base.constraints.words!, statedAs: 'Maximum of 250 words.' },
+    },
+  }
+  assert.notEqual(
+    analysisFingerprint({ ...LEGACY, requirement: base }),
+    analysisFingerprint({ ...LEGACY, requirement: requoted }))
+})
+
+test('EVERY REGISTER IS A DISTINCT CACHE IDENTITY', () => {
+  const base = snapshotOf(UC_DAVIS, UC_DAVIS.requirements[0]!)
+  const prints = ENFORCEMENTS.map((enforcement) => analysisFingerprint({
+    ...LEGACY,
+    requirement: {
+      ...base,
+      constraints: { ...base.constraints, words: { ...base.constraints.words!, enforcement } },
+    },
+  }))
+  assert.equal(new Set(prints).size, ENFORCEMENTS.length)
 })
 
 test('a changed COMPONENT changes the fingerprint', () => {
@@ -153,12 +238,17 @@ test('EVERY CONSTRAINT UNIT PARTICIPATES IN THE IDENTITY', () => {
   const print = (requirement: typeof base) => analysisFingerprint({ ...LEGACY, requirement })
   const original = print(base)
   const variants: readonly (typeof base)[] = [
-    { ...base, constraints: { ...base.constraints, words: { min: null, max: 900 } } },
-    { ...base, constraints: { ...base.constraints, words: { min: 500, max: 1000 } } },
-    { ...base, constraints: { ...base.constraints, characters: { min: null, max: 2500, spacesCount: true } } },
-    { ...base, constraints: { ...base.constraints, characters: { min: null, max: 2500, spacesCount: false } } },
-    { ...base, constraints: { ...base.constraints, pages: { min: null, max: 2, spacing: 'double' } } },
-    { ...base, constraints: { ...base.constraints, pages: { min: null, max: 2, spacing: 'single' } } },
+    { ...base, constraints: { ...base.constraints, words: wordLimit({ min: null, max: 900, enforcement: 'enforced' }) } },
+    { ...base, constraints: { ...base.constraints, words: wordLimit({ min: 500, max: 1000, enforcement: 'enforced' }) } },
+    { ...base, constraints: { ...base.constraints, characters: characterLimit({ min: null, max: 2500, spacesCount: true, enforcement: 'enforced' }) } },
+    { ...base, constraints: { ...base.constraints, characters: characterLimit({ min: null, max: 2500, spacesCount: false, enforcement: 'enforced' }) } },
+    { ...base, constraints: { ...base.constraints, pages: pageLimit({ min: null, max: 2, spacing: 'double', enforcement: 'enforced' }) } },
+    { ...base, constraints: { ...base.constraints, pages: pageLimit({ min: null, max: 2, spacing: 'single', enforcement: 'enforced' }) } },
+    // THE REGISTER AND THE SCHOOL'S SENTENCE, in the canonical every-field
+    // table. Both reach the model, so both are cache identity.
+    { ...base, constraints: { ...base.constraints, words: wordLimit({ min: null, max: 1000, enforcement: 'suggested' }) } },
+    { ...base, constraints: { ...base.constraints, words: wordLimit({ min: null, max: 1000, enforcement: 'target' }) } },
+    { ...base, constraints: { ...base.constraints, words: wordLimit({ min: null, max: 1000, enforcement: 'enforced', statedAs: '1,000 words maximum.' }) } },
     { ...base, constraints: { ...base.constraints, typography: { fontSizePt: 12, fontFamily: null, marginsInches: null } } },
     { ...base, constraints: { ...base.constraints, typography: { fontSizePt: 12, fontFamily: 'Times New Roman', marginsInches: null } } },
     { ...base, constraints: { ...base.constraints, typography: { fontSizePt: 12, fontFamily: 'Times New Roman', marginsInches: 1 } } },
@@ -250,4 +340,50 @@ test('the fingerprint is a sha256 hex digest, and stable across calls', () => {
   const once = analysisFingerprint({ ...LEGACY, requirement })
   assert.match(once, /^[0-9a-f]{64}$/)
   assert.equal(analysisFingerprint({ ...LEGACY, requirement }), once)
+})
+
+test('AN UNENFORCED LENGTH SENTENCE IS CACHE IDENTITY', () => {
+  // It is quoted to the model together with an instruction about how to treat
+  // it, so changing the sentence changes the advice. A result produced under
+  // one wording is not an answer to another.
+  const base = snapshotOf(WAYNE_STATE, WAYNE_STATE.requirements[0]!)
+  assert.ok(base.constraints.unenforcedLength)
+  const reworded = {
+    ...base,
+    constraints: { ...base.constraints, unenforcedLength: 'a summary of one page' },
+  }
+  const removed = {
+    ...base,
+    constraints: { ...base.constraints, unenforcedLength: null },
+  }
+  const prints = [base, reworded, removed].map((requirement) =>
+    analysisFingerprint({ ...LEGACY, requirement }))
+  assert.equal(new Set(prints).size, 3)
+})
+
+test('AND A NULL ONE STILL COSTS NOTHING, so no existing draft was disturbed', () => {
+  // The digest omits the whole register-and-unenforced section when every value
+  // is the default and the sentence is null. The byte-for-byte pin above covers
+  // this; here it is stated against a real fixture that has no register at all.
+  const albany = snapshotOf(ALBANY, ALBANY.requirements[0]!)
+  assert.equal(albany.constraints.unenforcedLength, null)
+  assert.equal(albany.constraints.words?.enforcement, 'enforced')
+  assert.doesNotMatch(requirementDigest(albany), /unenf/,
+    'no unenforced segment appears for a plain enforced requirement')
+})
+
+test('THE VERBATIM FLAG IS CACHE IDENTITY, not just the text', () => {
+  // The same sentence shown as a quotation and shown as a summary are two
+  // different instructions to the model -- one may be repeated back to the
+  // applicant as the school's words and the other may not -- so they cannot
+  // share a cache row.
+  const base = snapshotOf(WAYNE_STATE, WAYNE_STATE.requirements[0]!)
+  const text = base.constraints.unenforcedLength!.text
+  const asSummary = {
+    ...base,
+    constraints: { ...base.constraints, unenforcedLength: { text, verbatim: false } },
+  }
+  assert.notEqual(
+    analysisFingerprint({ ...LEGACY, requirement: base }),
+    analysisFingerprint({ ...LEGACY, requirement: asSummary }))
 })

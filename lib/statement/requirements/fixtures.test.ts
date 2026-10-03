@@ -1,16 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  ALBANY, BUFFALO, FIXTURE_NOTICE, FIXTURE_SETS, FIXTURE_SOURCE, MINNESOTA, OHIO_STATE, RUTGERS,
-  SAINT_MARYS, SIUE, UC_DAVIS, fixtureById,
+  ALBANY, BUFFALO, FIXTURE_CHECKED_ON, FIXTURE_NOTICE, FIXTURE_SETS, FIXTURE_SOURCE,
+  FIXTURE_SOURCES, LOYOLA, MINNESOTA, OHIO_STATE, RUTGERS, SAINT_MARYS, SIUE, SOUTHERN_MISS,
+  SOUTH_DAKOTA, UC_DAVIS, UT_KNOXVILLE, WAYNE_STATE, fixtureById,
 } from './fixtures.ts'
 import {
   checklist, isMultipart, requiredComponents, requiredDocumentCount,
 } from './requirement.ts'
 import { activatableForApplicants } from './verification.ts'
 import { legacyProjection, snapshotOf } from './snapshot.ts'
-import { statedWordMaximum } from './eligibility.ts'
-import { liveCounts } from './constraints.ts'
+import { enforcedWordMaximum, statedWordMaximum } from './eligibility.ts'
+import { liveCounts, overages, shortfalls } from './constraints.ts'
 import { constraintLines } from './constraintText.ts'
 
 // ===================================================== the standing rule
@@ -25,6 +26,22 @@ test('NOT ONE FIXTURE MAY BE SHOWN TO APPLICANTS AS A REQUIREMENT', () => {
     assert.equal(set.verification.verifiedOn, null, `${set.schoolName}: no date was invented`)
     assert.equal(set.verification.verbatim, false,
       `${set.schoolName}: research text is not the school's exact wording`)
+  }
+})
+
+test('A SOURCE URL IS RECORDED WITHOUT BECOMING PROVENANCE', () => {
+  // THE SAFETY PROPERTY THIS SPLIT EXISTS FOR. activatableForApplicants() needs
+  // status 'verified' PLUS a sourceUrl PLUS a verifiedOn. Keeping the URL out of
+  // `verification` means no fixture is one status flip away from being shown to
+  // an applicant as a verified school requirement, even though the research now
+  // has a real URL for most of them.
+  assert.match(FIXTURE_CHECKED_ON, /^\d{4}-\d{2}-\d{2}$/)
+  for (const [id, url] of Object.entries(FIXTURE_SOURCES)) {
+    assert.ok(fixtureById(id), `${id} is not a fixture`)
+    assert.match(url, /^https:\/\//, id)
+    const set = fixtureById(id)!
+    assert.equal(set.verification.sourceUrl, null, `${id}: still no provenance URL`)
+    assert.equal(activatableForApplicants(set.verification), false, id)
   }
 })
 
@@ -65,6 +82,38 @@ test('ids are unique across every fixture', () => {
   assert.equal(new Set(setIds).size, setIds.length)
   for (const set of FIXTURE_SETS) assert.equal(fixtureById(set.id), set)
   assert.equal(fixtureById('nope'), null)
+})
+
+test('ONE PROGRAMME IS ONE SET: no two fixtures share a school identity', () => {
+  // THE DUPLICATE-RECONCILIATION GUARANTEE AT THE CODE LEVEL. The research
+  // record contains one genuine duplicate -- rows 10 and 18 of the spreadsheet
+  // describe the SAME programme, because Frances Payne Bolton IS Case Western's
+  // school of nursing -- and importing both would create two catalog entries
+  // and eight documents for a programme that asks for four.
+  //
+  // THIS IS THE SHAPE THAT WOULD MAKE THAT POSSIBLE. Two sets sharing a
+  // schoolId are two catalog entries for one school, and the checklist would
+  // show an applicant two separate lists of documents for the same programme.
+  const schoolIds = FIXTURE_SETS.map((set) => set.schoolId)
+  assert.equal(new Set(schoolIds).size, schoolIds.length, 'a school id is used twice')
+  const schoolNames = FIXTURE_SETS.map((set) => set.schoolName)
+  assert.equal(new Set(schoolNames).size, schoolNames.length, 'a school name is used twice')
+  // And no fixture is the reconciled duplicate under either of its two names.
+  for (const set of FIXTURE_SETS) {
+    assert.doesNotMatch(set.schoolName, /Cleveland Clinic/i,
+      'rows 10 and 18 are one programme; see 08_IMPORT_REVIEW.md')
+  }
+})
+
+test('each document within a set is distinct, so none is counted twice', () => {
+  for (const set of FIXTURE_SETS) {
+    const labels = set.requirements.map((r) => r.label)
+    assert.equal(new Set(labels).size, labels.length, `${set.schoolName}: a repeated label`)
+    const prompts = set.requirements.map((r) => r.promptText)
+    assert.equal(new Set(prompts).size, prompts.length, `${set.schoolName}: a repeated prompt`)
+    // The count the checklist shows is the count of documents, not of questions.
+    assert.equal(checklist(set).length <= set.requirements.length, true, set.schoolName)
+  }
 })
 
 // ===================================================== the six named cases
@@ -148,20 +197,52 @@ test('SIU Edwardsville: an ALTERNATIVE plus a required additional response', () 
   assert.match(SIUE.originalText, /PLUS REQUIRED/)
 })
 
-test('UC Davis: FIVE responses limited by CHARACTERS, not words', () => {
-  assert.equal(UC_DAVIS.requirements.length, 5)
-  assert.equal(requiredDocumentCount(UC_DAVIS), 5)
+test('UC Davis: SIX responses with a SUGGESTED word length, and NO character limit', () => {
+  // THE CORRECTED FIXTURE. It used to model five responses at 2,500 characters
+  // including spaces, taken from the research spreadsheet. The school publishes
+  // six prompts at a suggested 250 words and no character limit at all.
+  assert.equal(UC_DAVIS.requirements.length, 6)
+  assert.equal(requiredDocumentCount(UC_DAVIS), 6)
   for (const requirement of UC_DAVIS.requirements) {
-    assert.equal(requirement.constraints.characters?.max, 2500, requirement.label)
-    assert.equal(requirement.constraints.characters?.spacesCount, true, 'the file says INCLUDING')
-    assert.equal(requirement.constraints.words, null, 'NOT a word limit')
-    assert.deepEqual([...liveCounts(requirement.constraints)], ['characters'])
-    assert.equal(statedWordMaximum(requirement.constraints), null,
-      'characters are not a word maximum')
+    assert.equal(requirement.constraints.characters, null,
+      `${requirement.label}: there is no character limit in the official document`)
+    assert.equal(requirement.constraints.words?.max, 250, requirement.label)
+    assert.equal(requirement.constraints.words?.enforcement, 'suggested',
+      'the official phrase is "Suggested Length"')
+    assert.match(requirement.constraints.words!.statedAs!, /Suggested Length/)
+    assert.deepEqual([...liveCounts(requirement.constraints)], ['words'])
+    // A SUGGESTION IS NOT A CAP: it reaches no hard-limit column.
     assert.equal(legacyProjection(snapshotOf(UC_DAVIS, requirement)).statedMaxWords, null)
   }
+  // The omitted prompt is restored.
+  assert.ok(UC_DAVIS.requirements.some((r) => /Critical Care Experience/.test(r.label)),
+    'the second official prompt was missing from the spreadsheet entirely')
+  // AND THE SPREADSHEET CELL IS KEPT, ERROR AND ALL, as the evidence trail.
   assert.match(UC_DAVIS.originalText, /2,500 CHARACTERS INCLUDING SPACES per answer/)
-  assert.match(UC_DAVIS.originalText, /NOT a word limit/)
+  assert.match(UC_DAVIS.notes.join(' '), /six prompts with a suggested length of 250 words/)
+})
+
+test('UT Knoxville is the character-limit example, with BOTH bounds', () => {
+  assert.equal(UT_KNOXVILLE.requirements.length, 1, 'ONE document')
+  const essay = UT_KNOXVILLE.requirements[0]!
+  const chars = essay.constraints.characters!
+  assert.equal(chars.min, 5000)
+  assert.equal(chars.max, 18_000)
+  assert.equal(chars.spacesCount, false, 'the school says "not counting spaces", twice')
+  assert.equal(chars.enforcement, 'enforced', 'MINIMUM and MAXIMUM, in capitals')
+  // A PAGE LIMIT ON THE SAME DOCUMENT, so both units coexist.
+  assert.equal(essay.constraints.pages?.min, 3)
+  assert.equal(essay.constraints.pages?.max, 5)
+  assert.equal(essay.constraints.pages?.spacing, 'double')
+  // Two questions INSIDE one essay: the per-prompt page guidance is part of the
+  // component text, not a per-item limit, so this stays one document.
+  assert.equal(isMultipart(essay), true)
+  assert.equal(essay.components.length, 2)
+  assert.equal(requiredComponents(essay).length, 2)
+  // No word limit anywhere, so the character counter is the one shown.
+  assert.equal(essay.constraints.words, null)
+  assert.deepEqual([...liveCounts(essay.constraints)], ['characters'])
+  assert.equal(statedWordMaximum(essay.constraints), null)
 })
 
 test('University at Buffalo: FOUR questions in ONE essay, plus an optional fifth', () => {
@@ -181,19 +262,99 @@ test('University at Buffalo: FOUR questions in ONE essay, plus an optional fifth
 
 // ===================================================== ambiguity and silence
 
-test('Ohio State: CONFLICTING sources store NO limit and keep both readings', () => {
-  assert.equal(OHIO_STATE.verification.status, 'conflicting')
+test('Ohio State: the conflict is RESOLVED, so the limit IS stored', () => {
+  // THIS FIXTURE CHANGED SIDES. It was the conflicting-sources example, storing
+  // no limit, because the spreadsheet recorded a single-versus-double-spaced
+  // disagreement. The school's current page states single-spaced and the other
+  // reading came from a page it supersedes.
+  assert.notEqual(OHIO_STATE.verification.status, 'conflicting')
   const requirement = OHIO_STATE.requirements[0]!
-  // No page limit is stored, because there is no single correct one.
-  assert.equal(requirement.constraints.pages, null)
+  assert.equal(requirement.constraints.pages?.max, 3)
+  assert.equal(requirement.constraints.pages?.spacing, 'single')
+  assert.equal(requirement.constraints.pages?.enforcement, 'enforced')
+  // STILL NOT A WORD LIMIT, AND STILL UNMEASURED. Storing a page limit and
+  // being able to check it are different things.
+  assert.equal(requirement.constraints.words, null)
+  assert.equal(statedWordMaximum(requirement.constraints), null)
+  assert.equal(legacyProjection(snapshotOf(OHIO_STATE, requirement)).statedMaxWords, null)
+  const lines = constraintLines(requirement.constraints).join(' | ')
+  assert.match(lines, /3 pages maximum \(single-spaced\)/)
+  assert.doesNotMatch(lines, /word/i, 'no page became a word')
+  // The four questions the original fixture recorded none of.
+  assert.equal(requirement.components.length, 4)
+  // And the resolution is explained rather than silently applied.
+  assert.match(requirement.notes.join(' '), /current page states single-spaced/)
+})
+
+test('Loyola is the CONFLICTING example: no limit stored, both readings kept', () => {
+  assert.equal(LOYOLA.verification.status, 'conflicting')
+  assert.equal(LOYOLA.requirements.length, 1,
+    'ONE document described two ways -- not two documents to write')
+  const requirement = LOYOLA.requirements[0]!
+  assert.equal(requirement.constraints.pages, null, 'two page limits, no basis to choose')
   assert.equal(requirement.constraints.words, null)
   assert.deepEqual([...constraintLines(requirement.constraints)], [])
-  // Both readings survive, in the note and in the original text.
   const note = requirement.notes.join(' ')
-  assert.match(note, /three SINGLE-spaced pages/)
-  assert.match(note, /three DOUBLE-spaced pages/)
+  assert.match(note, /maximum of two pages/)
+  assert.match(note, /limited to one page/)
+  assert.match(note, /one document described two ways/)
   assert.match(note, /Confirm which applies/)
-  assert.match(OHIO_STATE.originalText, /conflicting; verify before enforcing/)
+})
+
+test('Southern Mississippi is the TRUNCATION example', () => {
+  const requirement = SOUTHERN_MISS.requirements[0]!
+  const pages = requirement.constraints.pages!
+  assert.equal(pages.max, 2)
+  assert.equal(pages.enforcement, 'truncated', 'the school says it stops reading')
+  assert.match(pages.statedAs!, /Only the first two pages will be read/)
+  // THE POLICY IS REPORTED, NOT EVALUATED: the bound is a page count, which
+  // nothing here can measure, so no word limit appears and no overage can.
+  assert.equal(requirement.constraints.words, null)
+  assert.equal(legacyProjection(snapshotOf(SOUTHERN_MISS, requirement)).statedMaxWords, null)
+})
+
+test('South Dakota is the TARGET example: a length that is not a limit', () => {
+  const words = SOUTH_DAKOTA.requirements[0]!.constraints.words!
+  assert.equal(words.max, 500)
+  assert.equal(words.enforcement, 'target')
+  assert.match(words.statedAs!, /A written 500 word statement/)
+  assert.doesNotMatch(words.statedAs!, /maximum|no more than|or fewer/i,
+    'the official sentence contains none of those words, which is the whole point')
+})
+
+test('Wayne State is the OPTION A example: wording shown, NO bound stored', () => {
+  // THE APPROVED POLICY, AS A FIXTURE. The school publishes "1-2 pages" with no
+  // word anywhere saying whether that is a maximum, a minimum or a suggestion.
+  // Option A: show the sentence, store nothing.
+  const requirement = WAYNE_STATE.requirements[0]!
+  const c = requirement.constraints
+  assert.equal(c.pages, null, 'NO page bound, however tempting the figure is')
+  assert.equal(c.words, null)
+  assert.equal(c.characters, null)
+  assert.ok(c.unenforcedLength, 'and the school’s own sentence instead')
+  assert.match(c.unenforcedLength!.text, /a summary \(1-2 pages\) double-spaced/)
+  assert.equal(c.unenforcedLength!.verbatim, true, 'read from the school’s own page')
+
+  // NOTHING CAN BE ENFORCED AGAINST IT. No overage, no shortfall, no legacy
+  // projection, no effect on the analysis floor -- a 20,000-word draft against
+  // this requirement has broken no stated rule, because there is none.
+  assert.deepEqual(overages({ constraints: c, words: 20_000, text: 'x'.repeat(90_000) }), [])
+  assert.deepEqual(shortfalls({ constraints: c, words: 0, text: '' }), [])
+  assert.equal(legacyProjection(snapshotOf(WAYNE_STATE, requirement)).statedMaxWords, null)
+  assert.equal(statedWordMaximum(c), null)
+  assert.equal(enforcedWordMaximum(c), null)
+
+  // THE APPLICANT STILL GETS A WORD COUNTER, with nothing to compare against.
+  assert.deepEqual([...liveCounts(c)], ['words'])
+
+  // AND THE LINE SAYS BOTH THINGS: what the school wrote, and that it is not
+  // being enforced here.
+  const line = constraintLines(c).join(' | ')
+  assert.match(line, /The school states: /)
+  assert.match(line, /not enforced here/)
+  assert.match(line, /does not say whether it is a limit/)
+  // NO WORD ESTIMATE CAME OUT OF THE PAGE RANGE.
+  assert.doesNotMatch(line, /\bwords?\b/i)
 })
 
 test('Saint Mary’s: nothing published becomes NO constraints, not a default', () => {
@@ -235,18 +396,54 @@ test('the fixtures between them cover every approved case', () => {
   assert.ok(all.some((r) => r.constraints.pages !== null))
 })
 
-test('NO FIXTURE CARRIES A WORD LIMIT THE RESEARCH DID NOT STATE', () => {
-  // Every stored word maximum must appear as a number in its own set's
-  // original text. This is the test that catches an invented limit.
+/**
+ * Where a stored number is allowed to have come from.
+ *
+ * THE RULE WIDENED WITH THE RESEARCH AND DID NOT WEAKEN. It used to be "every
+ * limit must appear in its set's originalText", which was right while the
+ * spreadsheet was the only source. Now that the programmes have been checked
+ * against their own pages, a limit may instead appear in the school's VERBATIM
+ * SENTENCE for that limit -- and it must appear in one of the two. UC Davis's
+ * 250 is in the school's sentence and deliberately NOT in originalText, because
+ * originalText preserves the spreadsheet cell that was wrong.
+ *
+ * SO AN INVENTED NUMBER STILL FAILS. There is no path to storing a bound with
+ * no textual evidence behind it; the evidence may just be the better of the two
+ * sources now.
+ */
+const evidenceFor = (originalText: string, statedAs: string | null) => (value: number) => {
+  const written = value.toLocaleString('en-US')
+  return [originalText, statedAs ?? '']
+    .some((text) => text.includes(String(value)) || text.includes(written))
+}
+
+test('NO FIXTURE CARRIES A WORD LIMIT NO SOURCE STATED', () => {
   for (const set of FIXTURE_SETS) {
     for (const requirement of set.requirements) {
-      const max = requirement.constraints.words?.max
-      if (max === undefined || max === null) continue
-      const written = max.toLocaleString('en-US')
-      assert.ok(
-        set.originalText.includes(String(max)) || set.originalText.includes(written),
-        `${set.schoolName}/${requirement.label}: ${max} is not in the research text`,
-      )
+      const words = requirement.constraints.words
+      if (words === null) continue
+      const supported = evidenceFor(set.originalText, words.statedAs)
+      for (const [name, value] of [['min', words.min], ['max', words.max]] as const) {
+        if (value === null) continue
+        assert.ok(supported(value),
+          `${set.schoolName}/${requirement.label}: word ${name} ${value} is in no source text`)
+      }
+    }
+  }
+})
+
+test('EVERY NON-DEFAULT REGISTER QUOTES THE SENTENCE IT WAS READ FROM', () => {
+  // A classification with no quotation behind it is an assertion nobody can
+  // audit. Anything other than the plain default has to show its working.
+  for (const set of FIXTURE_SETS) {
+    for (const requirement of set.requirements) {
+      const limits = [requirement.constraints.words, requirement.constraints.characters,
+        requirement.constraints.pages]
+      for (const limit of limits) {
+        if (limit === null || limit.enforcement === 'enforced') continue
+        assert.ok(limit.statedAs !== null && limit.statedAs.trim().length > 0,
+          `${set.schoolName}/${requirement.label}: '${limit.enforcement}' with no wording`)
+      }
     }
   }
 })
