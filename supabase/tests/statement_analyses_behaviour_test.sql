@@ -127,6 +127,33 @@
 --
 -- Both sessions authenticated as the same owner. The `update ... updated_at`
 -- step writes to a real row: do it only to a row you created in step 1.
+--
+-- ---------------------------------------------------------------------------
+-- BOTH PROCEDURES ABOVE ARE NOW AUTOMATED, AND HAVE BEEN EXECUTED.
+-- ---------------------------------------------------------------------------
+-- supabase/tests/statement_analyses_concurrency_two_session.sh drives them
+-- against two real connections on a disposable local cluster. It follows the
+-- steps above one at a time, and it OBSERVES THE BLOCK FROM A THIRD CONNECTION
+-- by reading pg_locks while it is held -- so if the two claims never actually
+-- overlap it FAILS rather than passing on a plausible-looking transcript.
+--
+-- Executed on PostgreSQL 16.15. Observed, and worth recording because the
+-- details are the guarantee rather than the summary:
+--
+--   procedure 1: two distinct backends; the loser waited on
+--                Lock/transactionid; the winner got state 'claimed' WITH a
+--                claimToken; the loser got state 'running' WITH NONE; exactly
+--                one row existed afterwards.
+--   procedure 2: the reclaim kept the id and rotated the token; the superseded
+--                request's settle returned {"ok":false,"reason":"not-found"}
+--                and its release returned {"released":false} having removed
+--                nothing; the replacement then settled normally and the stored
+--                result was the replacement's.
+--
+-- WHAT THAT DOES NOT COVER: no PostgREST, no real JWT, and Supabase's schema
+-- default privileges were not reproduced. See the "Isolated environment"
+-- section of supabase/manual/STATEMENT_V2_ACTIVATION_RUNBOOK.md for the full
+-- list of what the local rehearsal could not establish.
 -- ============================================================================
 
 begin;
@@ -183,7 +210,15 @@ begin
     raise notice 'pass  an unauthenticated caller is refused before anything is written';
   end if;
 
-  select count(*) into v_count from public.statement_analyses;
+  -- SCOPED to what the refused call would have written. An unscoped
+  -- `count(*) from public.statement_analyses` was wrong here: it asserts the
+  -- whole table is empty, which is true only on a virgin database. This file is
+  -- meant to be runnable at step 8 of the activation runbook -- and after step 9
+  -- turns the cache on there WILL be real rows -- so an unscoped count would
+  -- report a failure that says nothing about the refusal.
+  select count(*) into v_count
+    from public.statement_analyses
+   where draft_id = v_draft_a and fingerprint = v_fp;
   if v_count <> 0 then
     v_failures := v_failures + 1;
     raise notice 'FAIL  a refused claim wrote % row(s)', v_count;

@@ -52,6 +52,14 @@ Run, in order, and read the `verdict` column of each:
 2. `supabase/manual/statement_requirement_length_register_preflight.sql`
    — expect its steps 100–101 to **FAIL** at this point, because 005 has not run
    yet. That is correct: re-run it between steps 7 and 8.
+3. `supabase/manual/statement_analyses_auth_users_reference_preflight.sql`
+   — **this is the one that can stop step 3.** Its step 300 asks whether the
+   role you are about to apply 004 as holds `REFERENCES` on `auth.users`.
+   Migration 004 ends by adding a foreign key into Supabase's own schema, and
+   that privilege is not something this project grants itself. Run it **as the
+   same role that will apply 004** — a PASS obtained as another role, or as a
+   superuser, says nothing about the role that does the work. Record steps 100
+   and 203 (who you are, and who owns `auth.users`) with the rest.
 
 **Record, verbatim, from the first file:**
 
@@ -67,7 +75,14 @@ changed" is an impression rather than a finding.
 `STATEMENT_PROMPT_SUBMISSIONS` are **unset**, or set to anything other than the
 exact string `on`. All three fail closed on any other value.
 
-**Stop condition:** any `FAIL` in the first file, or any flag already `on`.
+**The flags stay off until both the migrations and the permission checks have
+passed.** Not until the migrations apply — until step 4 and step 7 verify them
+*and* step 1's `REFERENCES` check passed. A flag turned on beside a migration
+that half-applied, or one applied by a role that could not complete it, is the
+one combination in which applicants see errors rather than nothing.
+
+**Stop condition:** any `FAIL` in the first file; any `FAIL` at step 300, 301,
+400 or 402 of the third file; or any flag already `on`.
 
 ---
 
@@ -92,19 +107,53 @@ flags will expose a mismatch rather than a feature.
 
 ## Step 3 — Apply 004
 
-🔒 **LOCK** (new table only) · ✍️ **WRITES** (schema) · 🔑 **CREDENTIALS**
+🔒 **LOCK — `ShareRowExclusiveLock` on `auth.users`** · 📡 **TRAFFIC (signups)** ·
+✍️ **WRITES** (schema) · 🔑 **CREDENTIALS**
 
 Paste `supabase/migrations/20261002_004_statement_analyses.sql` whole into the
 SQL editor. It is one `begin … commit`.
 
-**Locks:** it creates a table and two functions and touches no existing table,
-so it takes no lock on anything users are reading or writing. No traffic impact.
+**Permission — check this before pasting.** Section 2b adds
+`statement_analyses_user_fk`, a foreign key to `auth.users(id)`. PostgreSQL
+requires `REFERENCES` privilege on the *referenced* table, and on Supabase
+`auth.users` is owned by `supabase_auth_admin`, not by the role running the SQL
+editor. `references auth.users(id)` is the standard documented Supabase pattern
+and is expected to work — but if it is refused, **the whole migration rolls
+back**, including the table, the policy and both functions created above it.
+Step 1's third preflight answers this in one read-only query. Run it.
+
+**Locks — this step no longer touches only new objects.** An earlier version of
+this runbook said 004 takes no lock on anything users touch. That stopped being
+true when the retention foreign keys were added, and the correction matters:
+
+- Adding `statement_analyses_user_fk` takes **`ShareRowExclusiveLock` on
+  `auth.users`**. Measured in the isolated local rehearsal: this **blocks
+  inserts into `auth.users` — signups — while permitting reads**, so logins that
+  only read are unaffected.
+- `statement_analyses_draft_fk` takes the same lock on
+  `public.statement_drafts`, blocking draft writes for the same window.
+- In the SQL editor **the whole script is one transaction**, so both locks are
+  held from their `alter table` statements until the script commits — not just
+  for the statement itself.
+
+**Do not infer the duration from the rehearsal.** The local measurement was
+about 20 ms, but that was an empty table on an idle single-user cluster with no
+pooler, no replication and no concurrent lock queue. It establishes *which*
+locks are taken and *what they block*; it says nothing about how long production
+will hold them or how deep a queue will form behind them. Apply during a quiet
+period and watch the Supabase logs for lock waits rather than assuming
+milliseconds.
+
+**Rollback is clean.** `statement_analyses` is new and empty, so neither foreign
+key has existing rows to validate — the work is a catalog change, not a scan.
 
 **If it fails:** the transaction rolls back by itself and nothing partial
 survives. Every statement is `if not exists` or `drop … if exists`, so re-running
 after a fix is safe. Read the error before changing anything.
 
-**Stop condition:** any error. Do not edit the migration in the editor to get
+**Stop condition:** any error — in particular `permission denied for table
+users`, which means the `REFERENCES` privilege is absent and step 1's third
+preflight was skipped or ignored. Do not edit the migration in the editor to get
 past it — fix the file in the repository, review the change, and start again.
 
 ---
@@ -231,13 +280,35 @@ Also confirm postcheck step 901: every existing draft still has
 
 **This step is not part of the activation and must be authorized on its own.**
 
-Everything verified so far reads the catalog. Ten guarantees this feature rests
-on have never been executed against PostgreSQL — RLS actually filtering, grants
-actually refusing, the CHECKs actually firing, the concurrency actually holding.
-Two files cover them:
+Everything verified in steps 4 and 7 reads the catalog: it proves the policies,
+grants and constraints *exist*. The guarantees this feature actually rests on —
+RLS filtering, grants refusing, the CHECKs firing, the concurrency holding — are
+behavioural.
+
+**Those have now been executed against PostgreSQL, on a disposable local
+cluster: 290 assertions, zero failures,** including both two-session concurrency
+procedures and RLS from genuine `anon` and `authenticated` sessions. See
+"Isolated environment" below for how to reproduce it and — more importantly —
+for the list of what that run could *not* establish.
+
+So the question for this step is no longer "do these behaviours work?" but
+"do they work **on Supabase**?" What remains unverified there is narrow and
+specific: GoTrue's real JWTs, PostgREST's role switching, Supabase's schema
+default privileges, and `auth.users`' real ownership. Those are not things a
+local cluster can speak to, and they are the reason this step still exists.
+
+Four files cover the behaviour. The first two are safe to consider for
+production with the cautions below; **the last two are local-only and will
+refuse to run on a managed Supabase database:**
 
 - `supabase/tests/statement_analyses_behaviour_test.sql`
 - `supabase/tests/statement_requirements_behaviour_test.sql`
+- `supabase/tests/statement_rls_role_session_test.sql` — local only; needs the
+  scaffold, and connects *as* `anon` / `authenticated`, which Supabase does not
+  permit. It also refuses an owner or superuser session on purpose.
+- `supabase/tests/statement_analyses_concurrency_two_session.sh` — local only;
+  commits writes, ages a row by eleven minutes, and requires a unix-socket
+  connection so that it cannot reach a hosted database.
 
 **Both WRITE.** They use synthetic ids and synthetic text, and they end in
 `ROLLBACK` — and that is *not* the same as risk-free on production. Each takes
@@ -478,7 +549,69 @@ What the flags do **not** undo:
 
 ## Isolated environment
 
-**There is none today, and this runbook does not require you to create one.**
+**A disposable local PostgreSQL rehearsal has been performed. A Supabase
+staging project still does not exist, and this runbook does not require one.**
+
+### What the local rehearsal covered
+
+All six migrations were applied to a throwaway PostgreSQL 16 cluster
+(`initdb`, no TCP listener, unix socket only), against a synthetic
+Supabase-shaped scaffold. **290 assertions, zero failures.** To reproduce:
+
+```
+supabase/tests/local_rehearsal_scaffold.sql          # roles, auth schema, auth.uid()
+<the six migrations, in filename order>
+supabase/tests/local_rehearsal_fixtures.sql          # synthetic rows
+supabase/tests/statement_rls_role_session_test.sql   # as authenticated, then anon
+supabase/tests/statement_analyses_concurrency_two_session.sh
+```
+
+Each of those files refuses to run against anything that looks like a managed
+Supabase database, and refuses to run at all without an explicit opt-in. The
+role-session test additionally **refuses a superuser or owner session**, because
+such a session bypasses RLS and would pass every assertion without the policies
+existing.
+
+What it established that static inspection could not:
+
+- The migrations apply in order, are **re-runnable with rows present**, and fail
+  loudly out of order (006 without 005; 004 without `statement_drafts`).
+- RLS actually bites from a genuine non-privileged session: 18 assertions as
+  `authenticated`, 8 as `anon`.
+- **Genuine two-session concurrency.** The duplicate-claim race was observed
+  blocking on `Lock/transactionid` from a third connection, resolving to one row
+  with the loser receiving no claim token; the superseded-request interleaving
+  confirmed a stale token can neither settle (`not-found`) nor release
+  (`released: false`) the replacement.
+- Which locks the retention foreign keys take, and what they block — see step 3.
+
+### What the rehearsal did NOT reproduce
+
+Treat each of these as unverified until production says otherwise. A clean local
+result is **weaker** evidence than a clean one on the real project, not equal to
+it.
+
+- **Supabase authentication.** No GoTrue, no JWT verification. A signed-in
+  applicant was simulated by setting `request.jwt.claims` directly. The claim a
+  real token would have to survive was never checked.
+- **PostgREST.** No role switching, no HTTP layer, no schema cache. The tests
+  connected *as* `anon` and `authenticated` over a socket, which is stricter in
+  one way — no superuser in the picture — and unrepresentative in another: the
+  real roles are `NOLOGIN` and are reached with `SET ROLE`.
+- **Supabase schema default privileges.** Not reproduced, and this is the
+  important one: default privileges are exactly what the migrations'
+  revoke-before-grant exists to defeat, so a clean grant matrix locally proves
+  the least about the thing most likely to differ. This is the same class of
+  trap that migration 010 closed in the Resume work.
+- **`auth.users` ownership and the `REFERENCES` privilege.** The rehearsal's
+  `auth.users` was a six-column stand-in owned by the role that ran the
+  migration, so the privilege step 3 depends on was present by construction and
+  was never actually tested. Production has roughly thirty-five columns and a
+  different owner.
+- **Lock duration under load**, the pooler, replication, and `service_role`
+  behaviour — none exercised.
+
+### Why there is still no staging project
 
 - No `supabase/config.toml`, so no local `supabase start` stack is configured.
 - The only Supabase URL in `.env.local` points at a project ref that

@@ -62,7 +62,7 @@ claim_fn as (
    where n.nspname = 'public' and p.proname = 'claim_statement_analysis'
 ),
 settle_fn as (
-  select p.oid, p.prosecdef, p.proconfig
+  select p.oid, p.prosecdef, p.proconfig, p.pronargs
     from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname = 'settle_statement_analysis'
@@ -250,12 +250,21 @@ checks as (
   select 396,
          'settle_statement_analysis takes FOUR arguments (id, token, review, overall)',
          coalesce((select pg_get_function_identity_arguments(oid) from settle_fn), 'absent'),
-         'uuid, uuid, jsonb, integer',
-         case when (select pg_get_function_identity_arguments(oid) from settle_fn)
-                   = 'uuid, uuid, jsonb, integer'
-              then 'PASS'
-              else 'FAIL -- the three-argument version settles without a token; it must '
-                   || 'have been dropped' end
+         'p_id uuid, p_token uuid, p_review jsonb, p_overall integer',
+         -- pg_get_function_identity_arguments RETURNS NAMES AS WELL AS TYPES.
+         -- A first version compared against 'uuid, uuid, jsonb, integer' and
+         -- reported FAIL against a correct function -- found by running it. The
+         -- ARGUMENT COUNT is what matters, so that is what is asserted, with
+         -- the token named explicitly.
+         case
+           when (select oid from settle_fn) is null then 'FAIL -- function missing'
+           when (select pronargs from settle_fn) <> 4
+             then 'FAIL -- the three-argument version settles without a token'
+           when (select pg_get_function_identity_arguments(oid) from settle_fn)
+                not like '%p_token uuid%'
+             then 'FAIL -- the second argument is not the claim token'
+           else 'PASS'
+         end
 
   union all
   select 397,
@@ -419,12 +428,24 @@ checks as (
                     where table_schema = 'public'
                       and table_name = 'statement_analyses'
                       and not (grantee = 'authenticated' and privilege_type = 'SELECT')
+                      -- THE OWNER IS DERIVED, NOT NAMED. A first version listed
+                      -- 'postgres' and 'supabase_admin' and so reported FAIL on
+                      -- any cluster whose owner is called something else --
+                      -- found by running it. The owner always holds every
+                      -- privilege on its own table and is not a finding.
+                      and grantee <> pg_get_userbyid(
+                        (select relowner from pg_class
+                          where oid = (select oid from tbl)))
                       and grantee not in ('postgres', 'supabase_admin')), 'none'),
          'none (beyond the table owner)',
          case when exists (select 1 from information_schema.role_table_grants
                             where table_schema = 'public'
                               and table_name = 'statement_analyses'
-                              and not (grantee = 'authenticated' and privilege_type = 'SELECT')
+                              and not (grantee = 'authenticated'
+                                       and privilege_type = 'SELECT')
+                              and grantee <> pg_get_userbyid(
+                                (select relowner from pg_class
+                                  where oid = (select oid from tbl)))
                               and grantee not in ('postgres', 'supabase_admin'))
               then 'FAIL -- read the actual column and revoke what is listed'
               else 'PASS' end
@@ -445,15 +466,23 @@ checks as (
          case when (select prosecdef from claim_fn) is true
               then 'PASS' else 'FAIL -- applicants hold no INSERT; definer is the only path' end
 
+  -- AN EMPTY search_path IS STORED AS search_path="" , WITH THE QUOTES. A first
+  -- version of this check compared against the bare string `search_path=` and
+  -- reported FAIL against a migration that was correct -- found by running it.
+  -- Both spellings are accepted so the check does not depend on how a given
+  -- server renders an empty GUC.
   union all
   select 702,
          'claim_statement_analysis pins an EMPTY search_path',
          coalesce((select array_to_string(proconfig, ', ') from claim_fn), 'none'),
-         'search_path=',
-         case when (select proconfig from claim_fn) @> array['search_path='] then 'PASS'
-              when (select proconfig from claim_fn) is null
-              then 'FAIL -- no search_path; a definer function without one is hijackable'
-              else 'FAIL -- search_path is set to something other than empty' end
+         'search_path="" (empty)',
+         case
+           when (select proconfig from claim_fn) is null
+             then 'FAIL -- no search_path; a definer function without one is hijackable'
+           when (select proconfig from claim_fn)
+                && array['search_path=', 'search_path=""'] then 'PASS'
+           else 'FAIL -- search_path is set to something other than empty'
+         end
 
   union all
   select 710,
@@ -473,9 +502,14 @@ checks as (
   select 712,
          'settle_statement_analysis pins an EMPTY search_path',
          coalesce((select array_to_string(proconfig, ', ') from settle_fn), 'none'),
-         'search_path=',
-         case when (select proconfig from settle_fn) @> array['search_path='] then 'PASS'
-              else 'FAIL -- a definer function without an empty search_path is hijackable' end
+         'search_path="" (empty)',
+         case
+           when (select proconfig from settle_fn) is null
+             then 'FAIL -- no search_path; a definer function without one is hijackable'
+           when (select proconfig from settle_fn)
+                && array['search_path=', 'search_path=""'] then 'PASS'
+           else 'FAIL -- a definer function without an empty search_path is hijackable'
+         end
 
   -- EXECUTE goes to `authenticated` only. anon and PUBLIC must hold none.
   union all
