@@ -131,9 +131,20 @@ async function admit(): Promise<Caller | NextResponse> {
  * A FAILURE TO RELEASE IS LOGGED AND NOT RAISED. The request has already failed
  * for its own reason, and the staleness window is the backstop.
  */
-async function releaseClaim(db: SupabaseClient, claimId: string | null): Promise<void> {
-  if (claimId === null) return
-  const released = await settleAnalysis(db, { id: claimId, review: null, overall: null })
+type HeldClaim = { readonly id: string; readonly claimToken: string }
+
+async function releaseClaim(db: SupabaseClient, claim: HeldClaim | null): Promise<void> {
+  if (claim === null) return
+  // THE TOKEN GOES WITH IT. A release that named only the id could delete a
+  // claim this request no longer holds -- one reclaimed while the model call
+  // was in flight -- and the replacement's paid result would then have nowhere
+  // to land. With the token, a superseded release removes nothing.
+  const released = await settleAnalysis(db, {
+    id: claim.id,
+    claimToken: claim.claimToken,
+    review: null,
+    overall: null,
+  })
   if (!released.ok) console.error('statement analyze: claim not released —', released.reason)
 }
 
@@ -329,7 +340,11 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     requirementAuthentic: verdict.authentic,
   })
 
-  let claimId: string | null = null
+  // THE CLAIM, NOT JUST ITS ID. The token is this request's authority to settle
+  // the row, and it is rotated by the database on every successful claim -- so
+  // holding both is what lets a superseded request be refused rather than
+  // overwriting whoever replaced it.
+  let claim: HeldClaim | null = null
   if (availability === 'ready') {
     const claimed = await claimAnalysis(caller.db, {
       draftId: id,
@@ -377,7 +392,7 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
       )
     }
 
-    claimId = claimed.value.id
+    claim = { id: claimed.value.id, claimToken: claimed.value.claimToken }
   }
 
   // ---- the allowance ------------------------------------------------------
@@ -476,7 +491,7 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     // somebody's personal statement.
     console.error('statement analyze: model call failed', (error as { name?: string })?.name)
     await settleStatementUsage(caller.db, usageId, 'failed')
-    await releaseClaim(caller.db, claimId)
+    await releaseClaim(caller.db, claim)
     return NextResponse.json({ error: MESSAGES.unavailable, code: 'unavailable' }, { status: 502 })
   }
 
@@ -485,7 +500,7 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     raw = JSON.parse(completion)
   } catch {
     await settleStatementUsage(caller.db, usageId, 'rejected')
-    await releaseClaim(caller.db, claimId)
+    await releaseClaim(caller.db, claim)
     return NextResponse.json({ error: MESSAGES.malformed, code: 'malformed' }, { status: 502 })
   }
 
@@ -497,7 +512,7 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     // quotes the applicant's essay back.
     console.error('statement analyze: malformed model response —', parsed.reason)
     await settleStatementUsage(caller.db, usageId, 'rejected')
-    await releaseClaim(caller.db, claimId)
+    await releaseClaim(caller.db, claim)
     return NextResponse.json({ error: MESSAGES.malformed, code: 'malformed' }, { status: 502 })
   }
 
@@ -506,9 +521,10 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
   // THE RESULT IS STORED ONLY AFTER IT VALIDATED. A malformed or failed
   // analysis released its claim above and wrote nothing, so no failure can ever
   // be read back as a cached success.
-  if (claimId !== null) {
+  if (claim !== null) {
     const stored = await settleAnalysis(caller.db, {
-      id: claimId,
+      id: claim.id,
+      claimToken: claim.claimToken,
       review: parsed.review,
       overall: parsed.review.overall,
     })

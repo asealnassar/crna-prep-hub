@@ -225,8 +225,15 @@ test('EVERY ANALYSIS DECISION READS `authoritative`, NEVER `requirement`', () =>
 test('THE FINGERPRINT KEYS ON THE STORED SNAPSHOT, so a tampered draft is its own row', () => {
   // Deliberately NOT the authenticated value: keying on that would collapse
   // every tampered variant onto one key and let the first one answer for all.
-  const call = ROUTE_BODY.slice(ROUTE_BODY.indexOf('const fingerprint = analysisFingerprint({'),
-    ROUTE_BODY.indexOf('let claimId'))
+  const start = ROUTE_BODY.indexOf('const fingerprint = analysisFingerprint({')
+  // THE BOUNDARY IS ASSERTED, not assumed. indexOf returns -1 for a marker that
+  // has been renamed, and a slice to -1 silently runs to the end of the file --
+  // which would make the doesNotMatch below pass on the whole route and prove
+  // nothing. This caught exactly that when `claimId` became `claim`.
+  const end = ROUTE_BODY.indexOf('let claim: HeldClaim | null')
+  assert.ok(start !== -1, 'the fingerprint call was renamed')
+  assert.ok(end > start, 'the claim declaration was renamed; fix this boundary')
+  const call = ROUTE_BODY.slice(start, end)
   assert.match(call, /^\s*requirement,$/m)
   assert.doesNotMatch(call, /authoritative/)
 })

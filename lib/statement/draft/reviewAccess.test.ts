@@ -214,8 +214,11 @@ test('a claim never outlives the request that took it', () => {
   const code = stripTs(ROUTE)
   // Every failure after the claim releases it, or the draft would read as
   // "already running" to the next attempt for the whole staleness window.
-  assert.equal((code.match(/releaseClaim\(caller\.db, claimId\)/g) ?? []).length, 3,
+  assert.equal((code.match(/releaseClaim\(caller\.db, claim\)/g) ?? []).length, 3,
     'the model failure, the unparseable body, and the rejected shape')
+  // AND THE RELEASE CARRIES THE TOKEN, so a request whose claim was reclaimed
+  // while the model ran cannot delete the replacement.
+  assert.match(code, /claimToken: claim\.claimToken,\s*review: null,/)
 })
 
 test('A FAILURE IS NEVER STORED AS A SUCCESS', () => {
@@ -406,4 +409,286 @@ test('RESTORING PREVIOUSLY ANALYSED CONTENT FINDS ITS OWN RESULT', () => {
   const page = read('../../../app/statement-studio/[id]/page.tsx')
   assert.match(page, /analysisFor\(db, draft\.id, currentFingerprint\)/)
   assert.equal(page.includes('latestAnalysis('), false, 'recency is the wrong key')
+})
+
+/* ===========================================================================
+ * THE AUDIT HARDENING OF 20261002_004.
+ *
+ * STILL STATIC. These read the SQL text and prove the file says what the audit
+ * asked for. They prove NOTHING about a running database: whether the draft
+ * read really refuses another user's draft, and whether the loser of a real
+ * race really receives 'running', can only be established by
+ * supabase/tests/statement_analyses_behaviour_test.sql against an applied
+ * schema, in two sessions, which nothing here has done.
+ * ======================================================================== */
+
+test('CLAIMING REQUIRES OWNING THE DRAFT', () => {
+  const sql = stripSql(SQL)
+  // The ownership read, with the user filter on the same predicate as the id.
+  assert.match(sql,
+    /select exists \(\s*select 1 from public\.statement_drafts d\s*where d\.id = p_draft_id and d\.user_id = v_user\s*\)/)
+  // And it refuses before anything is read from or written to the table.
+  const owns = sql.indexOf('d.user_id = v_user')
+  for (const later of ['from public.statement_analyses', 'insert into public.statement_analyses']) {
+    assert.ok(owns < sql.indexOf(later), `the ownership check must precede ${later}`)
+  }
+  // ABSENT AND SOMEBODY ELSE'S GIVE THE SAME ANSWER, so the function cannot be
+  // used to discover which draft ids exist.
+  assert.match(sql, /if not v_owns then\s*return jsonb_build_object\('ok', false, 'reason', 'not-found'\)/)
+})
+
+test('OWNERSHIP COMES FROM auth.uid() AND FROM NO PARAMETER', () => {
+  const sql = stripSql(SQL)
+  assert.match(sql, /v_user\s+uuid := auth\.uid\(\)/)
+  // No parameter could name a user: the signature has none, and the insert
+  // writes v_user rather than anything supplied.
+  const signature = sql.slice(sql.indexOf('create or replace function public.claim_statement_analysis'),
+    sql.indexOf('returns jsonb'))
+  assert.doesNotMatch(signature, /p_user|user_id|p_owner/)
+  assert.match(sql, /values \(\s*v_user, p_draft_id/)
+})
+
+test('THE LOSER OF A RACE GETS A STATE, NOT AN EXCEPTION', () => {
+  const sql = stripSql(SQL)
+  // on conflict do nothing, by constraint NAME so a rename fails loudly.
+  assert.match(sql,
+    /on conflict on constraint statement_analyses_draft_fingerprint_key do nothing/)
+  // And the loop re-reads, so the loser reports the winner's state.
+  assert.match(sql, /while v_attempts < 2 loop/)
+  assert.match(sql, /v_attempts := v_attempts \+ 1/)
+  // BOUNDED. A definer function that can spin is worse than one that gives up.
+  assert.doesNotMatch(sql, /^\s*loop\s*$/m)
+  // The give-up answer is a refusal, not a fabricated success.
+  assert.match(sql, /end loop;\s*return jsonb_build_object\('ok', false, 'reason', 'invalid'\)/)
+})
+
+test('A MALFORMED DIRECT RPC CALL IS REFUSED, NOT RAISED', () => {
+  const sql = stripSql(SQL)
+  // Every parameter behind a not-null or CHECKed column is validated, because
+  // the function is granted to `authenticated` and reachable over PostgREST.
+  for (const guard of ['p_revision is null', 'p_prompt_attached is null', 'p_words is null',
+    'p_rubric_version is null', 'p_schema_version is null',
+    "p_provenance is not null and p_provenance not in ('catalog', 'user')"]) {
+    assert.ok(sql.includes(guard), `claim() does not validate: ${guard}`)
+  }
+  // settle() guards the one CHECKed column it writes.
+  assert.match(sql, /p_overall is not null and \(p_overall < 0 or p_overall > 100\)/)
+})
+
+test('A FAILED PROVIDER CALL LEAVES NO PERMANENT CLAIM', () => {
+  const sql = stripSql(SQL)
+  // The release path deletes rather than marking failed, and only a pending row
+  // the caller owns.
+  assert.match(sql,
+    /delete from public\.statement_analyses\s*where id = p_id and claim_token = p_token\s*and user_id = v_user and status = 'pending'/)
+  // And a result is only ever written onto a pending row the caller owns, so a
+  // late arrival cannot overwrite feedback already on screen.
+  assert.match(sql,
+    /where id = p_id and claim_token = p_token\s*and user_id = v_user and status = 'pending'\s*returning id into v_updated/)
+})
+
+test('AN EXPIRED CLAIM IS RECOVERED WITHOUT CHANGING ITS IDENTITY', () => {
+  const sql = stripSql(SQL)
+  // The stale row is touched, not deleted and re-inserted: the id survives, so
+  // a settle() still in flight from the dead request completes THIS row.
+  assert.match(sql, /if v_row\.updated_at > now\(\) - interval '10 minutes' then/)
+  // THE ID SURVIVES RECOVERY -- the row is touched, not deleted and re-inserted.
+  assert.match(sql,
+    /update public\.statement_analyses\s*set updated_at = now\(\),\s*claim_token = gen_random_uuid\(\)\s*where id = v_row\.id/)
+  assert.doesNotMatch(sql, /delete from public\.statement_analyses\s*where id = v_row\.id/)
+  // AND THE TOKEN DOES NOT. That is the point: the abandoned request still
+  // holds the old one, so it can neither complete nor release the replacement.
+  assert.match(sql, /claim_token = gen_random_uuid\(\)/)
+})
+
+test('THE HARDENING DID NOT LOOSEN DEFINER, SEARCH PATH OR GRANTS', () => {
+  const sql = stripSql(SQL)
+  // Two functions, both definer, both with an empty search path.
+  assert.equal((sql.match(/security definer/g) ?? []).length, 2)
+  assert.equal((sql.match(/set search_path = ''/g) ?? []).length, 2)
+  // Signatures unchanged, so the revoke/grant statements still name them.
+  for (const fn of ['claim_statement_analysis', 'settle_statement_analysis']) {
+    assert.ok(sql.includes(`revoke all on function public.${fn}(`), `${fn}: no revoke`)
+    assert.ok(sql.includes(`grant execute on function public.${fn}(`), `${fn}: no grant`)
+    assert.match(sql,
+      new RegExp(`revoke all on function public\\.${fn}\\([^)]*\\)\\s*from anon`),
+      `${fn}: anon must hold no EXECUTE`)
+  }
+  // The table itself is still select-only for authenticated and nothing for the
+  // other roles.
+  assert.match(sql, /revoke all on public\.statement_analyses from anon, authenticated, service_role/)
+  assert.match(sql, /grant select on public\.statement_analyses to authenticated;/)
+  assert.doesNotMatch(sql, /grant (insert|update|delete)[^;]*statement_analyses/)
+  // Still exactly one policy, and it is a SELECT policy.
+  assert.equal((sql.match(/create policy/g) ?? []).length, 1)
+  assert.match(sql, /create policy "own statement analysis select"[\s\S]*?for select to authenticated/)
+})
+
+test('THE HARDENING ADDED NO DML OUTSIDE THE DEFINER BODIES', () => {
+  // The audit's additive finding has to survive the edit.
+  const outside = stripSql(SQL).replace(/\$fn\$[\s\S]*?\$fn\$/g, ' BODY ')
+  for (const dml of [/\binsert\s+into\b/i, /\bupdate\s+public\./i, /\bdelete\s+from\b/i,
+    /\btruncate\b/i, /\bdrop\s+table\b/i]) {
+    assert.doesNotMatch(outside, dml, String(dml))
+  }
+  // And it still alters only its own table.
+  const altered = new Set((outside.match(/alter table (?:if exists )?\S+/gi) ?? [])
+    .map((m) => m.split(/\s+/).pop()))
+  assert.deepEqual([...altered], ['public.statement_analyses'])
+})
+
+/* ===========================================================================
+ * A SUPERSEDED REQUEST HAS NO AUTHORITY.
+ *
+ * The hole: recovering an abandoned claim keeps the row's id, and the id was
+ * the only thing settle() checked -- so the request whose claim had been
+ * reclaimed could still complete it, or release it out from under the
+ * replacement. Authority is now the per-attempt token.
+ *
+ * STILL STATIC. These read the SQL and the route. Whether a real superseded
+ * request is actually refused needs the two-session procedure in
+ * supabase/tests/statement_analyses_behaviour_test.sql, against an applied
+ * schema, which nothing here has done.
+ * ======================================================================== */
+
+test('EVERY SUCCESSFUL CLAIM CARRIES A FRESH TOKEN', () => {
+  const sql = stripSql(SQL)
+  // The column, not null, defaulted per row.
+  assert.match(sql, /claim_token\s+uuid\s+not null default gen_random_uuid\(\)/)
+  // A fresh insert returns the token the default generated -- it does not
+  // generate a second one, so the row and the caller cannot disagree.
+  assert.match(sql,
+    /'state', 'claimed',\s*'id', v_row\.id, 'claimToken', v_row\.claim_token/)
+  // A RECLAIM ROTATES IT. This is the fix.
+  assert.match(sql,
+    /set updated_at = now\(\),\s*claim_token = gen_random_uuid\(\)\s*where id = v_row\.id\s*returning \* into v_row/)
+  // Both claimed paths hand one back.
+  assert.equal((sql.match(/'claimToken'/g) ?? []).length, 2,
+    'the fresh claim and the reclaim')
+})
+
+test('A LIVE CLAIM IS REPORTED WITHOUT A TOKEN', () => {
+  const sql = stripSql(SQL)
+  // 'running' is not authority: that caller did not win the attempt, so it is
+  // given nothing it could settle with.
+  const running = sql.slice(sql.indexOf("'state', 'running'"))
+  assert.match(running.slice(0, 120), /'id', v_row\.id\);/)
+  assert.doesNotMatch(running.slice(0, 120), /claimToken/)
+})
+
+test('SETTLING REQUIRES THE TOKEN ON BOTH PATHS', () => {
+  const sql = stripSql(SQL)
+  // The signature changed, so a stale deployment fails loudly rather than
+  // settling without one.
+  assert.match(sql,
+    /create or replace function public\.settle_statement_analysis\(\s*p_id\s+uuid,\s*p_token\s+uuid,/)
+  // And the old three-argument overload is dropped, not left beside it.
+  assert.match(sql,
+    /drop function if exists public\.settle_statement_analysis\(uuid, jsonb, integer\);/)
+  // A null token is not a wildcard.
+  assert.match(sql, /if p_token is null then\s*return jsonb_build_object\('ok', false, 'reason', 'invalid'\)/)
+  // Complete path.
+  assert.match(sql, /set status = 'complete',[\s\S]{0,160}where id = p_id and claim_token = p_token/)
+  // Release path -- the one that could delete the replacement's claim.
+  assert.match(sql,
+    /delete from public\.statement_analyses\s*where id = p_id and claim_token = p_token/)
+})
+
+test('A COMPLETED ANALYSIS IS STILL UNOVERWRITABLE, AND THE REFUSAL SAYS NOTHING', () => {
+  const sql = stripSql(SQL)
+  // status = 'pending' survives in both predicates, so a late request cannot
+  // replace feedback already on screen.
+  assert.equal((sql.match(/and user_id = v_user and status = 'pending'/g) ?? []).length, 2,
+    'the release path and the complete path')
+  // Wrong id, wrong token, wrong user and already-complete are one answer.
+  assert.match(sql,
+    /if v_updated is null then\s*return jsonb_build_object\('ok', false, 'reason', 'not-found'\)/)
+})
+
+test('A SUPERSEDED RELEASE REPORTS SUCCESS AND REMOVES NOTHING', () => {
+  const sql = stripSql(SQL)
+  // Being superseded is the normal outcome of losing a reclaim race, not an
+  // error -- so the release path reports released and says whether a row went.
+  assert.match(sql,
+    /return jsonb_build_object\('ok', true, 'state', 'released',\s*'released', v_updated is not null\)/)
+})
+
+test('THE ROUTE HOLDS THE TOKEN AND PASSES IT EVERYWHERE', () => {
+  const code = stripTs(ROUTE)
+  assert.match(code, /let claim: HeldClaim \| null = null/)
+  assert.match(code, /claim = \{ id: claimed\.value\.id, claimToken: claimed\.value\.claimToken \}/)
+  // Both settle sites name it.
+  assert.equal((code.match(/claimToken: claim\.claimToken,/g) ?? []).length, 2,
+    'the release helper and the store')
+  // And nothing settles by id alone any more.
+  assert.doesNotMatch(code, /settleAnalysis\([^)]*\{\s*id: claim\.id,\s*review:/)
+})
+
+test('NO TRANSACTION STILL SPANS THE MODEL CALL', () => {
+  // The token changed who may settle, not when. Re-asserted because a token
+  // is exactly the kind of thing somebody would be tempted to hold a
+  // transaction open for.
+  const code = stripTs(ROUTE)
+  const claim = code.indexOf('claimAnalysis(caller.db')
+  const model = code.indexOf('openai.chat.completions.create')
+  const settle = code.indexOf('settleAnalysis(caller.db, {')
+  assert.ok(claim < model && model < settle, 'claim, call, then write -- three statements')
+  // No explicit transaction control anywhere in the route.
+  assert.doesNotMatch(code, /\bbegin\b.*transaction|rpc\('begin'|set transaction/i)
+})
+
+test('A CACHE HIT IS STILL FREE AND NEEDS NO TOKEN', () => {
+  const code = stripTs(ROUTE)
+  const hit = code.indexOf("claimed.value.state === 'complete'")
+  const ledger = code.indexOf('statementRateDecision(')
+  assert.ok(hit !== -1 && hit < ledger, 'the hit returns before the allowance is read')
+  // The complete branch of the Claim union carries no token, so a hit has
+  // nothing to settle and cannot accidentally try.
+  const repo = stripTs(read('./analysisRepo.ts'))
+  assert.match(repo, /\| \{ readonly state: 'complete'; readonly analysis: StoredAnalysis \}/)
+})
+
+/* ===========================================================================
+ * DELETION AND RETENTION.
+ * ======================================================================== */
+
+test('AN ANALYSIS CANNOT OUTLIVE THE DRAFT IT QUOTES', () => {
+  const sql = stripSql(SQL)
+  // The review's `evidence` is a verified span of the applicant's essay, so an
+  // orphaned row holds excerpts of a personal statement.
+  assert.match(sql,
+    /foreign key \(draft_id\) references public\.statement_drafts\(id\) on delete cascade/)
+})
+
+test('AN ANALYSIS CANNOT OUTLIVE THE ACCOUNT EITHER', () => {
+  const sql = stripSql(SQL)
+  assert.match(sql,
+    /foreign key \(user_id\) references auth\.users\(id\) on delete cascade/)
+})
+
+test('THE CASCADE HAS AN INDEX TO USE', () => {
+  // A cascading delete without an index on the referencing column degrades to a
+  // sequential scan per deleted parent.
+  const sql = stripSql(SQL)
+  assert.match(sql,
+    /create index if not exists statement_analyses_draft_idx\s*on public\.statement_analyses \(draft_id/)
+})
+
+test('THE CLEANUP CHANGES NO DELETION CODE', () => {
+  // The whole point of doing it with a foreign key: deleteDraft() stays one
+  // statement and the administrator's script stays untouched.
+  const repo = stripTs(read('./draftRepo.ts'))
+  const del = repo.slice(repo.indexOf('export async function deleteDraft'))
+  assert.doesNotMatch(del.slice(0, 700), /statement_analyses/)
+  const admin = read('../../../supabase/manual/delete_fake_accounts.sql')
+  assert.doesNotMatch(admin, /statement_analyses/)
+})
+
+test('NO SWEEP, TRIGGER OR SCHEDULED JOB WAS INTRODUCED', () => {
+  const sql = stripSql(SQL)
+  assert.doesNotMatch(sql, /create trigger|create or replace trigger/i)
+  assert.doesNotMatch(sql, /pg_cron|cron\.schedule/i)
+  // And no retention DELETE runs at apply time.
+  const outside = sql.replace(/\$fn\$[\s\S]*?\$fn\$/g, ' BODY ')
+  assert.doesNotMatch(outside, /\bdelete\s+from\b/i)
 })

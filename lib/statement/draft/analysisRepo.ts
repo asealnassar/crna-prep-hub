@@ -53,10 +53,22 @@ export interface StoredAnalysis {
   readonly createdAt: string
 }
 
-/** What claiming the work produced. */
+/**
+ * What claiming the work produced.
+ *
+ * ONLY 'claimed' CARRIES A TOKEN, and that is the type doing the work. The
+ * token is authority to settle: it is rotated by the database on every
+ * successful claim, so a request whose claim was reclaimed while its model call
+ * was in flight holds a token that no longer exists on the row and can neither
+ * complete nor release the replacement.
+ *
+ * 'running' DELIBERATELY HAS NONE. That caller did not win the attempt, so
+ * there is nothing for it to settle -- and with no token in hand it could not,
+ * even if a future edit forgot to check the state.
+ */
 export type Claim =
   /** Nobody has analysed these inputs; this caller owns the attempt. */
-  | { readonly state: 'claimed'; readonly id: string }
+  | { readonly state: 'claimed'; readonly id: string; readonly claimToken: string }
   /** Another request is already running for exactly these inputs. */
   | { readonly state: 'running'; readonly id: string }
   /** A validated result already exists. No model call is needed. */
@@ -225,7 +237,14 @@ export async function claimAnalysis(
   }
   if (!id) return fail('data-integrity', 'the claim returned no id')
   if (body.state === 'running') return { ok: true, value: { state: 'running', id } }
-  return { ok: true, value: { state: 'claimed', id } }
+  // A 'claimed' ANSWER WITHOUT A TOKEN IS A DATA-INTEGRITY FAILURE, not a claim
+  // to be used. It would mean the deployed function predates the hardening, and
+  // continuing would hand the route a claim it cannot safely settle.
+  const claimToken = text(body.claimToken)
+  if (!claimToken) {
+    return fail('data-integrity', 'the claim returned no token; apply 20261002_004')
+  }
+  return { ok: true, value: { state: 'claimed', id, claimToken } }
 }
 
 /**
@@ -235,17 +254,32 @@ export async function claimAnalysis(
  * so a failure can never be read back as a success -- and the released claim
  * leaves no state behind, which is what keeps the next attempt an ordinary
  * first attempt rather than a retry that has to reason about old rows.
+ *
+ * AND BOTH PATHS NAME THE TOKEN. A request whose claim was reclaimed while its
+ * model call was in flight is refused on the complete path and releases nothing
+ * on the release path, so it can neither overwrite the replacement's result nor
+ * delete the replacement's claim out from under it.
  */
 export async function settleAnalysis(
   db: SupabaseClient,
   input: {
     readonly id: string
+    /**
+     * The token this attempt was claimed with.
+     *
+     * REQUIRED, AND NOT OPTIONAL WITH A FALLBACK. An optional token would mean
+     * a caller that forgot it still settled the row, which is the behaviour
+     * this parameter exists to remove. The database refuses a null token too,
+     * so the two layers agree.
+     */
+    readonly claimToken: string
     readonly review: StatementReview | null
     readonly overall: number | null
   },
 ): Promise<AnalysisResult<'complete' | 'released'>> {
   const { data, error } = await db.rpc('settle_statement_analysis', {
     p_id: input.id,
+    p_token: input.claimToken,
     p_review: input.review,
     p_overall: input.overall,
   })
