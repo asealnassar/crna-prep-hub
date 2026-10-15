@@ -362,8 +362,19 @@ test('STARTING A DOCUMENT SENDS ONE ID AND NO SNAPSHOT', () => {
   assert.match(DIALOG, /setRequirementId\(id\)/)
   assert.match(DIALOG, /body: JSON\.stringify\(requirementDraftRequest\(title, requirementId\)\)/)
   const request = requirementDraftRequest('  My draft  ', REQUIREMENT)
-  assert.deepEqual(request, { title: 'My draft', requirementId: REQUIREMENT })
-  assert.deepEqual(Object.keys(request).sort(), ['requirementId', 'title'])
+  assert.deepEqual(request, { title: 'My draft', essay: '', requirementId: REQUIREMENT })
+  // THE POINT IS WHAT IS ABSENT, not how many keys there are. `essay: ''` joined
+  // the body because the server validates the essay on every create before it
+  // decides which kind of create this is, and omitting it made every
+  // requirement-backed create answer `invalid-essay` -- the bug this assertion
+  // is now written to let through while still refusing the dangerous keys.
+  assert.deepEqual(Object.keys(request).sort(), ['essay', 'requirementId', 'title'])
+  assert.equal(request.essay, '', 'a new draft starts empty')
+  for (const forbidden of ['promptId', 'snapshot', 'constraints', 'verification',
+    'promptText', 'statedMaxWords', 'schoolId', 'requirement']) {
+    assert.equal(forbidden in request, false,
+      `${forbidden} must never be submittable: the server resolves it from the catalog`)
+  }
 })
 
 test('a requirement and a prompt cannot both be held', () => {
@@ -380,10 +391,26 @@ test('the general path clears a chosen requirement', () => {
   assert.match(general, /setRequirementId\(null\)/)
 })
 
-test('THE OLDER PROMPT CATALOG STAYS REACHABLE from the checklist', () => {
-  assert.match(DIALOG, /const showListedPrompts = useCallback\(/)
-  assert.match(DIALOG, /onClick=\{\(\) => void showListedPrompts\(\)\}/)
+test('THE CHECKLIST ESCAPE LEAVES THE SCHOOL, it does not re-offer it', () => {
+  /*
+   * THIS TEST USED TO ASSERT THE OPPOSITE, and the opposite was the bug.
+   *
+   * The control fetched the SELECTED school's other catalog rows under the
+   * label "Looking for a different prompt?". An applicant who had chosen the
+   * wrong school read that as the way out, clicked it, and was handed more
+   * prompts from the school they were trying to leave.
+   *
+   * WHAT THIS COSTS, STATED: a school with rows in statement_prompts AND a
+   * published requirement set can no longer reach its legacy prompts from the
+   * checklist. Legacy prompts remain reachable for every school without a
+   * requirement set, because choosing a school asks for requirement sets first
+   * and falls back to prompts.
+   */
+  assert.match(DIALOG, /const backToSchoolChoice = useCallback\(/)
+  assert.match(DIALOG, /onClick=\{backToSchoolChoice\}/)
   assert.match(DIALOG, /NEW_DRAFT_MESSAGES\.otherPrompts/)
+  // The handler that stayed on the same school is gone, not merely unused.
+  assert.equal(DIALOG.includes('showListedPrompts'), false)
 })
 
 test('BACK FROM THE TITLE RETURNS TO THE CHECKLIST, not the prompt list', () => {
@@ -402,8 +429,20 @@ test('the checklist renders through the SAME component as the preview', () => {
 test('ONE DOCUMENT IS STARTED, NEVER A SCHOOL’S WHOLE SET', () => {
   // onStart takes one id. There is no loop over requirements that creates.
   assert.match(DIALOG, /onStart: startRequirement/)
-  const start = DIALOG.slice(DIALOG.indexOf('const startRequirement'),
-    DIALOG.indexOf('const showListedPrompts'))
+  /*
+    SLICED BETWEEN TWO ANCHORS THAT ARE ASSERTED TO EXIST.
+
+    This bounded on a handler that has since been removed; indexOf returned -1,
+    the slice ran to the end of the file, and the test failed on `.map(` in
+    unrelated code. A negative index silently widening the window is worse than
+    a missing anchor, so both ends are checked.
+  */
+  const from = DIALOG.indexOf('const startRequirement')
+  const to = DIALOG.indexOf('const backToSchoolChoice')
+  assert.notEqual(from, -1, 'startRequirement moved')
+  assert.notEqual(to, -1, 'the handler after it moved')
+  assert.ok(to > from, 'the slice must run forwards')
+  const start = DIALOG.slice(from, to)
   assert.doesNotMatch(start, /\.map\(|forEach|for \(/)
   assert.doesNotMatch(start, /fetch\(/)
 })

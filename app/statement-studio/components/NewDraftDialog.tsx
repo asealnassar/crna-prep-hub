@@ -10,7 +10,7 @@ import {
 } from '@/lib/statement/draft/library'
 import {
   EMPTY_PASTE,
-  NEW_DRAFT_MESSAGES,
+  NEW_DRAFT_MESSAGES, SCHOOL_CHOICE_RESET,
   canCreateNow,
   canCreatePasteNow,
   createRequestFor,
@@ -25,6 +25,13 @@ import {
   type NewDraftStep,
 } from '@/lib/statement/draft/newDraft'
 import { pasteOptionVisible, pasteSubmissionAllowed } from '@/lib/statement/draft/pastePreview'
+import {
+  REPORT_MESSAGES,
+  canReportNow,
+  emptyPromptChangeReport,
+  newPromptChangeRequest,
+  type PromptChangeReport,
+} from '@/lib/statement/draft/promptChangeReport'
 import {
   PICKER_MESSAGES,
   directoryNotice,
@@ -119,6 +126,16 @@ export default function NewDraftDialog({
   const [prompt, setPrompt] = useState<PromptChoice | null>(null)
   /** What the applicant has typed on the paste screen. null means not pasting. */
   const [pasted, setPasted] = useState<PastedPrompt | null>(null)
+  /**
+   * A report that one of this school's LISTED prompts has changed.
+   *
+   * SEPARATE STATE FROM `pasted`, not a field on it. The two are different
+   * claims with different bodies and different review screens, and a single
+   * object with a "kind" would let one screen's half-filled fields travel into
+   * the other's request -- which is how a report would arrive naming no
+   * requirement, or a new prompt would arrive challenging one.
+   */
+  const [report, setReport] = useState<PromptChangeReport | null>(null)
   const [query, setQuery] = useState('')
   const [prompts, setPrompts] = useState<readonly PromptChoice[] | null>(null)
   /**
@@ -172,6 +189,7 @@ export default function NewDraftDialog({
     setSchool(null)
     setPrompt(null)
     setPasted(null)
+    setReport(null)
     setQuery('')
     setPrompts(null)
     setPromptNotice(null)
@@ -333,45 +351,85 @@ export default function NewDraftDialog({
     setRequirementId(id)
     setPrompt(null)
     setPasted(null)
+    // STARTING THE DOCUMENT IS NOT REPORTING IT. An applicant who opened the
+    // report form, changed their mind and pressed Start must get the catalog's
+    // prompt -- so the report is dropped rather than carried into a create
+    // that would send it as a submission.
+    setReport(null)
     setPath('school')
     setMessage(null)
     setStep('title')
   }, [])
 
   /**
-   * Leave the checklist for this school's older catalog prompts.
+   * Report that one of this school's listed prompts has changed.
    *
-   * KEPT REACHABLE DELIBERATELY. A school may have rows in statement_prompts
-   * AND a published requirement set, and the prompt path is the shipped flow --
-   * it must not become unreachable because a newer catalog answered first.
+   * ONE ID, AND THE REST IS THE APPLICANT'S OWN. The requirement id is what
+   * makes this a report rather than a new prompt; the wording comes from the
+   * form, and nothing of OURS is sent -- the server resolves the challenged row
+   * from the catalog at review time, so a tampered client cannot make us
+   * compare against wording it supplied.
+   *
+   * THE REQUIREMENT SELECTION IS CLEARED. A report creates a draft on the
+   * applicant's OWN wording, which is a submission-backed draft: carrying a
+   * requirement id as well would send a body the server refuses, because a
+   * draft answers one question from one source.
+   *
+   * THE TITLE IS PRE-FILLED ONLY IF IT IS STILL EMPTY, and that is the one
+   * place in this dialog that writes the title. Reporting is a single screen --
+   * click, paste, submit -- and the draft still needs a name; taking the
+   * document's own label is the answer the applicant would have typed. A title
+   * they already typed is never overwritten.
    */
-  const showListedPrompts = useCallback(async () => {
-    if (school === null) return
+  const reportChange = useCallback((id: string) => {
+    setReport(emptyPromptChangeReport(id))
     setRequirementId(null)
-    setStep('prompt')
-    setPrompts(null)
-    setPromptNotice(PICKER_MESSAGES.loading)
-    setLoading(true)
-    try {
-      const response = await fetch(promptsPath(school.id))
-      const body = await response.json().catch(() => null)
-      if (!mayApplyPrompts({ requestedFor: school.id, browsingNow: browsing.current })) return
-      const outcome = promptListFrom({ status: response.status, body })
-      setLoading(false)
-      if (!outcome.ok) {
-        setPrompts(null)
-        setPromptNotice(outcome.message)
-        return
-      }
-      setPrompts(outcome.prompts)
-      setPromptNotice(outcome.prompts.length === 0 ? NEW_DRAFT_MESSAGES.noPrompts : null)
-    } catch {
-      if (!mayApplyPrompts({ requestedFor: school.id, browsingNow: browsing.current })) return
-      setLoading(false)
-      setPrompts(null)
-      setPromptNotice(PICKER_MESSAGES.failed)
-    }
-  }, [school])
+    setPrompt(null)
+    setPasted(null)
+    setPath('school')
+    setMessage(null)
+    setStep('report')
+    const label = (requirementSets ?? [])
+      .flatMap((set) => set.requirements)
+      .find((candidate) => candidate.id === id)?.label
+    if (label !== undefined) setTitle((current) => (current.trim() === '' ? label : current))
+  }, [requirementSets])
+
+  /**
+   * Leave this school entirely and go back to choosing one.
+   *
+   * ---------------------------------------------------------------------------
+   * IT USED TO STAY ON THE SAME SCHOOL
+   * ---------------------------------------------------------------------------
+   * The old handler set `step` to 'prompt' and fetched the SELECTED school's
+   * other catalog rows, under a label that read "Looking for a different
+   * prompt?". An applicant who had chosen the wrong school read that as the way
+   * out, clicked it, and was shown more prompts from the school they were
+   * trying to leave.
+   *
+   * EVERY FIELD THAT NAMES A SCHOOL OR A PROMPT IS CLEARED, from the one list
+   * in SCHOOL_CHOICE_RESET, so a field added to this dialog later cannot
+   * quietly survive the transition. The title is kept, as it is on every other
+   * move between screens.
+   */
+  const backToSchoolChoice = useCallback(() => {
+    setStep(SCHOOL_CHOICE_RESET.step)
+    setPath(SCHOOL_CHOICE_RESET.path)
+    setSchool(SCHOOL_CHOICE_RESET.school)
+    setPrompt(SCHOOL_CHOICE_RESET.prompt)
+    setPasted(SCHOOL_CHOICE_RESET.pasted)
+    setReport(SCHOOL_CHOICE_RESET.report)
+    setRequirementId(SCHOOL_CHOICE_RESET.requirementId)
+    setRequirementSets(SCHOOL_CHOICE_RESET.requirementSets)
+    setPrompts(SCHOOL_CHOICE_RESET.prompts)
+    setPromptNotice(SCHOOL_CHOICE_RESET.promptNotice)
+    setMessage(SCHOOL_CHOICE_RESET.message)
+    // IN-FLIGHT FETCHES MUST NOT LAND ON THE NEW SCREEN. The picker already
+    // guards results against the school they were requested for; clearing the
+    // marker is what makes a reply for the old school unapplicable.
+    browsing.current = null
+  }, [])
+
 
   /**
    * Abandon the school and write a general statement. THE TITLE IS KEPT: an
@@ -382,6 +440,7 @@ export default function NewDraftDialog({
     setPath('general')
     setPrompt(null)
     setPasted(null)
+    setReport(null)
     // A GENERAL STATEMENT ANSWERS NOTHING, so a requirement chosen a moment ago
     // must not survive into the create. Without this, an applicant who started
     // a document and then changed their mind would get a requirement-backed
@@ -394,6 +453,10 @@ export default function NewDraftDialog({
   const startPaste = useCallback(() => {
     setPrompt(null)
     setPasted(EMPTY_PASTE)
+    // A NEW PROMPT AND A REPORT ARE MUTUALLY EXCLUSIVE, and the submit()
+    // builder checks the report first -- so a stale report would send the
+    // wrong body entirely rather than merely looking wrong.
+    setReport(null)
     setStep('paste')
   }, [])
 
@@ -434,12 +497,17 @@ export default function NewDraftDialog({
     // KEYED ON THE ROLLOUT FLAG, NOT ON THE PREVIEW FLAG. pasteSubmissionAllowed
     // takes only `submissionsEnabled`, so even a preview forced on in a
     // deployed build could not open this path.
-    if (pasted !== null && !pasteSubmissionAllowed({ submissionsEnabled })) {
+    //
+    // A REPORT IS STOPPED BY THE SAME GATE. It is a submission -- the same
+    // table, the same function, the same rate limit -- so a build where the
+    // submission backend is off has nowhere to put one either.
+    if ((pasted !== null || report !== null)
+      && !pasteSubmissionAllowed({ submissionsEnabled })) {
       setMessage(NEW_DRAFT_MESSAGES.previewBlocked)
       return
     }
 
-    // FOUR SHAPES, FOUR BUILDERS, IN A FIXED ORDER OF PRECEDENCE.
+    // FIVE SHAPES, FIVE BUILDERS, IN A FIXED ORDER OF PRECEDENCE.
     //
     // A REQUIREMENT IS CHECKED FIRST, and it is the only branch that sends a
     // requirementId. It cannot be combined with a promptId -- the server
@@ -449,6 +517,13 @@ export default function NewDraftDialog({
     // THE PASTE IS CHECKED BEFORE THE PROMPT, unchanged: a pasted prompt must
     // never travel the promptId branch, which means "the catalog vouches for
     // this", and nobody has reviewed that wording yet.
+    //
+    // A REPORT IS CHECKED BEFORE THE PASTE, for the same reason one step
+    // further on: a report whose challenged id were dropped would arrive as an
+    // ordinary new prompt, and the administrator would see an apparent
+    // duplicate of their own row with nothing saying what it contradicts.
+    // `requirementId` is null on this path by construction -- reportChange
+    // clears it -- so the requirement branch above cannot swallow a report.
     if (requirementId !== null) {
       if (!canCreateRequirementNow({ title, requirementId, submitting })) {
         setMessage(NEW_DRAFT_MESSAGES.requirementTitleRequired)
@@ -485,7 +560,16 @@ export default function NewDraftDialog({
       return
     }
 
-    const request = pasted !== null
+    /*
+      THREE BUILDERS, CHECKED IN A FIXED ORDER, AND EACH PRODUCES A DIFFERENT
+      SHAPE. The report is asked first because it is the most specific claim --
+      a particular catalog row is wrong -- and because its body is the only one
+      that carries a challenged id. There is no shape a report and a paste can
+      both satisfy, which is why the handlers that set one clear the other.
+    */
+    const request = report !== null
+      ? newPromptChangeRequest(title, school === null ? null : school.id, report)
+      : pasted !== null
       ? newPastedDraftRequest(title, school === null ? null : school.id, pasted)
       : createRequestFor({ path, title, promptId: prompt === null ? null : prompt.id })
     if (!request.ok) {
@@ -538,7 +622,7 @@ export default function NewDraftDialog({
 
     inFlight.current = false
     setSubmitting(false)
-  }, [path, title, prompt, pasted, school, retryable, router, submissionsEnabled,
+  }, [path, title, prompt, pasted, report, school, retryable, router, submissionsEnabled,
       requirementId, submitting])
 
   if (!open) return null
@@ -551,7 +635,15 @@ export default function NewDraftDialog({
     none by design -- its identity is requirement_id. Routing it through the
     same gate would leave Create permanently disabled.
   */
-  const canSubmit = requirementId !== null
+  const canSubmit = report !== null
+    ? canReportNow({
+        title,
+        schoolId: school === null ? null : school.id,
+        report,
+        submitting,
+        retryable,
+      })
+    : requirementId !== null
     ? canCreateRequirementNow({ title, requirementId, submitting })
     : pasted !== null
     ? canCreatePasteNow({
@@ -571,7 +663,8 @@ export default function NewDraftDialog({
   /** Whether the school being browsed listed any approved prompt. */
   const hasPrompts = prompts !== null && prompts.length > 0
   /** A pasted prompt is on screen but the backend that would store it is off. */
-  const previewBlocked = pasted !== null && !pasteSubmissionAllowed({ submissionsEnabled })
+  const previewBlocked = (pasted !== null || report !== null)
+    && !pasteSubmissionAllowed({ submissionsEnabled })
   const pasteReady = canCreatePasteNow({
     title: 'placeholder',
     schoolId: school === null ? null : school.id,
@@ -590,6 +683,7 @@ export default function NewDraftDialog({
     : step === 'requirement' ? NEW_DRAFT_MESSAGES.chooseRequirement
     : step === 'prompt' ? NEW_DRAFT_MESSAGES.choosePrompt
     : step === 'paste' ? NEW_DRAFT_MESSAGES.pasteHeading
+    : step === 'report' ? REPORT_MESSAGES.heading
     : NEW_DRAFT_MESSAGES.nameDraft
 
   return (
@@ -732,6 +826,12 @@ export default function NewDraftDialog({
                   view={checklistView({ set, drafts: [] })}
                   actions={{
                     onStart: startRequirement,
+                    // THE CONTROL IS OFFERED HERE AND NOT IN THE EDITOR'S
+                    // PREVIEW, which renders the same component with no
+                    // handler: a preview that submitted reports would be
+                    // writing data from a screen whose purpose is to show the
+                    // owner what a card looks like.
+                    onReportChange: reportChange,
                     // UNREACHABLE FROM HERE: no card can be in the Continue
                     // state, because this screen is only shown while creating.
                     draftHref: () => '#',
@@ -747,7 +847,7 @@ export default function NewDraftDialog({
               */}
               <button
                 type="button"
-                onClick={() => void showListedPrompts()}
+                onClick={backToSchoolChoice}
                 className="justify-self-start text-sm font-semibold text-blue-700 underline underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
               >
                 {NEW_DRAFT_MESSAGES.otherPrompts}
@@ -806,6 +906,15 @@ export default function NewDraftDialog({
                   it. With nothing listed, pasting IS the next step, so it
                   looks like one -- and "start a general statement" stays below
                   it as the secondary way out. */}
+              {/* THE OFFER, BESIDE THE GAP. Shown only when there is nothing
+                  listed: with prompts on screen the invitation would be
+                  answering a question nobody asked. */}
+              {!loading && !hasPrompts
+                && pasteOptionVisible({ submissionsEnabled, pastePreview }) && (
+                <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                  {NEW_DRAFT_MESSAGES.noPromptsInvite}
+                </p>
+              )}
               {!loading && pasteOptionVisible({ submissionsEnabled, pastePreview }) && (
                 hasPrompts ? (
                   <button
@@ -887,40 +996,221 @@ export default function NewDraftDialog({
                     className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   />
                 </div>
-                <div>
-                  <label htmlFor={`${headingId}-cycle`} className="mb-1.5 block text-xs font-medium text-slate-600">
-                    Application cycle <span className="text-slate-400">(optional)</span>
+              </div>
+
+              {/*
+                SOURCE URL AND APPLICATION CYCLE ARE NOT ASKED FOR HERE.
+
+                They are catalog-administration metadata: which published page
+                a requirement was verified against, and which admissions cycle
+                it belongs to. An applicant pasting the prompt their school
+                emailed them has neither, and asking turned a two-field task
+                into a form that looked like data entry for somebody else.
+
+                THE COLUMNS STILL EXIST and stay nullable. An administrator
+                fills them in at review, where the question is answerable, and
+                where it has to be answered anyway before anything is published.
+              */}
+
+              {/*
+                EVERYTHING ELSE THE SCHOOL MAY HAVE SAID, BEHIND A DISCLOSURE.
+                
+                CLOSED BY DEFAULT, AND THAT IS THE DESIGN. An applicant holding
+                only the wording submits in two fields; an applicant holding a
+                page of instructions does not have to discard most of it. Nine
+                optional inputs on an open form would read as nine things to
+                find out, and the common case is that the school stated none of
+                them.
+                
+                NOTHING HERE ASKS FOR A CLASSIFICATION. There is no "is this
+                enforced or a target" control, because that is a judgement about
+                a school's wording and the applicant is reporting it, not making
+                it. The administrator decides during promotion, from this.
+              */}
+              <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50/60">
+                <summary className="cursor-pointer px-3.5 py-2.5 text-sm font-medium text-slate-700 marker:text-slate-400">
+                  Add more details from your application
+                  <span className="ml-1 text-slate-400">(optional)</span>
+                </summary>
+                <div className="border-t border-slate-200 px-3.5 py-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor={`${headingId}-label`} className="mb-1.5 block text-xs font-medium text-slate-600">
+                        Document title
+                      </label>
+                      <input
+                        id={`${headingId}-label`}
+                        type="text"
+                        value={pasted.documentLabel ?? ''}
+                        disabled={submitting}
+                        onChange={(event) => setPasted({
+                          ...pasted,
+                          documentLabel: event.target.value.trim() === ''
+                            ? null : event.target.value,
+                        })}
+                        placeholder="Personal Statement"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+                    <div>
+                      {/* FREE TEXT, NOT A SELECT OF OUR NINE VALUES. An
+                          applicant must not have to learn our taxonomy to say
+                          their school asked for a "Letter of Intent". */}
+                      <label htmlFor={`${headingId}-type`} className="mb-1.5 block text-xs font-medium text-slate-600">
+                        What kind of document
+                      </label>
+                      <input
+                        id={`${headingId}-type`}
+                        type="text"
+                        value={pasted.documentTypeHint ?? ''}
+                        disabled={submitting}
+                        onChange={(event) => setPasted({
+                          ...pasted,
+                          documentTypeHint: event.target.value.trim() === ''
+                            ? null : event.target.value,
+                        })}
+                        placeholder="Letter of intent, essay, goal statement…"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`${headingId}-minwords`} className="mb-1.5 block text-xs font-medium text-slate-600">
+                        Minimum words
+                      </label>
+                      <input
+                        id={`${headingId}-minwords`}
+                        type="number"
+                        min={1}
+                        max={5000}
+                        value={pasted.statedMinWords === null ? '' : pasted.statedMinWords}
+                        disabled={submitting}
+                        onChange={(event) => setPasted({
+                          ...pasted,
+                          statedMinWords: event.target.value.trim() === ''
+                            ? null : Number(event.target.value),
+                        })}
+                        placeholder="Not stated"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`${headingId}-chars`} className="mb-1.5 block text-xs font-medium text-slate-600">
+                        Character limit
+                      </label>
+                      <input
+                        id={`${headingId}-chars`}
+                        type="number"
+                        min={1}
+                        max={100000}
+                        value={pasted.statedMaxCharacters === null ? '' : pasted.statedMaxCharacters}
+                        disabled={submitting}
+                        onChange={(event) => setPasted({
+                          ...pasted,
+                          statedMaxCharacters: event.target.value.trim() === ''
+                            ? null : Number(event.target.value),
+                        })}
+                        placeholder="Not stated"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+                    <div>
+                      {/* step=0.1 BECAUSE A PAGE AND A HALF IS A REAL LIMIT.
+                          20261005_007 exists because an integer column read
+                          Boston College's 1.5 as nothing. */}
+                      <label htmlFor={`${headingId}-pages`} className="mb-1.5 block text-xs font-medium text-slate-600">
+                        Page limit
+                      </label>
+                      <input
+                        id={`${headingId}-pages`}
+                        type="number"
+                        min={0.1}
+                        max={99.9}
+                        step={0.1}
+                        value={pasted.statedMaxPages === null ? '' : pasted.statedMaxPages}
+                        disabled={submitting}
+                        onChange={(event) => setPasted({
+                          ...pasted,
+                          statedMaxPages: event.target.value.trim() === ''
+                            ? null : Number(event.target.value),
+                        })}
+                        placeholder="e.g. 1.5"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+                    <div>
+                      {/* AND THEIR OWN WORDS BESIDE IT, for everything a number
+                          cannot hold: "2 pages double-spaced", "1-2 pages". */}
+                      <label htmlFor={`${headingId}-pagestext`} className="mb-1.5 block text-xs font-medium text-slate-600">
+                        Or the length in their words
+                      </label>
+                      <input
+                        id={`${headingId}-pagestext`}
+                        type="text"
+                        value={pasted.statedPagesText ?? ''}
+                        disabled={submitting}
+                        onChange={(event) => setPasted({
+                          ...pasted,
+                          statedPagesText: event.target.value.trim() === ''
+                            ? null : event.target.value,
+                        })}
+                        placeholder="2 pages, double-spaced"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+                  </div>
+
+                  <label htmlFor={`${headingId}-formatting`} className="mb-1.5 mt-3 block text-xs font-medium text-slate-600">
+                    Formatting instructions
                   </label>
-                  <input
-                    id={`${headingId}-cycle`}
-                    type="text"
-                    value={pasted.applicationCycle ?? ''}
+                  <textarea
+                    id={`${headingId}-formatting`}
+                    rows={2}
+                    value={pasted.formattingInstructions ?? ''}
                     disabled={submitting}
                     onChange={(event) => setPasted({
                       ...pasted,
-                      applicationCycle: event.target.value.trim() === '' ? null : event.target.value,
+                      formattingInstructions: event.target.value.trim() === ''
+                        ? null : event.target.value,
                     })}
-                    placeholder="2026 or 2026-2027"
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    placeholder="Times New Roman 12pt, one-inch margins, double-spaced"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+
+                  <label htmlFor={`${headingId}-other`} className="mb-1.5 mt-3 block text-xs font-medium text-slate-600">
+                    Any other instructions
+                  </label>
+                  <textarea
+                    id={`${headingId}-other`}
+                    rows={2}
+                    value={pasted.otherInstructions ?? ''}
+                    disabled={submitting}
+                    onChange={(event) => setPasted({
+                      ...pasted,
+                      otherInstructions: event.target.value.trim() === ''
+                        ? null : event.target.value,
+                    })}
+                    placeholder="Upload as PDF, include your name in the header…"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+
+                  <label htmlFor={`${headingId}-note`} className="mb-1.5 mt-3 block text-xs font-medium text-slate-600">
+                    Note to CRNAPREPHUB
+                  </label>
+                  <textarea
+                    id={`${headingId}-note`}
+                    rows={2}
+                    value={pasted.submitterNote ?? ''}
+                    disabled={submitting}
+                    onChange={(event) => setPasted({
+                      ...pasted,
+                      submitterNote: event.target.value.trim() === ''
+                        ? null : event.target.value,
+                    })}
+                    placeholder="Where you found this, or anything we should know"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   />
                 </div>
-              </div>
-
-              <label htmlFor={`${headingId}-source`} className="mb-1.5 mt-3 block text-xs font-medium text-slate-600">
-                Source URL <span className="text-slate-400">(optional)</span>
-              </label>
-              <input
-                id={`${headingId}-source`}
-                type="url"
-                value={pasted.sourceUrl ?? ''}
-                disabled={submitting}
-                onChange={(event) => setPasted({
-                  ...pasted,
-                  sourceUrl: event.target.value.trim() === '' ? null : event.target.value,
-                })}
-                placeholder="https://"
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              />
+              </details>
 
               {/* THE NOTICE COMES BEFORE THE AGREEMENT, and says both halves:
                   the wording may be published, the writing never is. */}
@@ -947,6 +1237,161 @@ export default function NewDraftDialog({
                 Continue
               </button>
             </div>
+          )}
+
+          {/* ------------------------------- report that a listed prompt changed */}
+          {/*
+            ONE SCREEN: the row being reported, the applicant's wording, a name
+            and Submit. The paste flow is two screens because it collects nine
+            optional fields; a report collects one, and sending the applicant
+            through a second screen to type a title they can type here would be
+            a click bought with nothing.
+          */}
+          {step === 'report' && report !== null && (
+            <form
+              className="mt-5"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void submit()
+              }}
+            >
+              {school !== null && (
+                <p className="mb-3 truncate text-sm font-medium text-slate-600">
+                  {schoolLabel(school)}
+                </p>
+              )}
+              <p className="text-sm leading-relaxed text-slate-600">{REPORT_MESSAGES.body}</p>
+
+              {/*
+                WHAT WE CURRENTLY SAY, SHOWN FIRST AND READ-ONLY.
+
+                An applicant has to be able to see that they are reporting the
+                row they think they are -- a school with four documents has
+                four cards, and "this prompt has changed" is only meaningful
+                against a specific one. It is NOT an editable field: they are
+                not correcting our row, they are telling us theirs differs.
+
+                READ FROM THE SET IN STATE, and nothing of it is sent. The
+                request carries the requirement's id; the server resolves the
+                wording from the catalog when an administrator reviews it, so a
+                tampered client cannot choose what its report is compared
+                against.
+              */}
+              {(() => {
+                const reported = (requirementSets ?? [])
+                  .flatMap((set) => set.requirements)
+                  .find((candidate) => candidate.id === report.requirementId)
+                if (reported === undefined) return null
+                return (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      {REPORT_MESSAGES.currentHeading}
+                    </p>
+                    <p className="mt-1 text-sm font-bold text-slate-900">{reported.label}</p>
+                    <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                      {reported.promptText}
+                    </p>
+                  </div>
+                )
+              })()}
+
+              <label
+                htmlFor={`${headingId}-report`}
+                className="mb-2 mt-4 block text-sm font-medium text-slate-700"
+              >
+                {REPORT_MESSAGES.pastedHeading} <span className="text-rose-600">*</span>
+              </label>
+              {/* A plain textarea rendering escaped React text, as the paste
+                  form does. Nothing typed here is ever interpreted as markup. */}
+              <textarea
+                id={`${headingId}-report`}
+                rows={5}
+                value={report.promptText}
+                disabled={submitting}
+                onChange={(event) => setReport({ ...report, promptText: event.target.value })}
+                placeholder="Paste the question exactly as your school wrote it"
+                className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm leading-relaxed text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
+              />
+
+              {/*
+                NO SOURCE URL AND NO APPLICATION CYCLE ON THIS FORM, and no key
+                for either in the body newPromptChangeRequest builds.
+
+                The paste form leaves them out because an applicant does not
+                have them. A report leaves them out for a stronger reason: the
+                school, the document and the cycle are already recorded on the
+                row being reported, and asking again invites a second answer to
+                a question we have already answered.
+              */}
+
+              <label
+                htmlFor={`${headingId}-report-title`}
+                className="mb-1.5 mt-4 block text-sm font-medium text-slate-700"
+              >
+                Draft name <span className="text-rose-600">*</span>
+              </label>
+              <input
+                id={`${headingId}-report-title`}
+                ref={field}
+                type="text"
+                value={title}
+                disabled={submitting}
+                onChange={(event) => setTitle(event.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
+              />
+              {/*
+                THE SAME COUNTER THE TITLE SCREEN SHOWS, AND NO maxLength.
+                A title over the limit is REFUSED, never silently shortened --
+                so the applicant has to be able to see that it is too long.
+              */}
+              <p className="mt-1.5 text-xs text-slate-500">
+                {trimmed > MAX_TITLE_CHARS
+                  ? `${trimmed} characters. Use ${MAX_TITLE_CHARS} or fewer.`
+                  : `${trimmed}/${MAX_TITLE_CHARS}`}
+              </p>
+
+              {/* THE NOTICE BEFORE THE AGREEMENT, and it says both halves. */}
+              <p className="mt-5 rounded-xl border border-blue-200 bg-blue-50/60 px-4 py-3 text-xs leading-relaxed text-slate-700">
+                {REPORT_MESSAGES.notice}
+              </p>
+              <label className="mt-3 flex items-start gap-2.5 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={report.confirmed}
+                  disabled={submitting}
+                  onChange={(event) => setReport({ ...report, confirmed: event.target.checked })}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>{REPORT_MESSAGES.confirm}</span>
+              </label>
+
+              {/*
+                WHAT THE DRAFT WILL BE LABELLED, SAID BEFORE IT IS CREATED.
+                The applicant writes against their own wording immediately; the
+                catalog keeps saying what it says until somebody reviews this.
+              */}
+              <p className="mt-3 text-xs font-medium text-amber-800">{REPORT_MESSAGES.badge}</p>
+
+              {previewBlocked && (
+                <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-relaxed text-slate-600">
+                  {NEW_DRAFT_MESSAGES.previewExplainer}
+                </p>
+              )}
+              {message !== null && (
+                <p role="alert" className="mt-3 text-sm font-medium text-rose-700">{message}</p>
+              )}
+
+              <button
+                type="submit"
+                disabled={!canSubmit || previewBlocked}
+                title={previewBlocked ? NEW_DRAFT_MESSAGES.previewBlocked : undefined}
+                className="mt-5 w-full rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {previewBlocked
+                  ? NEW_DRAFT_MESSAGES.previewBlocked
+                  : submitting ? 'Creating…' : REPORT_MESSAGES.submit}
+              </button>
+            </form>
           )}
 
           {/* ------------------------------------------------- name and create */}

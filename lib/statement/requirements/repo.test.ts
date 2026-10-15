@@ -104,7 +104,12 @@ test('the column lists name only columns the migration creates', async () => {
       fileURLToPath(new URL(`../../../supabase/migrations/${name}`, import.meta.url)), 'utf8'))
     .join('\n')
     .replace(/^\s*--.*$/gm, '')
+  // THE STRING PROJECTIONS ONLY. `setColumns` is a function now, because the
+  // evidence columns are flag-gated and arrive in a later migration than the
+  // two read here; the entry beside it is the pre-011 projection this
+  // comparison is about.
   for (const columns of Object.values(REQUIREMENT_READ_COLUMNS)) {
+    if (typeof columns !== 'string') continue
     for (const column of columns.split(',').map((c) => c.trim())) {
       assert.ok(sql.includes(column), `${column} is not in the migration`)
     }

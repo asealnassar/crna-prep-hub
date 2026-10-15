@@ -118,10 +118,23 @@ export default function PromptPicker({
   const inFlight = useRef<AbortController | null>(null)
   const alive = useRef(true)
 
+  /**
+   * Liveness, asserted on EVERY mount and withdrawn on every unmount.
+   *
+   * THE SAME DEFECT THE STATEMENT EDITOR HAD. A cleanup with an empty effect
+   * body is run once by StrictMode's simulated unmount and never undone, so
+   * `alive` stayed false for the rest of the component's life and every reply
+   * below was discarded at `if (!alive.current) return` -- including the one
+   * that clears `loading`, which left the picker spinning for ever on a list
+   * that had already arrived.
+   */
   useEffect(
-    () => () => {
-      alive.current = false
-      inFlight.current?.abort()
+    () => {
+      alive.current = true
+      return () => {
+        alive.current = false
+        inFlight.current?.abort()
+      }
     },
     []
   )

@@ -71,8 +71,15 @@ expected_req_cols(ord, col, typ, nullable) as (
     (10, 'min_characters',            'integer',  'YES'),
     (11, 'max_characters',            'integer',  'YES'),
     (12, 'characters_include_spaces', 'boolean',  'YES'),
-    (13, 'min_pages',                 'integer',  'YES'),
-    (14, 'max_pages',                 'integer',  'YES'),
+    -- 'integer|numeric' BECAUSE MIGRATION 007 WIDENS THESE TWO. 005 creates
+    -- them as integer; 007 makes them numeric(4,1) so Boston College's
+    -- 1.5-page limit can be stored exactly. Both readings are correct
+    -- depending on how far the migration sequence has run. Pinning only
+    -- integer made this file report FAIL on a database where an approved later
+    -- migration had landed, which trains an operator to ignore its verdicts.
+    -- Migration 007's own postcheck asserts the exact numeric(4,1).
+    (13, 'min_pages',                 'integer|numeric', 'YES'),
+    (14, 'max_pages',                 'integer|numeric', 'YES'),
     (15, 'page_spacing',              'text',     'YES'),
     (16, 'font_size_pt',              'integer',  'YES'),
     (17, 'font_family',               'text',     'YES'),
@@ -111,7 +118,8 @@ checks as (
          coalesce(c.data_type, 'absent') || coalesce(' / nullable=' || c.is_nullable, ''),
          format('%s / nullable=%s', e.typ, e.nullable),
          case when c.column_name is null then 'FAIL -- column missing'
-              when c.data_type <> e.typ then 'FAIL -- wrong type'
+              when c.data_type <> all(string_to_array(e.typ, '|'))
+                then 'FAIL -- wrong type'
               when c.is_nullable <> e.nullable then 'FAIL -- wrong nullability'
               else 'PASS' end
     from expected_set_cols e
@@ -125,7 +133,8 @@ checks as (
          coalesce(c.data_type, 'absent') || coalesce(' / nullable=' || c.is_nullable, ''),
          format('%s / nullable=%s', e.typ, e.nullable),
          case when c.column_name is null then 'FAIL -- column missing'
-              when c.data_type <> e.typ then 'FAIL -- wrong type'
+              when c.data_type <> all(string_to_array(e.typ, '|'))
+                then 'FAIL -- wrong type'
               when c.is_nullable <> e.nullable then 'FAIL -- wrong nullability'
               else 'PASS' end
     from expected_req_cols e

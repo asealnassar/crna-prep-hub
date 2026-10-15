@@ -1,7 +1,7 @@
 import { AUTHENTICITY_CONTRACT } from '../prompts.ts'
 import { RUBRIC, categoriesFor } from './rubric.ts'
 import {
-  characterCount, hasAdvisoryLength, isStrict, unmeasurableKinds,
+  analyzerUnmeasuredKinds, characterCount, hasAdvisoryLength, isStrict,
 } from '../requirements/constraints.ts'
 import {
   constraintLines, labelledConstraints, statedWordings,
@@ -306,7 +306,7 @@ This school states that it reads only up to its stated limit and that anything b
 
   // WHAT THE SCHOOL STATED THAT THIS SYSTEM DID NOT MEASURE, named one by one
   // so the model cannot treat silence as permission to estimate.
-  const unmeasured = requirement === null ? [] : unmeasurableKinds(requirement.constraints)
+  const unmeasured = requirement === null ? [] : analyzerUnmeasuredKinds(requirement.constraints)
   const unmeasuredLine = unmeasured.length === 0 ? '' : `
 This school also states requirements this system has NOT measured: ${
   constraintLines(requirement!.constraints).map(defuse).join('; ')}. Page count, line spacing, font and margins cannot be observed in a plain-text editor. Do not score them, do not estimate them, and do not convert any of them into a word count.`

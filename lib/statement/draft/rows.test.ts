@@ -158,6 +158,12 @@ test('row: a GENERIC row becomes a draft whose prompt fields are all null', () =
     userId: 'u1e2f3a4-0000-4000-8000-000000000002',
     title: 'Draft one',
     essay: 'Opening line.',
+    // 013: null for a row written before formatting existed, which is every
+    // row this fixture stands for.
+    editorDocument: null,
+    // 015: null for a row that has chosen no face, which means the Studio's
+    // own. Null rather than undefined, for the reason the prompt fields give.
+    documentFont: null,
     revision: 1,
     createdAt: '2026-09-28T12:00:00.000Z',
     updatedAt: '2026-09-28T12:00:00.000Z',

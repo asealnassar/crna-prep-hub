@@ -182,10 +182,25 @@ test('a complete submission normalises its optional fields', () => {
   assert.equal(checked.ok, true)
   assert.deepEqual(checked.ok && checked.input, {
     schoolId: SCHOOL,
+    // A SUBMISSION THAT DOES NOT SAY IS A NEW PROMPT. 012 adds the kind; an
+    // absent one defaults rather than refusing, so every caller written before
+    // reports existed keeps working and a report has to declare itself.
+    kind: 'new-prompt',
+    challengedRequirementId: null,
     promptText: good.promptText,
     statedMaxWords: 500,
     applicationCycle: '2026',
     sourceUrl: 'https://example.edu/a',
+    // 20261006_008: every one unsupplied here, and every one explicitly null.
+    documentLabel: null,
+    documentTypeHint: null,
+    statedMinWords: null,
+    statedMaxCharacters: null,
+    statedMaxPages: null,
+    statedPagesText: null,
+    formattingInstructions: null,
+    otherInstructions: null,
+    submitterNote: null,
   })
 })
 

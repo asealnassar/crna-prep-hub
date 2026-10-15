@@ -29,7 +29,9 @@ import {
   NO_CONSTRAINTS, type Citation, type Constraints, type PageLimit, type Spacing,
   type StatedLength, isStrict, parseEnforcement,
 } from './constraints.ts'
-import { UNVERIFIED, isIsoDate, type Verification, type VerificationStatus } from './verification.ts'
+import {
+  UNVERIFIED, evidenceKindFrom, isIsoDate, type Verification, type VerificationStatus,
+} from './verification.ts'
 import {
   isDocumentType, type DocumentType, type RequirementComponent, type RequirementSet,
   type WritingRequirement,
@@ -205,6 +207,19 @@ function posInt(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
 }
 
+/**
+ * A positive number that NEED NOT BE WHOLE. Pages only.
+ *
+ * WORDS AND CHARACTERS KEEP posInt. Half a word is not a thing a school states,
+ * so a fractional word count in a snapshot is corruption and reading it as
+ * absent is right. A fractional PAGE count is a real requirement -- Boston
+ * College states one and a half -- and posInt would silently read it as no
+ * limit, which is the one outcome worse than refusing the row.
+ */
+function posPageNum(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
 function nullableBool(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null
 }
@@ -245,8 +260,8 @@ function parseConstraints(value: unknown): Constraints {
   const spacing: Spacing | null =
     spacingRaw === 'single' || spacingRaw === 'double' ? spacingRaw : null
   const pages: PageLimit | null = pagesRaw == null ? null : {
-    min: posInt(pagesRaw.min),
-    max: posInt(pagesRaw.max),
+    min: posPageNum(pagesRaw.min),
+    max: posPageNum(pagesRaw.max),
     spacing,
     enforcement: parseEnforcement(pagesRaw.enforcement),
     statedAs: str(pagesRaw.statedAs),
@@ -259,6 +274,17 @@ function parseConstraints(value: unknown): Constraints {
     marginsInches: typeof typoRaw.marginsInches === 'number' && typoRaw.marginsInches > 0
       ? typoRaw.marginsInches
       : null,
+    /*
+      PERMITTED-VALUE SETS, COMPARED AS SETS.
+
+      A snapshot is what the draft was written against, and it is compared with
+      the live requirement to detect drift. Two orderings of one permission are
+      the same permission, so they are normalised on the way in -- otherwise a
+      requirement that was never edited could read as changed purely because an
+      array came back in a different order.
+    */
+    fontFamilyOptions: snapshotTextOptions(typoRaw.fontFamilyOptions),
+    fontSizePtOptions: snapshotIntOptions(typoRaw.fontSizePtOptions),
   }
 
   const citeRaw = raw.citation as Record<string, unknown> | null | undefined
@@ -289,6 +315,9 @@ function parseConstraints(value: unknown): Constraints {
       ? { text: unenforcedText, verbatim: unenforcedObject?.verbatim === true }
       : null
   return {
+    // CARRIED IN THE SNAPSHOT, so a draft keeps the layout it was written
+    // against even if the catalog entry is edited afterwards.
+    formatProfile: str(raw.formatProfile),
     words, characters, pages, typography, citation,
     unenforcedLength,
     otherInstructions: strings(raw.otherInstructions),
@@ -310,6 +339,10 @@ function parseVerification(value: unknown): Verification {
     sourceUrl: str(raw.sourceUrl),
     verifiedOn: isIsoDate(raw.verifiedOn) ? raw.verifiedOn : null,
     verbatim: raw.verbatim === true,
+    // THE SNAPSHOT'S OWN VALUE, for the same reason the catalog parser reads
+    // it: a draft started against an approved submission must still say so
+    // when it is reopened. See QA-001.
+    evidenceKind: evidenceKindFrom(raw.evidenceKind),
   }
 }
 
@@ -340,6 +373,27 @@ function parseComponents(value: unknown): readonly RequirementComponent[] {
  * state as a school that stated none -- and is safe, because no limit is ever
  * enforced.
  */
+
+/** A permitted-family set from a snapshot, trimmed, deduplicated and ordered. */
+function snapshotTextOptions(raw: unknown): readonly string[] | null {
+  if (!Array.isArray(raw)) return null
+  const out = raw
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+  if (out.length < 2) return null
+  return [...new Set(out)].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+}
+
+/** A permitted-size set from a snapshot, deduplicated and ascending. */
+function snapshotIntOptions(raw: unknown): readonly number[] | null {
+  if (!Array.isArray(raw)) return null
+  const out = raw.filter((value): value is number =>
+    typeof value === 'number' && Number.isInteger(value) && value > 0)
+  if (out.length < 2) return null
+  return [...new Set(out)].sort((a, b) => a - b)
+}
+
 export function parseRequirementSnapshot(value: unknown): RequirementSnapshot | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>

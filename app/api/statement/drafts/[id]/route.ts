@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { statementDbClient } from '@/lib/statement/devMode/guardedClient'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
 import {
   STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
 } from '@/lib/statement/studioGate'
 import { checkDraftUpdate, promptSelectionOf } from '@/lib/statement/draft/validate'
+import {
+  constrainDocument, documentMatchesEssay,
+} from '@/lib/statement/layout/plainText'
+import { EDITOR_DOCUMENT_VERSION } from '@/lib/statement/draft/editor'
+import { studioFontFor } from '@/lib/statement/layout/studioFonts'
 import { deleteDraft, readDraft, updateDraft } from '@/lib/statement/draft/draftRepo'
 import type { PromptWrite } from '@/lib/statement/draft/draftRepo'
 import { readActivePrompt } from '@/lib/statement/draft/promptRepo'
@@ -96,14 +102,13 @@ async function admit(): Promise<Caller | NextResponse> {
   const token = await readAccessToken()
   if (!token) return NextResponse.json(UNAUTHENTICATED_BODY, { status: 401 })
 
-  const db = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      auth: { autoRefreshToken: false, persistSession: false },
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    },
-  )
+  // THE VERIFIED SESSION'S OWN ANSWER, passed for simulated-live only: the
+  // local stand-in for the submission functions has no auth.uid() to read.
+  // Production ignores it. Nothing here comes from the request body.
+  const db = statementDbClient(token, {
+    userId: auth.userId,
+    isAdmin: isAdminEmail(auth.email),
+  })
   return { userId: auth.userId, db }
 }
 
@@ -242,6 +247,31 @@ export async function PATCH(request: NextRequest, context: Context): Promise<Nex
     )
   }
 
+  /*
+    THE EDITOR DOCUMENT, AND THE INVARIANT IT LIVES UNDER.
+
+    `essay` is the canonical text: the analyser reads it, the counters count
+    it and the fingerprint is taken over it. `editorDocument` holds one extra
+    fact -- which characters are bold -- and it may NEVER disagree about the
+    characters themselves. A body claiming essay "ABC" with a document that
+    spells something else would leave the applicant assessed on text they
+    cannot see.
+
+    REFUSED HERE, ON THE SERVER. The browser checks it too so an obviously
+    bad body costs no round trip, but a guarantee about stored data cannot
+    live in a client.
+
+    ABSENT IS FINE, AND COMMON: the plain textarea sends no document, and a
+    draft keeps whatever it had.
+  */
+  const document = documentFrom(shape.body)
+  if (document instanceof NextResponse) return document
+
+  // THE FONT, after the document, so the refusal order the tests pin is
+  // unchanged: a body wrong in both ways still reports the document's code.
+  const font = fontFrom(shape.body)
+  if (font instanceof NextResponse) return font
+
   // THE PROMPT, after the document, so the refusal order above is unchanged: a
   // body wrong in both ways still reports the document's code.
   const prompt = await promptFor(caller.db, shape.body)
@@ -251,12 +281,81 @@ export async function PATCH(request: NextRequest, context: Context): Promise<Nex
   // body. THREE ARGUMENTS WHEN THE BODY SAID NOTHING, so an ordinary autosave
   // takes the identical code path it took before prompt selection existed and
   // cannot touch a stored snapshot even by accident.
+  const input = {
+    ...checked.input,
+    ...(document ?? {}),
+    ...(font ?? {}),
+  }
   const saved = prompt === undefined
-    ? await updateDraft(caller.db, id, checked.input)
-    : await updateDraft(caller.db, id, checked.input, prompt)
+    ? await updateDraft(caller.db, id, input)
+    : await updateDraft(caller.db, id, input, prompt)
   if (!saved.ok) return failed(saved)
 
   return NextResponse.json({ draft: publicDraft(saved.value) })
+}
+
+/**
+ * The constrained document from a body, or a refusal.
+ *
+ * THREE OUTCOMES, AND THEY ARE DIFFERENT. Absent means "this surface has no
+ * formatting, leave the stored document alone". Present and consistent is
+ * stored. Present and inconsistent with the essay is refused outright -- it is
+ * not silently dropped, because a caller that sent a document meant to store
+ * one, and quietly keeping the old formatting over new text would be its own
+ * kind of wrong.
+ *
+ * CONSTRAINED BEFORE IT IS COMPARED, so a document carrying marks this build
+ * does not know is reduced to what it can store and judged on that -- the
+ * same reduction the editor applies.
+ */
+function documentFrom(
+  body: Record<string, unknown>,
+): { editorDocument: unknown; editorDocumentVersion: number } | undefined | NextResponse {
+  const raw = body.editorDocument
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return NextResponse.json(
+      validationBody('invalid-essay', undefined), { status: statusForValidation('invalid-essay') })
+  }
+  const constrained = constrainDocument(raw)
+  const essay = typeof body.essay === 'string' ? body.essay : ''
+  if (!documentMatchesEssay(constrained, essay)) {
+    return NextResponse.json(
+      validationBody('invalid-essay', undefined), { status: statusForValidation('invalid-essay') })
+  }
+  return { editorDocument: constrained, editorDocumentVersion: EDITOR_DOCUMENT_VERSION }
+}
+
+/**
+ * The chosen face from a body, or a refusal.
+ *
+ * ---------------------------------------------------------------------------
+ * CHECKED AGAINST THE FACES THIS BUILD SHIPS, NOT AGAINST A FAMILY NAME
+ * ---------------------------------------------------------------------------
+ * A family the Studio does not bundle renders from whatever the reader's
+ * machine happens to have, so the page count -- the thing this whole feature
+ * exists to report -- would depend on who was looking. studioFontFor() is the
+ * same registry the renderer resolves with, so a value that reaches the
+ * database is a value the Studio can actually draw.
+ *
+ * THREE STATES, AS THE COLUMN HAS THREE. Absent leaves the stored preference
+ * alone, which is what every keystroke's autosave sends; null is an explicit
+ * return to the Studio default; an id selects that face.
+ *
+ * THE DATABASE REFUSES IT TOO. 20261013_015 carries a CHECK over the same
+ * list, so a row written by anything other than this route is bounded as well.
+ */
+function fontFrom(
+  body: Record<string, unknown>,
+): { documentFont: string | null } | undefined | NextResponse {
+  if (!('documentFont' in body)) return undefined
+  const raw = body.documentFont
+  if (raw === null) return { documentFont: null }
+  if (typeof raw !== 'string' || studioFontFor(raw) === null) {
+    return NextResponse.json(
+      { error: 'That font is not available.', code: 'invalid-font' }, { status: 400 })
+  }
+  return { documentFont: raw }
 }
 
 /** Deletes one draft. Explicit user deletion; no soft delete. */

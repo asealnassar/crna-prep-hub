@@ -4,7 +4,7 @@ import {
   STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
 } from '@/lib/statement/studioGate'
 import { extractDocument, type DocumentRefusal } from '@/lib/statement/extract/extractDocument'
-import { MAX_EXTRACTED_CHARS, MAX_SAVED_CHARS, MAX_UPLOAD_BYTES } from '@/lib/statement/extract/limits'
+import { MAX_EXTRACTED_CHARS, MAX_UPLOAD_BYTES, maxSavedChars } from '@/lib/statement/extract/limits'
 
 /**
  * Turn one uploaded document into text. Nothing else.
@@ -282,7 +282,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     text: outcome.text,
     characters: outcome.characters,
     saveable: outcome.saveable,
-    maxSavedCharacters: MAX_SAVED_CHARS,
+    maxSavedCharacters: maxSavedChars(),
     maxCharacters: MAX_EXTRACTED_CHARS,
     ...(outcome.pages === undefined ? {} : { pages: outcome.pages }),
   }

@@ -444,7 +444,7 @@ test('only one extraction can be in flight, and none retries itself', () => {
 
 test('an import is an EDIT, not a second persistence path', () => {
   const handler = handlerBody
-  assert.match(handler, /type: 'edited', at: Date\.now\(\)/)
+  assert.match(handler, /markEdited\(\)/)
   // It never patches, never validates saveability itself, and never forces a save.
   for (const forbidden of [/method: 'PATCH'/, /statementSaveRequest|saveAttemptFor/, /type: 'flush'/, /type: 'save-started'/]) {
     assert.doesNotMatch(handler, forbidden, `${forbidden} belongs to the driver`)
@@ -479,7 +479,13 @@ test('editing is blocked by a CONFLICT only, never by a terminal failure', () =>
   assert.match(CLIENT, /readOnly=\{conflicted\}/)
   assert.doesNotMatch(CLIENT, /readOnly=\{status\.frozen\}/)
   assert.doesNotMatch(CLIENT, /disabled=\{status\.frozen\}/)
-  assert.equal(CLIENT.split('readOnly={conflicted}').length - 1, 2, 'both title and essay')
+  // TWO SURFACES NOW: the title, and the one editor every draft writes in --
+  // the plain textarea is gone, because choosing an EDITING surface from a
+  // layout fact is what made Bold come and go by school. Pinned rather than
+  // dropped: the property is that every editable surface is keyed on the
+  // conflict.
+  assert.equal(CLIENT.split('readOnly={conflicted}').length - 1, 2,
+    'the title and the editor')
 })
 
 test('the file input is a plain input, reset every time, and keeps no bytes', () => {

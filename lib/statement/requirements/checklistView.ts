@@ -22,7 +22,7 @@
 
 import { liveCounts, type LiveCount } from './constraints.ts'
 import {
-  constraintSummary, labelledConstraints, showUnmeasuredNotice, statedWordings,
+  constraintSummary, labelledConstraints, statedWordings,
   truncationNotice, unenforcedLengthIsVerbatim, unenforcedLengthNotice,
   type LabelledConstraint,
 } from './constraintText.ts'
@@ -30,7 +30,7 @@ import {
   DOCUMENT_TYPE_LABELS, checklist, requiredDocumentCount, type ChecklistEntry,
   type RequirementSet, type WritingRequirement,
 } from './requirement.ts'
-import { VERIFICATION_NOTICES, needsVerificationWarning, textAttribution } from './verification.ts'
+import { evidenceNotice, textAttribution } from './verification.ts'
 
 /** A draft the applicant already has, as far as this screen cares. */
 export interface StartedDraft {
@@ -66,7 +66,6 @@ export interface RequirementCard {
   readonly questions: readonly QuestionView[]
   readonly constraints: readonly LabelledConstraint[]
   readonly constraintSummary: string
-  readonly showUnmeasuredNotice: boolean
   /**
    * The school's own sentences about length, verbatim.
    *
@@ -162,6 +161,8 @@ function cardFor(
     .filter((draft) => draft.requirementId === requirement.id)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
 
+  const chips = labelledConstraints(requirement.constraints)
+
   return {
     requirementId: requirement.id,
     label: requirement.label,
@@ -170,9 +171,23 @@ function cardFor(
     questions: requirement.components.map((part) => ({
       id: part.id, text: part.text, optional: part.optional,
     })),
-    constraints: labelledConstraints(requirement.constraints),
+    /*
+      SAID ONCE, NOT TWICE.
+
+      EVERY manual requirement is already one of these chips -- the describer
+      emits a line for each constraint field the capability resolver can call
+      manual -- and this card carried a sentence restating them underneath:
+      "APA citation and reference formatting" as a chip, then "Check in your
+      final document: APA citation and reference formatting" directly below.
+      Eleven cards printed the same text twice.
+
+      So the sentence is gone and the chips are the single presentation. What
+      the sentence was for -- saying that nobody here checks these -- is the
+      LABEL ON THE GROUP they are rendered in, which says it once per card
+      however many such requirements a school stated. See constraintChips.tsx.
+    */
+    constraints: chips,
     constraintSummary: constraintSummary(requirement.constraints),
-    showUnmeasuredNotice: showUnmeasuredNotice(requirement.constraints),
     statedWordings: statedWordings(requirement.constraints),
     truncationNotice: truncationNotice(requirement.constraints),
     unenforcedLengthNotice: unenforcedLengthNotice(requirement.constraints),
@@ -223,9 +238,14 @@ export function checklistView(input: {
     // cannot report "3 of 2 started", which is the kind of arithmetic that
     // makes a reader distrust everything else on the screen.
     startedCount: rows.filter((row) => rowRequired(row) && rowStarted(row)).length,
-    verificationNotice: needsVerificationWarning(input.set.verification)
-      ? VERIFICATION_NOTICES[input.set.verification.status]
-      : null,
+    /*
+      ONE FUNCTION DECIDES THE SENTENCE, and it reads the evidence as well as
+      the status. Keying on the status alone put the `verified` reassurance --
+      "Confirmed against the school's published materials" -- into the warning
+      slot for a set published from an applicant's submission, which is the
+      opposite of what the reader needed to know.
+    */
+    verificationNotice: evidenceNotice(input.set.verification),
     textAttribution: textAttribution(input.set.verification),
     notes: input.set.notes,
     originalText: input.set.originalText,

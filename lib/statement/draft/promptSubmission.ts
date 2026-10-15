@@ -35,6 +35,23 @@ export const MAX_STATED_MAX_WORDS = 5000
  */
 export const MAX_SOURCE_URL_CHARS = 2000
 
+/**
+ * The ceilings 20261006_008 enforces, restated here so a submission is refused
+ * in the route rather than by the database.
+ *
+ * THESE ARE NOT THE CANONICAL COLUMNS' LIMITS. A submission is a report; the
+ * catalog is reviewed data. The numbers match the migration exactly, and a test
+ * reads both so they cannot drift.
+ */
+export const MAX_DOCUMENT_LABEL_CHARS = 200
+export const MAX_TYPE_HINT_CHARS = 120
+export const MAX_PAGES_TEXT_CHARS = 200
+export const MAX_INSTRUCTION_CHARS = 2000
+export const MAX_SUBMITTER_NOTE_CHARS = 1000
+export const MAX_STATED_CHARACTERS = 100_000
+/** numeric(4,1): one decimal place, and a page limit is never zero. */
+export const MAX_STATED_PAGES = 99.9
+
 /** 'YYYY' or 'YYYY-YYYY', the same pattern statement_prompts_cycle_format uses. */
 const CYCLE = /^[0-9]{4}(-[0-9]{4})?$/
 
@@ -105,6 +122,25 @@ export type SubmissionRefusal =
   | 'invalid-source'
   | 'invalid-school'
   | 'not-confirmed'
+  // ---- 20261006_008: what else the applicant could tell us ----------------
+  // ONE CODE PER FIELD, not one code for "the extras". The form shows the
+  // message beside the field that caused it, and a shared code would put it
+  // beside the wrong one.
+  | 'invalid-label'
+  | 'invalid-type-hint'
+  | 'invalid-min-words'
+  | 'word-bounds-reversed'
+  | 'invalid-max-characters'
+  | 'invalid-pages'
+  | 'invalid-pages-text'
+  | 'invalid-formatting'
+  | 'invalid-other-instructions'
+  | 'invalid-note'
+  // ---- 20261008_012: a report that an existing catalog row is out of date -
+  // ONE CODE FOR THE PAIR, because the pair is what is wrong: a report with
+  // nothing to compare against, or a new prompt pointing at a row it is not
+  // about. Neither half is meaningful on its own.
+  | 'invalid-challenged-requirement'
 
 /**
  * The wording, exactly as pasted.
@@ -224,12 +260,131 @@ export function normalizedPromptText(text: string): string {
 }
 
 /** A complete, storable submission. */
+/**
+ * What a submission is FOR.
+ *
+ * ---------------------------------------------------------------------------
+ * A REPORT IS NOT A NEW PROMPT
+ * ---------------------------------------------------------------------------
+ * "Here is a prompt you do not have" and "the prompt you have is out of date"
+ * are different claims, reviewed differently. An applicant who sends the
+ * second as the first loses the one fact that matters most -- which existing
+ * row it contradicts -- and an administrator sees an apparent duplicate with
+ * no explanation.
+ *
+ * RECORDED, NEVER INFERRED. Nothing guesses that a submission is a report
+ * because its text resembles an existing row.
+ */
+export type SubmissionKind = 'new-prompt' | 'prompt-change'
+
+export const SUBMISSION_KINDS: readonly SubmissionKind[] =
+  ['new-prompt', 'prompt-change'] as const
+
+export function isSubmissionKind(value: unknown): value is SubmissionKind {
+  return (SUBMISSION_KINDS as readonly unknown[]).includes(value)
+}
+
 export interface PromptSubmissionInput {
   readonly schoolId: string
+  /** Defaults to a new prompt; a report must say so. */
+  readonly kind: SubmissionKind
+  /**
+   * The catalog row a report contradicts. Required for 'prompt-change' and
+   * forbidden for 'new-prompt' -- the pair is checked, not assumed.
+   */
+  readonly challengedRequirementId: string | null
   readonly promptText: string
   readonly statedMaxWords: number | null
   readonly applicationCycle: string | null
   readonly sourceUrl: string | null
+  // ---- 20261006_008 ------------------------------------------------------
+  // ALL OPTIONAL, AND null MEANS "THEY DID NOT SAY". Not zero, not '', and
+  // never inferred from another field: an administrator reading the review
+  // screen has to be able to tell the difference between a school that stated
+  // no page limit and an applicant who did not mention one.
+  readonly documentLabel: string | null
+  /** Their words for the kind of document. Never our nine-value taxonomy. */
+  readonly documentTypeHint: string | null
+  readonly statedMinWords: number | null
+  readonly statedMaxCharacters: number | null
+  /** A clean number, when they gave one. numeric(4,1), so 1.5 survives. */
+  readonly statedMaxPages: number | null
+  /** Their own wording for a page limit, for everything a number cannot hold. */
+  readonly statedPagesText: string | null
+  readonly formattingInstructions: string | null
+  readonly otherInstructions: string | null
+  readonly submitterNote: string | null
+}
+
+/**
+ * One optional free-text field, as given.
+ *
+ * NOT TRIMMED INTO STORAGE, for the reason checkSubmittedPromptText gives: a
+ * school's own line breaks are part of their instructions. Only the emptiness
+ * test reads the trimmed form.
+ *
+ * BLANK BECOMES null, NEVER ''. An empty string would render as a
+ * present-but-blank field on the review screen, which reads as "the applicant
+ * answered this" when they did not -- and 008's CHECK refuses it anyway.
+ */
+export function checkOptionalText(
+  value: unknown,
+  max: number,
+  code: SubmissionRefusal,
+): { ok: true; text: string | null } | { ok: false; code: SubmissionRefusal } {
+  if (value === undefined || value === null) return { ok: true, text: null }
+  if (typeof value !== 'string') return { ok: false, code }
+  if (value.trim().length === 0) return { ok: true, text: null }
+  // Code points, matching Postgres char_length(); see checkSubmittedPromptText.
+  if ([...value].length > max) return { ok: false, code }
+  return { ok: true, text: value }
+}
+
+/** An optional whole number inside a range. Blank means "they did not say". */
+export function checkOptionalInteger(
+  value: unknown,
+  min: number,
+  max: number,
+  code: SubmissionRefusal,
+): { ok: true; value: number | null } | { ok: false; code: SubmissionRefusal } {
+  if (value === undefined || value === null) return { ok: true, value: null }
+  if (typeof value === 'string') {
+    if (value.trim().length === 0) return { ok: true, value: null }
+    return { ok: false, code }
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value)) return { ok: false, code }
+  if (value < min || value > max) return { ok: false, code }
+  return { ok: true, value }
+}
+
+/**
+ * An optional page count.
+ *
+ * NOT checkOptionalInteger, AND THAT IS THE WHOLE POINT. 20261005_007 exists
+ * because an integer column read Boston College's page and a half as NULL, and
+ * an integer VALIDATOR would refuse 1.5 outright -- which is worse: the
+ * applicant would be told their school's real instruction is invalid.
+ *
+ * SO IT ACCEPTS ONE DECIMAL PLACE, matching numeric(4,1), and refuses anything
+ * finer rather than rounding it. A value the database would round is a value
+ * this application would be storing something other than what it was given.
+ */
+export function checkStatedPages(
+  value: unknown,
+): { ok: true; pages: number | null } | { ok: false; code: SubmissionRefusal } {
+  if (value === undefined || value === null) return { ok: true, pages: null }
+  if (typeof value === 'string') {
+    if (value.trim().length === 0) return { ok: true, pages: null }
+    return { ok: false, code: 'invalid-pages' }
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return { ok: false, code: 'invalid-pages' }
+  }
+  if (value <= 0 || value > MAX_STATED_PAGES) return { ok: false, code: 'invalid-pages' }
+  // numeric(4,1) holds one decimal place. 1.5 passes; 1.55 is refused rather
+  // than silently stored as 1.6.
+  if (Math.round(value * 10) !== value * 10) return { ok: false, code: 'invalid-pages' }
+  return { ok: true, pages: value }
 }
 
 export type PromptSubmissionCheck =
@@ -257,6 +412,21 @@ export function checkPromptSubmission(input: {
   readonly applicationCycle?: unknown
   readonly sourceUrl?: unknown
   readonly confirmed?: unknown
+  // ---- 20261006_008, every one optional -----------------------------------
+  readonly documentLabel?: unknown
+  readonly documentTypeHint?: unknown
+  readonly statedMinWords?: unknown
+  readonly statedMaxCharacters?: unknown
+  readonly statedMaxPages?: unknown
+  readonly statedPagesText?: unknown
+  readonly formattingInstructions?: unknown
+  readonly otherInstructions?: unknown
+  readonly submitterNote?: unknown
+  // ---- 20261008_012 -------------------------------------------------------
+  // ABSENT MEANS 'new-prompt', so every existing caller keeps working and a
+  // report has to declare itself.
+  readonly kind?: unknown
+  readonly challengedRequirementId?: unknown
 }): PromptSubmissionCheck {
   if (!isPromptId(input.schoolId)) return { ok: false, code: 'invalid-school' }
 
@@ -272,18 +442,96 @@ export function checkPromptSubmission(input: {
   const source = checkSourceUrl(input.sourceUrl)
   if (!source.ok) return { ok: false, code: source.code }
 
+  // ---- what else they could tell us -------------------------------------
+  // EVERY ONE OPTIONAL AND EVERY ONE CHECKED. The required field is the
+  // wording; the rest are a convenience for the applicant and evidence for the
+  // reviewer, so an unusable value is refused rather than dropped -- a silently
+  // discarded page limit is worse than a refused one.
+  const label = checkOptionalText(
+    input.documentLabel, MAX_DOCUMENT_LABEL_CHARS, 'invalid-label')
+  if (!label.ok) return { ok: false, code: label.code }
+
+  const typeHint = checkOptionalText(
+    input.documentTypeHint, MAX_TYPE_HINT_CHARS, 'invalid-type-hint')
+  if (!typeHint.ok) return { ok: false, code: typeHint.code }
+
+  const minWords = checkOptionalInteger(
+    input.statedMinWords, MIN_STATED_MAX_WORDS, MAX_STATED_MAX_WORDS, 'invalid-min-words')
+  if (!minWords.ok) return { ok: false, code: minWords.code }
+
+  // A MINIMUM ABOVE ITS MAXIMUM DESCRIBES NOTHING, and 008 refuses it. Checked
+  // here so the applicant is told which pair disagrees rather than meeting a
+  // database error.
+  if (minWords.value !== null && words.words !== null && minWords.value > words.words) {
+    return { ok: false, code: 'word-bounds-reversed' }
+  }
+
+  const maxCharacters = checkOptionalInteger(
+    input.statedMaxCharacters, 1, MAX_STATED_CHARACTERS, 'invalid-max-characters')
+  if (!maxCharacters.ok) return { ok: false, code: maxCharacters.code }
+
+  const pages = checkStatedPages(input.statedMaxPages)
+  if (!pages.ok) return { ok: false, code: pages.code }
+
+  const pagesText = checkOptionalText(
+    input.statedPagesText, MAX_PAGES_TEXT_CHARS, 'invalid-pages-text')
+  if (!pagesText.ok) return { ok: false, code: pagesText.code }
+
+  const formatting = checkOptionalText(
+    input.formattingInstructions, MAX_INSTRUCTION_CHARS, 'invalid-formatting')
+  if (!formatting.ok) return { ok: false, code: formatting.code }
+
+  const other = checkOptionalText(
+    input.otherInstructions, MAX_INSTRUCTION_CHARS, 'invalid-other-instructions')
+  if (!other.ok) return { ok: false, code: other.code }
+
+  const note = checkOptionalText(
+    input.submitterNote, MAX_SUBMITTER_NOTE_CHARS, 'invalid-note')
+  if (!note.ok) return { ok: false, code: note.code }
+
   // An exact boolean. A missing, truthy-but-not-true or string value is not
   // consent, and consent is the one field a caller must not be able to imply.
   if (input.confirmed !== true) return { ok: false, code: 'not-confirmed' }
+
+  /*
+    THE KIND AND ITS TARGET ARE CHECKED AS A PAIR.
+
+    A report with nothing to compare against cannot be reviewed, and a new
+    prompt carrying a challenged id would be a report nobody labelled as one.
+    Defaulting an absent kind to 'new-prompt' keeps every existing caller
+    working; a report has to say that it is one.
+  */
+  const kind: SubmissionKind = isSubmissionKind(input.kind) ? input.kind : 'new-prompt'
+  const challengedRaw = input.challengedRequirementId
+  const challenged = typeof challengedRaw === 'string' && challengedRaw.trim() !== ''
+    ? challengedRaw.trim()
+    : null
+  if (kind === 'prompt-change' && challenged === null) {
+    return { ok: false, code: 'invalid-challenged-requirement' }
+  }
+  if (kind === 'new-prompt' && challenged !== null) {
+    return { ok: false, code: 'invalid-challenged-requirement' }
+  }
 
   return {
     ok: true,
     input: {
       schoolId: input.schoolId,
+      kind,
+      challengedRequirementId: challenged,
       promptText: text.text,
       statedMaxWords: words.words,
       applicationCycle: cycle.cycle,
       sourceUrl: source.url,
+      documentLabel: label.text,
+      documentTypeHint: typeHint.text,
+      statedMinWords: minWords.value,
+      statedMaxCharacters: maxCharacters.value,
+      statedMaxPages: pages.pages,
+      statedPagesText: pagesText.text,
+      formattingInstructions: formatting.text,
+      otherInstructions: other.text,
+      submitterNote: note.text,
     },
   }
 }

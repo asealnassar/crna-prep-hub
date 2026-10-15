@@ -1,10 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { UNMEASURED_NOTICE } from '@/lib/statement/requirements/constraints'
 import {
   progressLabel, type ChecklistRow, type ChecklistView, type RequirementCard,
 } from '@/lib/statement/requirements/checklistView'
+import { REPORT_MESSAGES } from '@/lib/statement/draft/promptChangeReport'
+import { ConstraintChips } from './constraintChips'
 
 /**
  * A school's writing requirements as a checklist of cards.
@@ -34,6 +35,14 @@ export interface ChecklistActions {
   readonly onStart: (requirementId: string) => void
   /** Where an existing draft lives. */
   readonly draftHref: (draftId: string) => string
+  /**
+   * Called with the requirement a report is about.
+   *
+   * ABSENT MEANS THE CONTROL IS NOT OFFERED, which is how the development
+   * preview and any surface with nothing to report to leave it out rather
+   * than rendering a button that does nothing.
+   */
+  readonly onReportChange?: (requirementId: string) => void
   /** True while a creation request is in flight, so buttons can be disabled. */
   readonly busy?: boolean
   /**
@@ -56,22 +65,9 @@ function LimitChips({ card }: { card: RequirementCard }) {
       <p className="mt-3 text-xs font-medium text-slate-500">{card.constraintSummary}</p>
     )
   }
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-1.5">
-      {card.constraints.map((limit) => (
-        <span
-          key={`${limit.kind}-${limit.text}`}
-          className={limit.measured
-            // Solid: the editor is watching this number.
-            ? 'rounded-md bg-slate-900 px-2 py-0.5 text-[11px] font-semibold text-white'
-            // Outlined: stated by the school, not checked here.
-            : 'rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-medium text-slate-600'}
-        >
-          {limit.text}
-        </span>
-      ))}
-    </div>
-  )
+  // ONE RENDERER, SHARED WITH THE EDITOR PANEL. See constraintChips.tsx for
+  // why each requirement is shown once and what the grouping says.
+  return <ConstraintChips limits={card.constraints} />
 }
 
 function Card({
@@ -141,10 +137,18 @@ function Card({
 
       <LimitChips card={card} />
 
-      {/* THE NOTICE SITS WITH THE CHIPS IT EXPLAINS, not at the foot of the page. */}
-      {card.showUnmeasuredNotice && (
-        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{UNMEASURED_NOTICE}</p>
-      )}
+      {/*
+        NO SENTENCE UNDER THE CHIPS ANY MORE.
+
+        Two sentences stood here in turn. The first claimed this product could
+        not check page count, spacing, font or margins, which stopped being
+        true when the Studio began laying out the page. The second named only
+        the fields a human still had to handle -- and was a verbatim second
+        copy of the chips directly above it on every card that had one.
+
+        WHAT BOTH WERE TRYING TO SAY IS NOW THE GROUP LABEL inside
+        LimitChips, said once per card, naming no requirement twice.
+      */}
 
       {card.started !== null && (
         <p className="mt-3 text-xs text-slate-500">
@@ -154,14 +158,64 @@ function Card({
         </p>
       )}
 
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="mt-3 text-xs font-semibold text-blue-700 underline underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-      >
-        {expanded ? 'Hide the prompt' : 'Read the prompt'}
-      </button>
+      {/*
+        THE CARD'S ACTION ROW: what to read, and what to tell us.
+
+        ---------------------------------------------------------------------
+        THEY USED TO RUN INTO EACH OTHER
+        ---------------------------------------------------------------------
+        Both were bare underlined text with a small top margin and nothing
+        between them, so at most widths the card read
+        "Report: This Prompt Has ChangedRead the prompt" -- one sentence made
+        of two controls, with no way to tell where one target ended and the
+        next began.
+
+        So they are a row of their own, fenced off by a rule, and they are not
+        the same KIND of thing any more:
+
+          * Read the prompt is the ordinary action on this card. It is a
+            button with a border and a touch-sized target, because almost
+            everyone who touches this row wants to read the question.
+          * Reporting a change is rare and consequential, so it is quiet, and
+            it is on its own line with real space above it -- never beside the
+            primary action, where adjacency is what caused this.
+
+        STACKED AT EVERY WIDTH. A row that becomes two lines on a narrow screen
+        is a row that can concatenate again; this one is a column, and the
+        space between the two is a gap rather than a margin that can collapse.
+      */}
+      <div className="mt-4 grid justify-items-start gap-2 border-t border-slate-200 pt-3">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+        >
+          {expanded ? 'Hide the prompt' : 'Read the prompt'}
+        </button>
+
+        {/*
+          REPORTING A CHANGED PROMPT, ON EVERY DOCUMENT THAT HAS ONE.
+
+          A school rewrites its prompt and the catalog keeps showing last
+          year's. Submitting it as a NEW prompt loses the one fact that matters
+          -- which row it contradicts -- and reaches an administrator looking
+          like an unexplained duplicate.
+
+          ABSENT, NOT DISABLED, WHERE THERE IS NOWHERE TO SEND IT: the preview
+          surfaces pass no handler and render no control.
+        */}
+        {actions.onReportChange !== undefined && (
+          <button
+            type="button"
+            onClick={() => actions.onReportChange?.(card.requirementId)}
+            disabled={actions.busy === true}
+            className="rounded-lg px-1 py-1.5 text-left text-[11px] font-semibold text-slate-500 underline underline-offset-2 transition hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:opacity-50"
+          >
+            {REPORT_MESSAGES.action}
+          </button>
+        )}
+      </div>
 
       {expanded && (
         <div className="mt-3 border-t border-slate-200 pt-3">

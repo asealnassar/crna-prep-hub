@@ -241,9 +241,18 @@ test('every failure after the attempt settles the usage', () => {
   const code = stripTs(ROUTE)
   // A failed model call, unparseable JSON and a rejected shape each settle, so
   // an attempt is never left open.
-  assert.match(code, /settleStatementUsage\(caller\.db, usageId, 'failed'\)/)
-  assert.equal((code.match(/settleStatementUsage\(caller\.db, usageId, 'rejected'\)/g) ?? []).length, 2)
-  assert.match(code, /settleStatementUsage\(caller\.db, usageId, 'proposed'\)/)
+  //
+  // THROUGH ONE HELPER, which is the only thing that reaches the ledger. That
+  // is what makes "a request that recorded no attempt settles nothing" a
+  // property of this route rather than of a shared function's first line.
+  assert.match(code, /await settleUsage\('failed'\)/)
+  assert.equal((code.match(/await settleUsage\('rejected'\)/g) ?? []).length, 2)
+  assert.match(code, /await settleUsage\('proposed'\)/)
+  assert.match(code,
+    /const settleUsage = async \(outcome: 'proposed' \| 'rejected' \| 'failed'\)/)
+  assert.match(code, /if \(usageId === null\) return/)
+  // Exactly one call site for the ledger function itself: the helper's own.
+  assert.equal((code.match(/settleStatementUsage\(/g) ?? []).length, 1)
 })
 
 test('no new pricing: the existing analyse operation is recorded', () => {

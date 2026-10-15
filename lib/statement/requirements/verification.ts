@@ -68,6 +68,56 @@ export interface Verification {
   readonly verifiedOn: string | null
   /** True only when the stored text is the school's own words, unaltered. */
   readonly verbatim: boolean
+  /**
+   * What an active entry was published on.
+   *
+   * ---------------------------------------------------------------------------
+   * TWO KINDS OF EVIDENCE ARE NOT ONE KIND
+   * ---------------------------------------------------------------------------
+   * An entry checked against the school's own published page and an entry
+   * published from an applicant's submission are both "verified" in the sense
+   * that somebody took responsibility for them. They are not equally reliable,
+   * and an applicant deciding how much to trust a prompt needs to know which
+   * one they are looking at.
+   *
+   * Migration 011 widened what may stand as evidence so that a submitted
+   * prompt can be published at all. Widening it is only safe while the
+   * difference stays visible, which is what this field is for: it is stored,
+   * never inferred, and the interface reads it.
+   *
+   * 'official-source' IS THE DEFAULT for every row that says nothing, because
+   * that is what every row written before 011 was.
+   */
+  readonly evidenceKind: EvidenceKind
+}
+
+/** Where an active entry's authority comes from. */
+export type EvidenceKind = 'official-source' | 'admin-approved-submission'
+
+/**
+ * The evidence kind a stored or transmitted row is actually claiming.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE PARSER, BECAUSE EVERY COPY OF THIS DECISION WAS A PLACE IT COULD BE LOST
+ * ---------------------------------------------------------------------------
+ * Four modules rebuilt a Verification from untrusted data and three of them
+ * wrote `evidenceKind: 'official-source'` as a literal, discarding whatever the
+ * row said. The browser proof was the New Draft dialog: the API returned
+ * `admin-approved-submission`, the view layer handles it correctly, and the
+ * client's own parser overwrote it one hop earlier -- so an applicant's
+ * approved submission was presented as "Confirmed against the school's
+ * published materials".
+ *
+ * THE DEFAULT IS FOR ABSENCE, NOT FOR DOUBT. Every row written before
+ * migration 011 has no such column, and those rows ARE official-source
+ * research. A value that is present but unrecognised is a different thing: it
+ * was written by something this build does not understand, and it is not
+ * evidence this build may describe. It gets the same answer as absence here
+ * and is prevented from becoming a claim by textAttribution, which requires a
+ * real source URL before it will say anything was checked against a school.
+ */
+export function evidenceKindFrom(value: unknown): EvidenceKind {
+  return value === 'admin-approved-submission' ? 'admin-approved-submission' : 'official-source'
 }
 
 /** Research with no source and no date: what a spreadsheet row becomes. */
@@ -76,6 +126,7 @@ export const UNVERIFIED: Verification = {
   sourceUrl: null,
   verifiedOn: null,
   verbatim: false,
+  evidenceKind: 'official-source',
 }
 
 /**
@@ -90,10 +141,25 @@ export const UNVERIFIED: Verification = {
  * including a malformed date and an entry whose sources conflict.
  */
 export function activatableForApplicants(verification: Verification): boolean {
-  return verification.status === 'verified'
-    && typeof verification.sourceUrl === 'string'
-    && verification.sourceUrl.length > 0
-    && isIsoDate(verification.verifiedOn)
+  if (verification.status !== 'verified') return false
+  if (!isIsoDate(verification.verifiedOn)) return false
+  /*
+    TWO KINDS OF EVIDENCE, AS 20261008_011'S CHECK STATES THEM.
+
+    THIS USED TO DEMAND A SOURCE URL FROM EVERY SET, which was right while
+    official-source was the only kind of evidence and became wrong the moment a
+    prompt could be published from an applicant's submission. Such a set has no
+    source URL and never will -- that is what makes it the other kind -- so this
+    judged it unactivatable, needsVerificationWarning() went true, and the
+    reader was shown the WARNING slot filled with the `verified` sentence:
+    "Confirmed against the school's published materials on the date shown."
+
+    A reassurance in the warning position, about a set whose wording nobody
+    checked against any published page. The rule is widened here to match the
+    database's, and the sentence it produces is chosen by evidenceNotice().
+  */
+  if (verification.evidenceKind === 'admin-approved-submission') return true
+  return typeof verification.sourceUrl === 'string' && verification.sourceUrl.length > 0
 }
 
 /** YYYY-MM-DD, and a real calendar date. */
@@ -111,6 +177,33 @@ export function isIsoDate(value: unknown): value is string {
  * summary a quotation.
  */
 export function textAttribution(verification: Verification): string {
+  /*
+    AN APPROVED SUBMISSION SAYS SO, FIRST.
+
+    "Quoted from the school's application materials" is a claim about where the
+    words came from, and for a published submission it is one nobody has
+    checked: the wording came from an applicant, and CRNAPREPHUB approved it
+    without seeing the school's own page. Saying that plainly is the price of
+    being able to publish these at all.
+  */
+  if (verification.evidenceKind === 'admin-approved-submission') {
+    return verification.verbatim
+      ? 'Submitted by an applicant as their school’s wording, and approved by '
+        + 'CRNAPREPHUB. Not checked against the school’s own published page.'
+      : 'Submitted by an applicant and approved by CRNAPREPHUB. Not checked '
+        + 'against the school’s own published page.'
+  }
+  /*
+    AND NOTHING HERE READS sourceUrl, DELIBERATELY.
+
+    This function answers "whose words are these" -- verbatim or summary. How
+    much anyone has CONFIRMED them is the notice's question, and
+    activatableForApplicants already refuses to activate an official-source row
+    with no source URL, so such a row carries its warning there. Folding the
+    two together was tried and made a paraphrase from a sourceless research row
+    stop describing itself as a paraphrase, which is a different claim going
+    missing.
+  */
   return verification.verbatim
     ? 'Quoted from the school’s application materials.'
     : 'A summary of published requirements, not the school’s exact wording.'
@@ -119,6 +212,39 @@ export function textAttribution(verification: Verification): string {
 /** Whether a reader must be warned before they read a requirement as fact. */
 export function needsVerificationWarning(verification: Verification): boolean {
   return !activatableForApplicants(verification)
+}
+
+/**
+ * What to tell a reader about where this requirement came from, or null.
+ *
+ * ---------------------------------------------------------------------------
+ * THE NOTICE CANNOT BE KEYED ON `status` ALONE
+ * ---------------------------------------------------------------------------
+ * VERIFICATION_NOTICES answers "how confident is anyone that this is current",
+ * and for 'verified' its answer is a reassurance. That is the right sentence
+ * for a set checked against a school's own page and the wrong one for a set
+ * published from an applicant's submission -- which is equally "verified" in
+ * the sense that somebody took responsibility, and not at all verified in the
+ * sense the sentence means.
+ *
+ * So evidence is consulted first, and it produces its own sentence rather than
+ * borrowing one. An unverified or conflicting set still gets its own notice,
+ * because those are statements about currency and apply whatever the evidence
+ * was.
+ *
+ * NULL MEANS SAY NOTHING, which is the common case: a verified set with a
+ * source URL needs no caveat beyond the attribution line.
+ */
+export function evidenceNotice(verification: Verification): string | null {
+  if (verification.evidenceKind === 'admin-approved-submission') {
+    return 'This prompt was submitted by an applicant and approved by CRNAPREPHUB. '
+      + 'It has not been checked against the school’s own published page — confirm '
+      + 'it in your own application materials.'
+  }
+  if (needsVerificationWarning(verification)) {
+    return VERIFICATION_NOTICES[verification.status]
+  }
+  return null
 }
 
 /**

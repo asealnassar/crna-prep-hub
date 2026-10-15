@@ -47,6 +47,15 @@ export type DocumentType =
   | 'diversity-statement'
   | 'writing-sample'
   | 'additional-response'
+  // ADDED BY MIGRATION 007, because the verified research contains all three and
+  // the importer refused five documents rather than mislabel them. Each is a
+  // name a school actually uses, not a synonym this product invented: a
+  // Statement of Purpose is not a Goal Statement in every school's usage, and
+  // collapsing them would overwrite a classification a human made from the
+  // school's own page. 'other' remains the escape hatch for everything else.
+  | 'statement-of-purpose'
+  | 'autobiographical-essay'
+  | 'supplemental-essay'
   | 'other'
 
 export const DOCUMENT_TYPE_LABELS: Readonly<Record<DocumentType, string>> = {
@@ -55,6 +64,9 @@ export const DOCUMENT_TYPE_LABELS: Readonly<Record<DocumentType, string>> = {
   'diversity-statement': 'Diversity Statement',
   'writing-sample': 'Writing Sample',
   'additional-response': 'Additional Response',
+  'statement-of-purpose': 'Statement of Purpose',
+  'autobiographical-essay': 'Autobiographical Essay',
+  'supplemental-essay': 'Supplemental Essay',
   other: 'Writing Requirement',
 }
 

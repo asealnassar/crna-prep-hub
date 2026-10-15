@@ -271,7 +271,7 @@ test('route: the existing analyzer and page are untouched by this feature', () =
   const analyzer = read('../../../../app/api/analyze-statement/route.ts')
   assert.equal(analyzer.includes('statement/extract'), false, 'the analyzer now references the new library')
   assert.equal(analyzer.includes('extractDocument'), false)
-  const page = read('../../../../app/personal-statement/page.tsx')
+  const page = read('../../../../app/personal-statement/PersonalStatementAnalyzer.tsx')
   assert.equal(page.includes('/api/statement/extract'), false, 'the page now calls the new endpoint')
 })
 

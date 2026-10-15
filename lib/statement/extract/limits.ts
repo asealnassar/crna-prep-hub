@@ -27,13 +27,108 @@
  * refused under the other. The prototype was built and measured against this
  * value; the largest synthetic fixture is 3,911,780 bytes, under both.
  */
+import { simulatedLiveEnabled } from '../devMode/gate.ts'
+
 export const MAX_UPLOAD_BYTES = 4_000_000
 
 /** Approved: the most extracted text that may be held for editing. */
 export const MAX_EXTRACTED_CHARS = 50_000
 
-/** Approved: the most that may be SAVED as a statement. */
+/**
+ * Approved: the most that may be SAVED as a statement.
+ *
+ * THE VALUE THE DATABASE ACTUALLY ENFORCES TODAY, from
+ * 20260928_000's statement_drafts_essay_length. Read it through
+ * maxSavedChars() rather than directly: the ceiling moves with migration 016,
+ * and a client that refused at a different number than the database would
+ * either reject saveable work or let an unsaveable write leave the machine.
+ */
 export const MAX_SAVED_CHARS = 20_000
+
+/**
+ * The ceiling once 20261013_016 is applied.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY IT HAD TO MOVE
+ * ---------------------------------------------------------------------------
+ * The catalog publishes a requirement the old ceiling could not hold.
+ * University of Tennessee Knoxville asks for up to 18,000 characters
+ * EXCLUDING spaces; the column counts what is stored, which includes them.
+ * Prose at exactly that maximum measures 18,000 excluding spaces and 22,287
+ * stored -- so an applicant writing to their school's published limit could
+ * not save at all.
+ *
+ * 30,000 is read off the catalog, not chosen for roundness: the worst case
+ * each kind of bound can demand is ~24,000 (18,000 excluding spaces with
+ * three-letter words), ~22,800 (five single-spaced pages at the Studio's own
+ * geometry) and ~7,000 (the largest word maximum, 1,000 words). It clears all
+ * three and stays under MAX_EXTRACTED_CHARS, so extraction can still deliver
+ * more than a draft may hold and be refused explicitly.
+ */
+export const EXPANDED_SAVED_CHARS = 30_000
+
+/**
+ * Which ceiling is in force.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ANSWER IS ABOUT THE SCHEMA IN FRONT OF US, NOT ABOUT THE ENVIRONMENT
+ * ---------------------------------------------------------------------------
+ * There are three situations and only two answers:
+ *
+ *   simulated live       the local JSON store stands in for the table, and it
+ *                        emulates the POST-016 CHECK. 30,000.
+ *   the real database,   whatever NODE_ENV says, the column still holds
+ *   016 not applied      statement_drafts_essay_length at 20,000. 20,000.
+ *   016 applied          the flag is turned on deliberately, once, by whoever
+ *                        applied it. 30,000.
+ *
+ * THE MIDDLE CASE IS WHY THIS IS NOT KEYED ON NODE_ENV. A first version of
+ * this function answered 30,000 for `development` alone -- so a dev server run
+ * with STATEMENT_SIMULATED_LIVE=off, which talks to the real database, would
+ * have accepted 30,000 characters from the applicant and then had PostgREST
+ * refuse them mid-save. That is precisely the failure validate.ts exists to
+ * prevent: "nothing the database would refuse is accepted here".
+ *
+ * FAILS CLOSED, like every other unapplied-migration flag: anything but the
+ * exact string 'on' is off.
+ *
+ * THE ENV IS THREADED THROUGH so a test can ask all three questions without
+ * mutating process.env.
+ */
+export const DRAFT_LENGTH_CEILING_ENV = 'STATEMENT_DRAFT_LENGTH_CEILING'
+
+export function maxSavedChars(env: NodeJS.ProcessEnv = process.env): number {
+  if (env[DRAFT_LENGTH_CEILING_ENV] === 'on') return EXPANDED_SAVED_CHARS
+  if (simulatedLiveEnabled(env)) return EXPANDED_SAVED_CHARS
+  return MAX_SAVED_CHARS
+}
+
+/**
+ * A ceiling the SERVER resolved, as the browser must read it.
+ *
+ * ---------------------------------------------------------------------------
+ * THE BROWSER MUST NOT INFER WHICH SCHEMA IS BEHIND THE API
+ * ---------------------------------------------------------------------------
+ * maxSavedChars() answers from the environment, and the environment is a
+ * server fact. Inside the client bundle the env object it is handed carries
+ * neither NODE_ENV nor the simulated-live opt-out, so it answered 20,000 while
+ * the server accepted 30,000: the editor refused to send an essay that met the
+ * school's published maximum and that the API would have stored. That is the
+ * whole of QA-004, and no amount of guessing in the browser is the fix -- the
+ * client is told the number by the side that knows it.
+ *
+ * FAILS CLOSED, and this is the parser's reason for existing. A value that is
+ * missing, malformed, not finite, below the floor or above what this build
+ * knows how to honour becomes MAX_SAVED_CHARS -- the ceiling every schema has
+ * had. A client that cannot read the capability refuses more than the server
+ * would, never less.
+ */
+export function ceilingFromServer(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return MAX_SAVED_CHARS
+  if (!Number.isInteger(value)) return MAX_SAVED_CHARS
+  if (value < MAX_SAVED_CHARS || value > EXPANDED_SAVED_CHARS) return MAX_SAVED_CHARS
+  return value
+}
 
 // ---------------------------------------------------------------------------
 // The worker budget.

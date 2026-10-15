@@ -123,6 +123,10 @@ export default function Sidebar({ isLoggedIn, userEmail, isAdmin, onCollapsedCha
     // can still be built and previewed; everyone else sees a "Coming Soon" row.
     { href: '/lessons', label: 'Learning Modules', icon: BookOpen, group: 'Build', requiresAuth: false, comingSoon: !isAdmin },
     { href: '/gpa-calculator', label: 'GPA Calculator', icon: Calculator, group: 'Build', requiresAuth: false },
+    // IN DEVELOPMENT THIS ROW ALREADY LEADS TO THE STUDIO, without naming it:
+    // /personal-statement redirects there on a development server. One
+    // mechanism rather than two, and this file stays byte-identical to what
+    // production renders.
     { href: '/personal-statement', label: 'Personal Statement', icon: FileText, group: 'Build', requiresAuth: false },
     { href: '/resume-builder', label: 'Resume Builder', icon: FileUser, group: 'Build', requiresAuth: false },
     { href: '/pricing', label: 'Pricing', icon: Gem, group: 'Account', requiresAuth: false },

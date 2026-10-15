@@ -13,3 +13,17 @@ node_modules
 *.save
 # Local TypeScript incremental build cache
 tsconfig.tsbuildinfo
+
+# The imported requirement catalog, generated for LOCAL REVIEW ONLY by
+# scripts/build_statement_requirements_import_sql.py. This repository is public
+# and these 63 sets are inactive in production and not released, so committing
+# them would publish a catalog nobody has approved for publication. Regenerate
+# it instead; it is reproducible from the research previews.
+local-review/
+
+# next-pwa build output. next.config.js sets `dest: 'public'`, so a production
+# build drops a service worker and its workbox runtime into public/ -- which is
+# otherwise a tracked directory, so `git add -A` would commit them. They are
+# generated, hashed per build, and have never been tracked.
+public/sw.js
+public/workbox-*.js

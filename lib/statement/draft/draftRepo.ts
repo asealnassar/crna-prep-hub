@@ -46,7 +46,9 @@ import { draftFromRow, draftSummaryFromRow } from './rows.ts'
 import type {
   StatementDraft, StatementDraftRow, StatementDraftSummary, StatementDraftSummaryRow,
 } from './rows.ts'
-import { requirementsEnabled } from './rollout.ts'
+import {
+  documentFontEnabled, editorDocumentsEnabled, promptSubmissionsEnabled, requirementsEnabled,
+} from './rollout.ts'
 import { legacyProjection, type RequirementSnapshot } from '../requirements/snapshot.ts'
 
 const DRAFTS = 'statement_drafts'
@@ -83,9 +85,28 @@ const DRAFT_COLUMNS_BASE =
  * deployment can reason about.
  */
 function draftColumns(): string {
-  return requirementsEnabled()
+  const base = requirementsEnabled()
     ? `${DRAFT_COLUMNS_BASE}, requirement_id, requirement_snapshot`
     : DRAFT_COLUMNS_BASE
+  // AND prompt_submission_id ON ITS OWN FLAG, for the reason above: the column
+  // arrives with 20261002_001, and naming an absent column fails the whole
+  // request rather than degrading.
+  //
+  // WITHOUT IT A PASTED DRAFT CANNOT BE READ. draftPromptFrom admits a draft
+  // whose only id is a submission id; if the projection does not ask for that
+  // column the parser sees "not pasted", finds no id at all, and refuses the
+  // row -- which is how the editor lost the ability to open one.
+  const withSubmission = promptSubmissionsEnabled()
+    ? `${base}, prompt_submission_id` : base
+  // AND THE EDITOR DOCUMENT ON ITS OWN FLAG, same reason again: 013 adds the
+  // columns, and naming one PostgREST cannot find fails the whole read.
+  const withDocument = editorDocumentsEnabled()
+    ? `${withSubmission}, editor_document, editor_document_version`
+    : withSubmission
+  // 20261013_015. SELECTED ONLY BEHIND THE FLAG, for the reason every other
+  // column list here gives: naming a column PostgREST cannot find fails the
+  // whole request with a 42703 rather than degrading.
+  return documentFontEnabled() ? `${withDocument}, document_font` : withDocument
 }
 
 /**
@@ -482,6 +503,38 @@ function promptColumns(prompt: PromptWrite | undefined): Record<string, unknown>
 }
 
 /**
+ * The two editor-document columns, or nothing at all.
+ *
+ * NOTHING AT ALL IS THE DEFAULT. Writing `editor_document: null` when a caller
+ * said nothing would ERASE an applicant's formatting on every save from a
+ * surface that does not carry it.
+ */
+/**
+ * The chosen face, when one was sent and the column exists.
+ *
+ * NOTHING AT ALL IS THE DEFAULT, exactly as for the document: a caller that
+ * said nothing about the font must not have its stored choice cleared by an
+ * ordinary keystroke's autosave.
+ *
+ * null IS A REAL INSTRUCTION, though: it means "back to the Studio default",
+ * and the column is nullable for precisely that.
+ */
+function documentFontColumns(input: DraftUpdateInput): Record<string, unknown> {
+  if (input.documentFont === undefined) return {}
+  if (!documentFontEnabled()) return {}
+  return { document_font: input.documentFont }
+}
+
+function editorDocumentColumns(input: DraftUpdateInput): Record<string, unknown> {
+  if (input.editorDocument === undefined) return {}
+  if (!editorDocumentsEnabled()) return {}
+  return {
+    editor_document: input.editorDocument,
+    editor_document_version: input.editorDocumentVersion ?? 1,
+  }
+}
+
+/**
  * Saves an edit, or refuses. COMPARE AND SWAP, in one conditional statement.
  *
  * THE SEQUENCE, and it is fixed:
@@ -553,6 +606,20 @@ export async function updateDraft(
       revision: input.expectedRevision + 1,
       updated_at: savedAt,
       ...promptColumns(prompt),
+      /*
+        THE DOCUMENT, WHEN ONE WAS SENT.
+
+        Spread, so a body without one writes the columns it always wrote and a
+        draft keeps whatever formatting it had. The API has already refused any
+        document whose text disagrees with `essay`, so by here the two are
+        known to match.
+
+        A BOLD-ONLY EDIT STILL BUMPS THE REVISION, because the revision counts
+        saves of this row and this row changed. What does NOT change is
+        `essay`, and the analysis fingerprint is taken over `essay`.
+      */
+      ...editorDocumentColumns(input),
+      ...documentFontColumns(input),
     })
     .eq('id', draftId)
     .eq('revision', input.expectedRevision)

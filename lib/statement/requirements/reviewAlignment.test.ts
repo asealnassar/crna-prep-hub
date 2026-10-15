@@ -6,7 +6,7 @@ import {
   ALBANY, BUFFALO, LOYOLA, MINNESOTA, OHIO_STATE, RUTGERS, SIUE, SOUTHERN_MISS, SOUTH_DAKOTA,
   UC_DAVIS, UT_KNOXVILLE, WAYNE_STATE,
 } from './fixtures.ts'
-import { unmeasurableKinds } from './constraints.ts'
+import { analyzerUnmeasuredKinds } from './constraints.ts'
 
 const ESSAY = 'I became a nurse because of a patient I met in the ICU. '.repeat(10)
 
@@ -14,7 +14,7 @@ function facts(requirement: ReturnType<typeof snapshotOf>) {
   return {
     componentCount: requirement.components.length,
     hasOptionalComponent: requirement.components.some((c) => c.optional),
-    hasUnmeasurable: unmeasurableKinds(requirement.constraints).length > 0,
+    hasUnmeasurable: analyzerUnmeasuredKinds(requirement.constraints).length > 0,
   }
 }
 

@@ -19,9 +19,13 @@
 
 import {
   SPACING_LABELS, characterCount, type ConstraintKind, type Constraints, type Enforcement,
-  type LiveCount, type Overage, hasTruncationPolicy, isStrict, measurableInEditor,
-  truncatedKinds, unmeasurableKinds,
+  DEFAULT_ENFORCEMENT, type LiveCount, type Overage, hasStructuredLengthBound,
+  hasTruncationPolicy, isStrict, truncatedKinds,
 } from './constraints.ts'
+import {
+  capabilityOfKind, fontFamilyCapability, measuredKind, resolveRequirementCapabilities,
+  type Capability,
+} from '../layout/capabilities.ts'
 
 /** 1,000 rather than 1000, consistently, wherever a limit is shown. */
 function n(value: number): string {
@@ -72,12 +76,53 @@ function truncationSuffix(enforcement: Enforcement): string {
   return enforcement === 'truncated' ? ' — the school reads only this much' : ''
 }
 
-/** One stated requirement, as a sentence, tagged with whether we can check it. */
+/**
+ * What a surface does about one requirement.
+ *
+ * ---------------------------------------------------------------------------
+ * THREE THINGS CAN HAPPEN TO A STATED REQUIREMENT, NOT TWO
+ * ---------------------------------------------------------------------------
+ * 'counted'  the editor produces a live figure for it -- words, characters,
+ *            pages -- and the status bar is watching it.
+ * 'applied'  the editor DOES it, by rendering: the spacing, the type size, the
+ *            margins. There is nothing to watch because there is nothing the
+ *            applicant can get wrong.
+ * 'manual'   the editor can neither measure it nor render it, so it is the
+ *            applicant's to apply: a citation style, a length the school never
+ *            said was a limit.
+ *
+ * THE BOOLEAN COLLAPSED THE LAST TWO. Both rendered as an outlined chip, so
+ * Drexel's "12-point Times New Roman" -- which the Studio typesets exactly --
+ * looked identical to Keiser's "AMA format", which it cannot touch. An
+ * applicant could not tell what was being done for them, and the only thing
+ * telling them was a sentence repeating the chips underneath.
+ */
+export type ConstraintRegister = 'counted' | 'applied' | 'manual'
+
+const REGISTER_FOR_CAPABILITY: Readonly<Record<Capability, ConstraintRegister>> = {
+  measured: 'counted',
+  applied: 'applied',
+  // A SUBSTITUTED FONT IS STILL APPLIED. The substitution is disclosed where
+  // the font is chosen; it is not a thing the applicant has to go and do.
+  substituted: 'applied',
+  manual: 'manual',
+}
+
+/** One stated requirement, as a sentence, tagged with what we do about it. */
 export interface LabelledConstraint {
   readonly kind: ConstraintKind
   readonly text: string
-  /** True only for words and characters. Everything else is shown, not checked. */
+  /**
+   * Whether the Studio produces a live figure for this.
+   *
+   * ASKED OF THE CAPABILITY TABLE, not hardcoded here. It used to be true for
+   * words and characters alone, which stopped being right when the editor
+   * started laying out the page and measuring it.
+   *
+   * KEPT AS `register === 'counted'`, for callers that only need the number.
+   */
   readonly measured: boolean
+  readonly register: ConstraintRegister
 }
 
 /**
@@ -88,8 +133,22 @@ export interface LabelledConstraint {
  */
 function describe(constraints: Constraints): readonly LabelledConstraint[] {
   const out: LabelledConstraint[] = []
-  const add = (kind: ConstraintKind, text: string) =>
-    out.push({ kind, text, measured: measurableInEditor(kind) })
+  /*
+    `capability` IS PASSED ONLY WHERE THE KIND CANNOT ANSWER.
+
+    'font' stands for two fields with different answers -- the SIZE is applied
+    by rendering, the FAMILY only if we ship it -- so a chip naming a family
+    resolves the family's own capability and everything else asks the table.
+  */
+  const add = (kind: ConstraintKind, text: string, capability?: Capability) => {
+    const resolved = capability ?? capabilityOfKind(kind)
+    out.push({
+      kind,
+      text,
+      measured: measuredKind(kind),
+      register: REGISTER_FOR_CAPABILITY[resolved],
+    })
+  }
 
   const w = constraints.words
   if (w !== null) {
@@ -141,9 +200,11 @@ function describe(constraints: Constraints): readonly LabelledConstraint[] {
   const t = constraints.typography
   if (t !== null) {
     if (t.fontSizePt !== null && t.fontFamily !== null) {
-      add('font', `${t.fontSizePt}-point ${t.fontFamily}`)
+      add('font', `${t.fontSizePt}-point ${t.fontFamily}`, fontFamilyCapability(t.fontFamily))
     } else if (t.fontSizePt !== null) add('font', `${t.fontSizePt}-point font`)
-    else if (t.fontFamily !== null) add('font', t.fontFamily)
+    else if (t.fontFamily !== null) {
+      add('font', t.fontFamily, fontFamilyCapability(t.fontFamily))
+    }
     if (t.marginsInches !== null) add('margins', `${t.marginsInches}-inch margins`)
   }
 
@@ -154,13 +215,27 @@ function describe(constraints: Constraints): readonly LabelledConstraint[] {
       : `${cite.statedAs}, at least ${n(cite.minReferences)} reference${cite.minReferences === 1 ? '' : 's'}`)
   }
 
-  // THE LENGTH THE SCHOOL STATED AND THIS PRODUCT DOES NOT BOUND.
-  //
-  // THE LINE CARRIES THE REFUSAL, not just the quotation. "1-2 pages" on its
-  // own reads as a limit; an applicant has to be told in the same breath that
-  // the editor is not holding them to it, because the school never said it was
-  // a rule. Hence the quotation marks and the clause after the dash.
-  const shown = constraints.unenforcedLength
+  /*
+    THE LENGTH THE SCHOOL STATED AND THIS PRODUCT DOES NOT BOUND.
+
+    THE LINE CARRIES THE REFUSAL, not just the quotation. "1-2 pages" on its
+    own reads as a limit; an applicant has to be told in the same breath that
+    the editor is not holding them to it, because the school never said it was
+    a rule. Hence the quotation marks and the clause after the dash.
+
+    AND NOT AT ALL ONCE A BOUND EXISTS. Eight documents carry this prose
+    alongside a bound normalised out of the same sentence, so the card showed
+    "500-1,000 words" and, beside it, that sentence "not enforced here" -- two
+    claims about one requirement with one of them false. A normalised bound IS
+    the answer, so the refusal line goes away entirely; the school's own words
+    are still on the card, under `statedWordings`, where they are attribution
+    rather than a competing rule.
+
+    DECIDED BY THE DATA, by whether a bound was normalised. A length left as
+    prose because the source genuinely does not say keeps its line, and no
+    school is named anywhere in this decision.
+  */
+  const shown = hasStructuredLengthBound(constraints) ? null : constraints.unenforcedLength
   if (shown !== null) {
     // QUOTATION MARKS ONLY FOR A QUOTATION. A summary gets the label that says
     // what it is, and no quote marks at all -- so an applicant can never read a
@@ -197,14 +272,88 @@ export function constraintSummary(constraints: Constraints): string {
   return lines.length === 0 ? NO_STATED_LENGTH : lines.join(' · ')
 }
 
-/** Whether the unmeasured-requirements notice belongs on screen. */
-export function showUnmeasuredNotice(constraints: Constraints): boolean {
-  return unmeasurableKinds(constraints).length > 0
+/**
+ * Whether anything this school stated still needs a human.
+ *
+ * NARROW BY CONSTRUCTION. It is true only when the resolver found a field the
+ * Studio can neither measure nor render -- a citation style, a font we do not
+ * embed -- and false for a school whose whole requirement the Studio applies
+ * and checks. The blanket version of this was true for almost everyone.
+ */
+export function needsManualReview(constraints: Constraints): boolean {
+  return resolveRequirementCapabilities(constraints).manualReview.length > 0
 }
 
 // ---------------------------------------------------------------------------
 // The school's own wording about length
 // ---------------------------------------------------------------------------
+
+/**
+ * The school's own words out of a `*_stated_as` value, or null.
+ *
+ * ---------------------------------------------------------------------------
+ * THE COLUMN HOLDS TWO THINGS, AND ONLY ONE OF THEM IS A QUOTATION
+ * ---------------------------------------------------------------------------
+ * The normaliser records WHY a figure was classified as it was, and it records
+ * it in front of the fragment it classified:
+ *
+ *     length used adjectivally: "200 word limit"
+ *     explicit bound: "maximum"
+ *     target marker: "not labeled a maximum"
+ *
+ * The first half is this product's vocabulary. The second is the school's. The
+ * whole string was being rendered under the heading "The school's wording",
+ * so 58 of 79 documents showed an applicant a classification label and told
+ * them their school wrote it -- with the nested quotes rendering mangled on
+ * top.
+ *
+ * So the basis is stripped and the quotation kept. A value with no quoted
+ * fragment yields NULL rather than a cleaned-up version of the basis: if the
+ * school's words were never captured, the honest output is nothing at all.
+ *
+ * 'target marker: "not labeled a maximum"' IS WITHHELD TOO. Its quoted half is
+ * the researcher describing what the school did NOT say, which is the opposite
+ * of a quotation from them. The test below is what excludes it: a length a
+ * school published always carries a figure.
+ *
+ * THE SAME SPLIT HAPPENS UPSTREAM. scripts/normalize_statement_catalog.py now
+ * stores the quotation in the column and keeps the basis as a research note,
+ * so a regenerated catalog needs none of this. This stays because the applied
+ * production catalog still holds the old two-part values.
+ */
+export function statedAsQuote(statedAs: string | null | undefined): string | null {
+  if (typeof statedAs !== 'string') return null
+  const trimmed = statedAs.trim()
+  if (trimmed.length === 0) return null
+  // The LAST double-quoted run, so a basis containing quotes cannot win.
+  const quoted = [...trimmed.matchAll(/"([^"]+)"/g)]
+  if (quoted.length > 0) {
+    const text = quoted[quoted.length - 1]![1]!.trim()
+    /*
+      AND IT HAS TO BE A LENGTH, NOT A CLASSIFIER THE RESEARCHER QUOTED.
+
+      Several entries quote the single word the classification turned on --
+      `explicit bound: "maximum"`. Printing that under "The school's wording"
+      is no longer jargon, but it is still not what the school said about the
+      length: it is one word out of a sentence nobody recorded. A quotation
+      that carries no figure and is barely a phrase is withheld, which leaves
+      the chip -- "2 pages maximum (double-spaced)" -- to say the whole thing.
+    */
+    // A FIGURE, OR A SENTENCE LONG ENOUGH TO BE ONE. Every length a school
+    // publishes carries a number; a short quoted phrase without one is the
+    // researcher's note about what they could not find -- "not labeled a
+    // maximum" -- and is not something the school said.
+    const carriesLength = /\d/.test(text) || text.split(/\s+/).length >= 6
+    return text.length > 0 && carriesLength ? text : null
+  }
+  // NO QUOTED FRAGMENT AT ALL. A bare value is either the school's whole
+  // sentence -- which is what the column was meant to hold -- or a basis with
+  // nothing attached. A basis always ends in a colon-separated label, so one
+  // that does not look like our own vocabulary is treated as the school's.
+  return /^(length used|explicit |target marker|implicit |inferred )/i.test(trimmed)
+    ? null
+    : trimmed
+}
 
 /**
  * Every length sentence the school published, verbatim, in display order.
@@ -222,8 +371,9 @@ export function showUnmeasuredNotice(constraints: Constraints): boolean {
 export function statedWordings(constraints: Constraints): readonly string[] {
   const out: string[] = []
   for (const limit of [constraints.words, constraints.characters, constraints.pages]) {
-    const stated = limit?.statedAs ?? null
-    if (stated !== null && stated.trim().length > 0 && !out.includes(stated)) out.push(stated)
+    // THE QUOTATION ONLY, NEVER THE BASIS. See statedAsQuote().
+    const stated = statedAsQuote(limit?.statedAs ?? null)
+    if (stated !== null && !out.includes(stated)) out.push(stated)
   }
   // THE UNENFORCED LENGTH IS A STATED WORDING TOO, and the most important one:
   // it is the ONLY thing published about that document's length, because no
@@ -353,13 +503,40 @@ export const UNENFORCED_LENGTH_SUMMARY_NOTICE =
 export function unenforcedLengthNotice(constraints: Constraints): string | null {
   const shown = constraints.unenforcedLength
   if (shown === null) return null
+  // THE SAME TEST THE FLAG BELOW APPLIES, so a caller that reads the sentence
+  // and a caller that asks whether to show one cannot disagree. A requirement
+  // whose length was normalised into a bound is enforced, and nothing here may
+  // say it is not.
+  if (hasStructuredLengthBound(constraints)) return null
   return shown.verbatim ? UNENFORCED_LENGTH_NOTICE : UNENFORCED_LENGTH_SUMMARY_NOTICE
 }
 
-/** Whether that notice belongs on screen. */
+/**
+ * Whether that notice belongs on screen.
+ *
+ * ---------------------------------------------------------------------------
+ * NOT WHEN A STRUCTURED BOUND ALREADY ANSWERS THE SAME QUESTION
+ * ---------------------------------------------------------------------------
+ * `unenforcedLength` is the prose a school published when nobody could tell
+ * what the figure MEANT, and its notice says so: "nothing is checked against
+ * it". Eight documents carry that prose AND a structured bound normalised from
+ * the same sentence -- Arkansas State's "500-1,000 words" is stored as a word
+ * range and kept as prose. The editor then enforced the range in the status bar
+ * and, directly beneath, told the applicant it was "not enforced here, because
+ * the school does not say whether it is a limit".
+ *
+ * Both statements about one requirement, and one of them false. Once a bound
+ * has been normalised it IS the answer, so the prose stops claiming otherwise.
+ *
+ * DECIDED BY THE DATA. A document whose length was deliberately left as prose
+ * -- because the source genuinely does not say -- carries no bound, so its
+ * notice is untouched. No school is named.
+ */
 export function showUnenforcedLengthNotice(constraints: Constraints): boolean {
-  return constraints.unenforcedLength !== null
+  if (constraints.unenforcedLength === null) return false
+  return !hasStructuredLengthBound(constraints)
 }
+
 
 /** What a reader is told once, when any stated length is softer than a rule. */
 export const ADVISORY_LENGTH_NOTICE =
@@ -390,6 +567,133 @@ function boundSuffix(
   return `${count} ${unit} (${n(max)} ${register})`
 }
 
+/**
+ * How a RANGE reads, per register.
+ *
+ * A MINIMUM IS A REQUIREMENT TOO. The counter used to read only `.max`, so a
+ * school asking for 100-200 words was shown "154 / 200" -- which says nothing
+ * about the floor and reads as though 20 words would be fine.
+ */
+const RANGE_COUNTER: Readonly<Record<Enforcement, (lo: string, hi: string) => string>> = {
+  truncated: (lo, hi) => `required ${lo}–${hi}`,
+  enforced: (lo, hi) => `required ${lo}–${hi}`,
+  target: (lo, hi) => `${lo}–${hi} stated`,
+  suggested: (lo, hi) => `${lo}–${hi} suggested`,
+  unknown: (lo, hi) => `${lo}–${hi} stated, not confirmed as a limit`,
+}
+
+/** How a lone MINIMUM reads, per register. */
+const MINIMUM_COUNTER: Readonly<Record<Enforcement, (lo: string) => string>> = {
+  truncated: (lo) => `at least ${lo} required`,
+  enforced: (lo) => `at least ${lo} required`,
+  target: (lo) => `at least ${lo} stated`,
+  suggested: (lo) => `at least ${lo} suggested`,
+  unknown: (lo) => `at least ${lo} stated, not confirmed as a limit`,
+}
+
+/**
+ * The live counter for one unit, against whatever bounds the school stated.
+ *
+ * GENERIC OVER THE SHAPE OF THE BOUND -- a maximum, a minimum, or both. The
+ * three cases are one function because a school choosing to state a floor is
+ * not a special case of anything; it is just a different pair of numbers.
+ */
+function countedAgainst(input: {
+  readonly count: number
+  readonly unit: string
+  readonly min: number | null
+  readonly max: number | null
+  readonly enforcement: Enforcement
+}): string {
+  const { count, unit, min, max, enforcement } = input
+  if (min !== null && max !== null) {
+    return `${n(count)} ${unit} — ${RANGE_COUNTER[enforcement](n(min), n(max))}`
+  }
+  if (max !== null) return boundSuffix(n(count), unit, max, enforcement)
+  if (min !== null) {
+    return `${n(count)} ${unit} — ${MINIMUM_COUNTER[enforcement](n(min))}`
+  }
+  return `${n(count)} ${unit}`
+}
+
+/**
+ * Where a live count sits against its bounds.
+ *
+ * ---------------------------------------------------------------------------
+ * COMPUTED FROM THE SAME BOUNDS AS THE LABEL, DELIBERATELY
+ * ---------------------------------------------------------------------------
+ * The counter said "154 / 200" and the thing that coloured it read a different
+ * field entirely -- a legacy single maximum carried on the draft -- so a school
+ * with a structured 100-200 range got a number with no bound in it and no
+ * warning at any count. One function per question, over one set of bounds, is
+ * what stops the two disagreeing.
+ *
+ * 'none' IS NOT 'within'. A school that stated no bound has nothing to be
+ * inside of, and colouring that green would claim a check nobody asked for.
+ */
+export type LiveCountStatus = 'under' | 'within' | 'over' | 'none'
+
+export function liveCountStatus(input: {
+  readonly kind: LiveCount
+  readonly constraints: Constraints
+  readonly words: number
+  readonly text: string
+}): LiveCountStatus {
+  const bound = input.kind === 'words'
+    ? input.constraints.words
+    : input.constraints.characters
+  const count = input.kind === 'words'
+    ? input.words
+    : characterCount(input.text, input.constraints.characters?.spacesCount ?? null)
+  const min = bound?.min ?? null
+  const max = bound?.max ?? null
+  if (min === null && max === null) return 'none'
+  // OVER BEFORE UNDER. A count cannot be both, and the maximum is the bound an
+  // applicant is likelier to be refused for.
+  if (max !== null && count > max) return 'over'
+  if (min !== null && count < min) return 'under'
+  return 'within'
+}
+
+/**
+ * The verdict in words, or null when there is nothing to say.
+ *
+ * ---------------------------------------------------------------------------
+ * A REGISTER DECIDES WHETHER CROSSING A NUMBER IS A BREACH
+ * ---------------------------------------------------------------------------
+ * The editor used to append " — over the maximum" from liveCountStatus alone.
+ * That status says only which side of a bound the count is on; it says nothing
+ * about whether the bound is a rule. So a school that wrote "a 700 word essay"
+ * -- a length, not a limit -- told an applicant at 701 words that they were
+ * over a maximum their school never set, while the very same screen described
+ * the requirement as "500–700 stated".
+ *
+ * The wording therefore lives here, with every other sentence that depends on
+ * the register, and the component renders what it is given. An advisory length
+ * still reports where the count sits, because that is useful; it just does not
+ * call it a violation.
+ *
+ * null MEANS SAY NOTHING: inside the bounds, or no bound at all.
+ */
+export function liveCountVerdict(input: {
+  readonly kind: LiveCount
+  readonly constraints: Constraints
+  readonly words: number
+  readonly text: string
+}): string | null {
+  const status = liveCountStatus(input)
+  if (status === 'none' || status === 'within') return null
+  const bound = input.kind === 'words'
+    ? input.constraints.words
+    : input.constraints.characters
+  const enforcement = bound?.enforcement ?? DEFAULT_ENFORCEMENT
+  const binding = enforcement === 'enforced' || enforcement === 'truncated'
+  if (status === 'over') {
+    return binding ? ' — over the maximum' : ' — longer than the stated length'
+  }
+  return binding ? ' — under the minimum' : ' — shorter than the stated length'
+}
+
 export function liveCountLabel(input: {
   readonly kind: LiveCount
   readonly constraints: Constraints
@@ -398,16 +702,30 @@ export function liveCountLabel(input: {
 }): string {
   if (input.kind === 'words') {
     const w = input.constraints.words
-    const max = w?.max ?? null
-    if (max === null) return `${n(input.words)} words`
-    return boundSuffix(n(input.words), 'words', max, w!.enforcement)
+    return countedAgainst({
+      count: input.words,
+      unit: 'words',
+      min: w?.min ?? null,
+      max: w?.max ?? null,
+      enforcement: w?.enforcement ?? DEFAULT_ENFORCEMENT,
+    })
   }
   const c = input.constraints.characters
   const count = characterCount(input.text, c?.spacesCount ?? null)
+  // WHETHER SPACES COUNT IS PART OF THE NUMBER, so it stays attached to it
+  // whatever shape the bound has.
   const suffix = c?.spacesCount === false ? ' excluding spaces'
     : c?.spacesCount === true ? ' including spaces'
     : ''
+  const min = c?.min ?? null
   const max = c?.max ?? null
-  if (max === null) return `${n(count)} characters${suffix}`
-  return boundSuffix(n(count), 'characters', max, c!.enforcement) + suffix
+  const label = countedAgainst({
+    count, unit: 'characters', min, max,
+    enforcement: c?.enforcement ?? DEFAULT_ENFORCEMENT,
+  })
+  // The qualifier belongs with the unit, before any bound clause.
+  return min !== null && max !== null
+    ? label.replace(' — ', `${suffix} — `)
+    : min === null && max === null ? `${label}${suffix}`
+      : label.includes(' — ') ? label.replace(' — ', `${suffix} — `) : `${label}${suffix}`
 }

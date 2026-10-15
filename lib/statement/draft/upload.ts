@@ -1,4 +1,4 @@
-import { MAX_EXTRACTED_CHARS, MAX_SAVED_CHARS, MAX_UPLOAD_BYTES } from '../extract/limits.ts'
+import { MAX_EXTRACTED_CHARS, MAX_UPLOAD_BYTES, maxSavedChars } from '../extract/limits.ts'
 
 /**
  * Importing a document into the editor, with no React and no parsing in it.
@@ -214,7 +214,7 @@ export function importOutcomeFrom(input: { status: number; body: unknown }): Imp
     if (text.length > MAX_EXTRACTED_CHARS) {
       return { ok: false, message: IMPORT_MESSAGES.unreadable }
     }
-    const saveable = text.length <= MAX_SAVED_CHARS
+    const saveable = text.length <= maxSavedChars()
     if (typeof claimed !== 'boolean' || claimed !== saveable) {
       return { ok: false, message: IMPORT_MESSAGES.unreadable }
     }
@@ -276,11 +276,11 @@ export function importNoticeFor(document: ExtractedDocument): ImportNotice {
   if (document.saveable) {
     return { text: `Imported — ${count} characters. Nothing was cut.`, overLimit: false }
   }
-  const excess = (document.characters - MAX_SAVED_CHARS).toLocaleString('en-US')
+  const excess = (document.characters - maxSavedChars()).toLocaleString('en-US')
   return {
     text:
       `Imported — ${count} characters, and nothing was cut. A saved draft holds ` +
-      `${MAX_SAVED_CHARS.toLocaleString('en-US')} characters, so this cannot be saved yet: ` +
+      `${maxSavedChars().toLocaleString('en-US')} characters, so this cannot be saved yet: ` +
       `trim ${excess} and saving resumes on its own.`,
     overLimit: true,
   }

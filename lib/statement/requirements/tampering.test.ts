@@ -7,7 +7,7 @@ import { analysisFingerprint } from '../draft/analysisFingerprint.ts'
 import { buildReviewUserMessage, reviewSystemPrompt } from '../draft/reviewPrompt.ts'
 import { eligibilityForRequirement, wordFloorFits } from './eligibility.ts'
 import { eligibilityFor } from '../draft/rubric.ts'
-import { unmeasurableKinds, characterLimit, wordLimit,} from './constraints.ts'
+import { analyzerUnmeasuredKinds, characterLimit, wordLimit,} from './constraints.ts'
 import { BUFFALO, SIUE, UC_DAVIS } from './fixtures.ts'
 import type { RequirementSet, WritingRequirement } from './requirement.ts'
 import { REQUIREMENTS_ENV } from '../draft/rollout.ts'
@@ -99,7 +99,7 @@ async function analyse(db: SupabaseClient, stored: RequirementSnapshot, draftMax
   const facts = authoritative === null ? null : {
     componentCount: authoritative.components.length,
     hasOptionalComponent: authoritative.components.some((part) => part.optional),
-    hasUnmeasurable: unmeasurableKinds(authoritative.constraints).length > 0,
+    hasUnmeasurable: analyzerUnmeasuredKinds(authoritative.constraints).length > 0,
   }
 
   return {

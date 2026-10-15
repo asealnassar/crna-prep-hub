@@ -159,9 +159,17 @@ test('source: no service-role client anywhere', () => {
   for (const src of [COLLECTION_SRC, ITEM_SRC]) {
     assert.equal(src.includes('SERVICE_ROLE'), false)
     assert.equal(src.includes('service_role'), false)
-    // The anon key plus the caller's JWT is the only client either file builds.
-    assert.ok(src.includes('NEXT_PUBLIC_SUPABASE_ANON_KEY'))
-    assert.ok(src.includes('Authorization: `Bearer ${token}`'))
+  // THE CLIENT MOVED, THE PROPERTY DID NOT. Every statement path now takes its
+  // client from statementDbClient(), which builds the same anon-key,
+  // caller-scoped client and is asserted to hold no service role in
+  // lib/statement/devMode/writeIsolation.test.ts. Pinning the inline
+  // createClient() here would now pin a call that no longer exists.
+    // THE HELPER, NOT ITS ARGUMENT LIST. It takes a second argument now --
+    // the verified session's own answer, used only by simulated-live -- and
+    // pinning the exact call text would pin a parameter list rather than
+    // the property this test is about.
+    assert.ok(src.includes('statementDbClient(token,'))
+    assert.equal(src.includes('createClient('), false)
   }
 })
 
@@ -179,9 +187,24 @@ test('source: authentication precedes every repository call', () => {
 })
 
 test('source: the id passed to the repository is the PATH id, never the body', () => {
-  // `updateDraft(caller.db, id, checked.input)` -- `id` is the awaited param and
-  // `checked.input` is the validator's normalised object, which has no id.
-  assert.ok(ITEM_SRC.includes('updateDraft(caller.db, id, checked.input)'))
+  /*
+   * `id` IS THE AWAITED PATH PARAM IN EVERY CALL, and the payload is the
+   * validator's normalised object -- which has no id.
+   *
+   * ASSERTED AS THE ARGUMENT, NOT AS ONE LITERAL CALL. The update now passes
+   * `input`, which is `checked.input` on an ordinary autosave and
+   * `{ ...checked.input, ...document }` when a constrained editor document
+   * came with it. Pinning the old spelling would have failed for a change that
+   * widened the payload without touching the id -- so the two rules are
+   * asserted separately: the id argument, and where the payload comes from.
+   */
+  assert.match(ITEM_SRC, /updateDraft\(caller\.db, id, input/)
+  // The payload is the validator's normalised object plus only what the two
+  // optional readers returned -- each of which is `undefined` when its key was
+  // absent, so an ordinary autosave's body is unchanged.
+  assert.match(ITEM_SRC, /const input = \{\s*\n\s*\.\.\.checked\.input,/)
+  assert.match(ITEM_SRC, /\.\.\.\(document \?\? \{\}\),/)
+  assert.match(ITEM_SRC, /\.\.\.\(font \?\? \{\}\),/)
   assert.ok(ITEM_SRC.includes('readDraft(caller.db, id)'))
   assert.ok(ITEM_SRC.includes('deleteDraft(caller.db, id)'))
   assert.equal(/body\.id/.test(ITEM_SRC), false, 'the body id must never be read')
@@ -235,7 +258,8 @@ test('source: both draft routes are gated by the SAME statement gate', () => {
     assert.ok(at('statementStudioMode()') < at('authenticateRequest()'), `${name}: mode first`)
     assert.ok(at('authenticateRequest()') < at('statementStudioAccess({'), `${name}: then identity`)
     assert.ok(at('statementStudioAccess({') < at('readAccessToken()'), `${name}: gate before token`)
-    assert.ok(at('statementStudioAccess({') < at('createClient('), `${name}: gate before client`)
+    assert.ok(at('statementStudioAccess({') < at('statementDbClient('),
+      `${name}: gate before client`)
   }
 })
 
@@ -643,10 +667,11 @@ test('POST: 201 carries the full draft and never the userId', async () => {
   assert.equal(res.status, 201)
 
   const { draft: returned } = await res.json()
-  // TEN fields now: the read model exposes the four prompt snapshot columns.
+  // ELEVEN fields now: the four prompt snapshot columns, and the constrained
+  // editor document that travels with the essay. See publicDraft().
   assert.deepEqual(Object.keys(returned).sort(), [
-    'createdAt', 'essay', 'id', 'promptId', 'promptText', 'revision',
-    'schoolId', 'statedMaxWords', 'title', 'updatedAt',
+    'createdAt', 'documentFont', 'editorDocument', 'essay', 'id', 'promptId',
+    'promptText', 'revision', 'schoolId', 'statedMaxWords', 'title', 'updatedAt',
   ])
   assert.equal('userId' in returned, false)
   assert.equal(returned.revision, 1)
@@ -678,9 +703,16 @@ test('GET one: a GENERIC draft serialises all four fields as explicit null', asy
     assert.equal(returned[key], null, `${key} must be null, not absent`)
   }
   assert.deepEqual(Object.keys(returned).sort(), [
-    'createdAt', 'essay', 'id', 'promptId', 'promptText', 'revision',
-    'schoolId', 'statedMaxWords', 'title', 'updatedAt',
+    'createdAt', 'documentFont', 'editorDocument', 'essay', 'id', 'promptId',
+    'promptText', 'revision', 'schoolId', 'statedMaxWords', 'title', 'updatedAt',
   ])
+  // THE FONT IS NULL RATHER THAN ABSENT, for the same reason.
+  assert.equal('documentFont' in returned, true)
+  assert.equal(returned.documentFont, null)
+  // AND THE DOCUMENT IS NULL RATHER THAN ABSENT, for the same reason the four
+  // prompt fields are: a missing key reads as "this server does not say".
+  assert.equal('editorDocument' in returned, true)
+  assert.equal(returned.editorDocument, null)
   assert.equal('userId' in returned, false)
   assert.equal(JSON.stringify(returned).includes(USER), false)
 })

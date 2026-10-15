@@ -246,7 +246,11 @@ test('a malformed limit degrades to NO limit, which is never enforced', () => {
   full.constraints = {
     words: wordLimit({ min: 'lots', max: -5, enforcement: 'enforced' }),
     characters: characterLimit({ min: null, max: 0, spacesCount: 'yes', enforcement: 'enforced' }),
-    pages: pageLimit({ min: null, max: 2.5, spacing: 'triple', enforcement: 'enforced' }),
+    // NOT 2.5 ANY MORE. A fractional page was malformed until migration 007
+    // made min_pages/max_pages numeric(4,1) for Boston College's 1.5-page
+    // limit, so 2.5 is now a real bound and survives this parse by design.
+    // A NEGATIVE page count is still nonsense, and that is what belongs here.
+    pages: pageLimit({ min: null, max: -2.5, spacing: 'triple', enforcement: 'enforced' }),
     typography: { fontSizePt: 0, fontFamily: 7, marginsInches: -1 },
     citation: { family: 'mla' },
     otherInstructions: ['keep', 7, null],
@@ -261,7 +265,12 @@ test('a malformed limit degrades to NO limit, which is never enforced', () => {
     { min: null, max: null, spacesCount: null, enforcement: 'enforced', statedAs: null })
   assert.deepEqual(parsed.constraints.pages,
     { min: null, max: null, spacing: null, enforcement: 'enforced', statedAs: null })
-  assert.deepEqual(parsed.constraints.typography, { fontSizePt: null, fontFamily: null, marginsInches: null })
+  assert.deepEqual(parsed.constraints.typography, {
+    fontSizePt: null, fontFamily: null, marginsInches: null,
+    // A MALFORMED SET IS NO SET. Two members are the minimum a permission can
+    // have; anything less is a scalar, and anything unreadable is nothing.
+    fontFamilyOptions: null, fontSizePtOptions: null,
+  })
   assert.equal(parsed.constraints.citation, null, 'a style with no wording is not a style')
   assert.deepEqual([...parsed.constraints.otherInstructions], ['keep'])
 })

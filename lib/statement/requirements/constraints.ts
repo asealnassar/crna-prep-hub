@@ -181,6 +181,20 @@ export interface Typography {
   readonly fontSizePt: number | null
   readonly fontFamily: string | null
   readonly marginsInches: number | null
+  /**
+   * The families and sizes a school PERMITS, where it offered a choice.
+   *
+   * A REQUIREMENT AND A PERMISSION ARE DIFFERENT FACTS. "Times New Roman" is
+   * one value the document must use; "Times Roman or Arial" is a set it may
+   * choose from, and flattening the second into the first asserts something no
+   * school said. Null whenever a single value was required or nothing was
+   * stated -- the scalar above and the set here are never both populated.
+   *
+   * STORED IN THE SCHOOL'S OWN WORDING. The font registry resolves aliases when
+   * it comes to render; what is recorded here is what was verified.
+   */
+  readonly fontFamilyOptions: readonly string[] | null
+  readonly fontSizePtOptions: readonly number[] | null
 }
 
 /**
@@ -229,6 +243,15 @@ export interface StatedLength {
 }
 
 export interface Constraints {
+  /**
+   * A named standard whose BODY LAYOUT applies to the whole document.
+   *
+   * SET OFFLINE, FROM VERIFIED WORDING, and null for almost every school. A
+   * citation style that governs only references is NOT this -- it lives in
+   * `citation`, and conflating the two would reformat an essay because a
+   * school asked for AMA references.
+   */
+  readonly formatProfile: string | null
   readonly words: WordLimit | null
   readonly characters: CharacterLimit | null
   readonly pages: PageLimit | null
@@ -344,6 +367,7 @@ export function statedLength(input: {
 
 /** A document whose shape the school said nothing about. */
 export const NO_CONSTRAINTS: Constraints = {
+  formatProfile: null,
   words: null,
   characters: null,
   pages: null,
@@ -364,22 +388,19 @@ export type ConstraintKind =
   | 'unenforced-length'
   | 'other'
 
-/**
- * Whether this product can verify a requirement of this kind.
+/*
+ * measurableInEditor AND UNMEASURED_NOTICE WERE HERE, AND ARE GONE.
  *
- * WORDS AND CHARACTERS, AND NOTHING ELSE. This is the function that stops a
- * page or a font turning into a compliance indicator somewhere downstream: any
- * display or scoring path asks here first, and gets false for everything it has
- * no way to observe in a textarea.
+ * Both encoded the same assumption: that this product could see words and
+ * characters and nothing else, so every school was told its page count,
+ * spacing, font and margins could not be checked. That was true of a textarea.
+ * It is not true of a page the Studio lays out and measures, and a product that
+ * understates what it knows sends applicants to do work it already did.
+ *
+ * What a field is worth now is resolved per field, from the canonical record,
+ * in lib/statement/layout/capabilities.ts -- measured, applied, or left to a
+ * human and named individually.
  */
-export function measurableInEditor(kind: ConstraintKind): boolean {
-  return kind === 'words' || kind === 'characters'
-}
-
-/** Said once, wherever unmeasurable requirements are shown. */
-export const UNMEASURED_NOTICE =
-  'This editor counts words and characters only. It cannot check page count, '
-  + 'spacing, font, margins or citation format -- confirm those in your final document.'
 
 /** Which kinds this constraint set actually carries, in display order. */
 export function constraintKinds(constraints: Constraints): readonly ConstraintKind[] {
@@ -400,14 +421,24 @@ export function constraintKinds(constraints: Constraints): readonly ConstraintKi
   return kinds
 }
 
-/** The kinds present that this system cannot check. Drives the notice. */
-export function unmeasurableKinds(constraints: Constraints): readonly ConstraintKind[] {
-  return constraintKinds(constraints).filter((kind) => !measurableInEditor(kind))
-}
-
-/** Whether anything here is beyond the editor's reach. */
-export function hasUnmeasurableConstraint(constraints: Constraints): boolean {
-  return unmeasurableKinds(constraints).length > 0
+/**
+ * The kinds the ANALYSER is told not to judge.
+ *
+ * ---------------------------------------------------------------------------
+ * DELIBERATELY FROZEN, AND DELIBERATELY NOT THE CAPABILITY MODEL
+ * ---------------------------------------------------------------------------
+ * This still reads "words and characters, and nothing else", which is no longer
+ * what the editor can see. It is kept that way on purpose: it feeds the review
+ * prompt, so widening it would change what the analyser is asked to score and
+ * would need a RUBRIC_VERSION decision that is not this change's to make.
+ *
+ * NAMED FOR ITS CALLER so nobody mistakes it for the capability model. When the
+ * rubric is revisited, this should become a read of the resolver and the prompt
+ * should stop telling the model that page count cannot be observed.
+ */
+export function analyzerUnmeasuredKinds(constraints: Constraints): readonly ConstraintKind[] {
+  const scored = (kind: ConstraintKind) => kind === 'words' || kind === 'characters'
+  return constraintKinds(constraints).filter((kind) => !scored(kind))
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +632,28 @@ export function truncatedKinds(constraints: Constraints): readonly ConstraintKin
   if (constraints.characters?.enforcement === 'truncated') kinds.push('characters')
   if (constraints.pages?.enforcement === 'truncated') kinds.push('pages')
   return kinds
+}
+
+/**
+ * Whether any length bound was normalised out of this school's wording.
+ *
+ * ---------------------------------------------------------------------------
+ * THE TEST FOR "IS THIS REQUIREMENT ENFORCED AT ALL"
+ * ---------------------------------------------------------------------------
+ * A document can carry both a bound and the prose the bound came from. Once a
+ * figure has been normalised into `words`, `characters` or `pages`, the editor
+ * counts against it -- so nothing anywhere may describe that same requirement
+ * as unenforced. Several surfaces need that answer, which is why the test
+ * lives beside the data rather than next to any one of them.
+ *
+ * MIN OR MAX IS ENOUGH. A minimum alone is still a bound the editor checks.
+ */
+export function hasStructuredLengthBound(constraints: Constraints): boolean {
+  const bounded = (b: { min: number | null; max: number | null } | null): boolean =>
+    b !== null && (b.min !== null || b.max !== null)
+  return bounded(constraints.words)
+    || bounded(constraints.characters)
+    || bounded(constraints.pages)
 }
 
 /** Whether this school stated that it stops reading at the limit. */

@@ -168,15 +168,32 @@ test('the NEXT save uses the revision the previous success returned', () => {
   assert.equal(request.ok && request.body.expectedRevision, 5)
 })
 
-test('only one save may be in flight: a dirty document is idle while saving', () => {
+test('only one save may be in flight: a dirty document NEVER starts a second', () => {
+  /*
+   * THE RULE IS SINGLE FLIGHT, AND IT IS ASSERTED AS SINGLE FLIGHT.
+   *
+   * This used to assert `{ kind: 'idle' }`, which was the old spelling of the
+   * rule rather than the rule. 'idle' also means "no timer", and a status that
+   * only a continuation can leave needs a timer more than any other -- a
+   * continuation that never ran left "Saving…" on screen for ever and, because
+   * of this very rule, stopped every later save too.
+   *
+   * So the driver now waits while a request is in flight and gives up at its
+   * deadline. What must still be true, and is, is that it never says 'save'.
+   */
   let state = reduce(initialState(4), { type: 'edited', at: T0 })
   state = reduce(state, { type: 'save-started', at: T0 + 1200 })
   state = reduce(state, { type: 'edited', at: T0 + 1300 })
-  // Dirty again, and still idle: the engine, not the driver, enforces this.
+  // Dirty again, and still no second request: the engine, not the driver,
+  // enforces this.
   assert.equal(state.dirtySince, T0 + 1300)
   for (const now of [T0 + 1300, T0 + 2600, T0 + 20_000]) {
-    assert.deepEqual(act(state, now), { kind: 'idle' }, `still idle at ${now - T0}ms`)
+    assert.notEqual(act(state, now).kind, 'save', `a second save started at ${now - T0}ms`)
   }
+  // Within the deadline there is a timer; at it, the save is given up on.
+  assert.equal(act(state, T0 + 1300).kind, 'wait')
+  assert.equal(act(state, T0 + 2600).kind, 'wait')
+  assert.equal(act(state, T0 + 20_000).kind, 'timed-out')
 })
 
 test('an edit DURING a save is not lost, and success does not call it clean', () => {
@@ -385,7 +402,8 @@ test('the page still gates, still reads server-side, and hands the draft down', 
   )
   // The SAME caller-scoped client, not a second one.
   assert.match(PAGE, /listSchoolPickerOptions\(db\)/)
-  assert.equal((PAGE.match(/createClient\(/g) ?? []).length, 1, 'one client on the page')
+  assert.equal((PAGE.match(/statementDbClient\(/g) ?? []).length, 1,
+    'one client on the page')
   assert.doesNotMatch(PAGE, /'use client'/)
   const gate = PAGE.indexOf('statementStudioAccess({')
   assert.ok(gate !== -1 && gate < PAGE.indexOf('readDraft(db'))
@@ -416,8 +434,19 @@ test('the initial draft comes from props; the only GET is the deliberate reload'
 test('the client uses the shared engine in place, and forks nothing', () => {
   assert.match(CLIENT, /from '@\/lib\/resume\/draft\/autosave'/)
   for (const used of [/\binitialState\(/, /\breduce\(/]) assert.match(CLIENT, used)
-  // The timings are the engine's defaults: no config object is passed.
-  assert.doesNotMatch(CLIENT, /quietMs|maxWaitMs|retryBaseMs|maxRetries|DEFAULT_AUTOSAVE/)
+  /*
+   * THE TIMINGS ARE THE ENGINE'S. No config OBJECT is constructed here, which
+   * is what "forks nothing" means: the client never invents a quiet window, a
+   * cap or a retry budget of its own.
+   *
+   * IT MAY READ THE ENGINE'S CONSTANT, and does: the request's abort deadline
+   * and the navigation wait both use DEFAULT_AUTOSAVE.saveTimeoutMs, precisely
+   * so the socket and the status give up on the same number. Writing that
+   * number out here would be the fork this test exists to prevent.
+   */
+  assert.doesNotMatch(CLIENT, /quietMs|maxWaitMs|retryBaseMs|maxRetries/)
+  assert.doesNotMatch(CLIENT, /DEFAULT_AUTOSAVE\s*=\s*\{/, 'the client must not redefine it')
+  assert.doesNotMatch(CLIENT, /saveTimeoutMs:\s*\d/, 'the deadline must not be re-spelled')
   // And the decision of when to save is the engine's, via the driver.
   assert.match(CLIENT, /statementDriverAction\(\{/)
 })
@@ -440,7 +469,14 @@ test('the client holds a synchronous single-flight guard', () => {
 test('the client never displays state.error directly', () => {
   assert.match(CLIENT, /statementStatus\(save, blocked\)/)
   assert.match(CLIENT, /\{status\.text\}/)
-  assert.doesNotMatch(CLIENT, /save\.error|state\.error|describe\(/)
+  /*
+   * NEVER RENDERED, which is the rule. The component does not read `error` at
+   * all: the expired-session affordance asks saveFailedOnExpiredSession(),
+   * which lives in editor.ts with Statement's own wording and returns a
+   * boolean the component cannot print.
+   */
+  assert.doesNotMatch(CLIENT, /\{save\.error|\{state\.error|describe\(/)
+  assert.doesNotMatch(CLIENT, /save\.error|state\.error/)
 })
 
 test('the client never invents a revision, on any path', () => {
@@ -453,8 +489,17 @@ test('the client never invents a revision, on any path', () => {
 })
 
 test('both fields are editable, and neither is ever truncated', () => {
-  assert.match(CLIENT, /<textarea/)
-  assert.match(CLIENT, /value=\{essay\}/)
+  /*
+   * THE ESSAY SURFACE IS THE RICH EDITOR NOW, FOR EVERY DRAFT.
+   *
+   * It used to be `paginated ? <PaginatedEditor/> : <textarea/>`, which chose
+   * an EDITING surface from a LAYOUT fact -- so Bold existed for a school that
+   * stated a page bound and not for one that stated a word count. One editor,
+   * always; what the school stated decides the geometry it is laid out with.
+   */
+  assert.doesNotMatch(CLIENT, /<textarea/, 'the essay textarea is gone, not conditional')
+  assert.match(CLIENT, /<PaginatedEditor/)
+  assert.match(CLIENT, /essay=\{essay\}/)
   assert.match(CLIENT, /<input\n[\s\S]*?value=\{title\}/)
   // No maxLength on either: it would silently shorten pasted text. The only
   // trim in the whole component is the character COUNT, which is display.
@@ -467,7 +512,7 @@ test('both fields are editable, and neither is ever truncated', () => {
 test('a title edit takes the SAME path as an essay edit', () => {
   const onTitle = CLIENT.slice(CLIENT.indexOf('const onTitleChange'), CLIENT.indexOf('const onEssayChange'))
   assert.match(onTitle, /setTitle\(value\)/)
-  assert.match(onTitle, /type: 'edited', at: Date\.now\(\)/)
+  assert.match(onTitle, /markEdited\(\)/)
   // No second endpoint and no title-only request anywhere.
   assert.doesNotMatch(onTitle, /fetch\(/)
   assert.equal(CLIENT.split('fetch(').length - 1, 4,
@@ -483,7 +528,13 @@ test('a conflicted editor stays SELECTABLE, and a FAILED one stays editable', ()
   // from 'failed' -- editing is its designed recovery -- so a readOnly field
   // there would trap the applicant with work they could not fix.
   assert.match(CLIENT, /readOnly=\{conflicted\}/)
-  assert.equal(CLIENT.split('readOnly={conflicted}').length - 1, 2, 'title and essay')
+  // TWO SURFACES NOW: the title, and the one editor every draft writes in.
+  // The plain textarea is gone -- see the surface test above. The count is
+  // pinned rather than dropped, because the property is that EVERY editable
+  // surface is keyed on the conflict; a third added without touching this line
+  // would be a surface that stayed live while the draft was frozen.
+  assert.equal(CLIENT.split('readOnly={conflicted}').length - 1, 2,
+    'the title and the editor')
   assert.doesNotMatch(CLIENT, /readOnly=\{status\.frozen\}/)
   assert.doesNotMatch(CLIENT, /disabled=\{status\.frozen\}/)
 })
@@ -615,8 +666,17 @@ test('ONLY A PROMPT ID EVER ENTERS A REQUEST', () => {
   // 3. THE SAVE BODY IS THE VALIDATOR'S OBJECT AND NOTHING ELSE. One PATCH, one
   // body expression, built by nothing in this file -- so there is no place for a
   // fourth field to be merged in.
+  /*
+    ONE REQUEST BODY, asserted as that rather than as "one JSON.stringify".
+
+    The proxy counted every stringify in the file, and started failing when
+    the editor began comparing two documents to decide whether formatting had
+    actually changed -- a comparison, not a body. A guard that rejects correct
+    code is not guarding the rule it was written for.
+  */
   assert.equal(CLIENT.split('body: JSON.stringify(attempt.body)').length - 1, 1)
-  assert.equal((CLIENT.match(/JSON\.stringify\(/g) ?? []).length, 1, 'exactly one JSON body')
+  const bodies = CLIENT.match(/body: JSON\.stringify\(/g) ?? []
+  assert.equal(bodies.length, 1, 'exactly one request body')
   assert.doesNotMatch(CLIENT, /\.\.\.attempt\.body/, 'the body is never spread and extended')
 
   // 4. And no snake_case column name appears anywhere: the client speaks the
@@ -954,7 +1014,7 @@ test('prompt: THE SELECTION HANDLER IS THE ONLY WAY TO SET A PENDING PROMPT', ()
   assert.ok(choose.length > 0, 'choosePrompt was located')
   assert.equal((choose.match(/pendingPrompt\.current = next/g) ?? []).length, 1)
   assert.match(choose, /lastPromptToken\.current \+= 1/)
-  assert.match(choose, /setSave\(\(state\) => reduce\(state, \{ type: 'edited'/)
+  assert.match(choose, /markEdited\(\)/)
   // AND IT ISSUES NO REQUEST. No endpoint, no fetch, no startSave.
   for (const forbidden of ['fetch(', 'draftApiPath', 'startSave(', "method: 'PATCH'"]) {
     assert.equal(choose.includes(forbidden), false, `choosePrompt must not ${forbidden}`)
@@ -1029,8 +1089,17 @@ test('lifecycle: NO FAILURE PATH TOUCHES THE PENDING SELECTION', () => {
   assert.ok(tail.length > 0, 'the catch/finally was located')
   assert.equal(tail.includes('pendingPrompt'), false, 'failures must not clear it')
   assert.match(tail, /if \(snapshotRef\.current === snapshot\) snapshotRef\.current = null/)
-  // No new retry machinery was added.
-  assert.equal((CLIENT.match(/setTimeout\(/g) ?? []).length, 1, 'only the driver’s wait timer')
+  /*
+   * NO NEW RETRY MACHINERY. Three timers, and each is named here so a fourth
+   * has to justify itself:
+   *   1. the driver's wait, which is the engine's own schedule;
+   *   2. the request's abort deadline, so a save the editor has stopped
+   *      believing in is not still running;
+   *   3. the navigation wait's bound, so leaving cannot hang on a promise.
+   * None of them retries anything: retries are the engine's, on its backoff.
+   */
+  assert.equal((CLIENT.match(/setTimeout\(/g) ?? []).length, 3,
+    'the driver’s wait, the request deadline, and the navigation bound')
   assert.equal((CLIENT.match(/type: 'retry'/g) ?? []).length, 1, 'only the manual retry')
 })
 
@@ -1065,7 +1134,10 @@ test('lifecycle: an in-flight response cannot act after a reload', () => {
 test('lifecycle: STILL ONE PATCH, ONE BODY, ONE ENGINE', () => {
   // No second persistence request and no second save path.
   assert.equal((CLIENT.match(/method: 'PATCH'/g) ?? []).length, 1)
-  assert.equal((CLIENT.match(/JSON\.stringify\(/g) ?? []).length, 1)
+  // ONE REQUEST BODY. Counting every JSON.stringify in the file was a proxy
+  // for this, and it broke when the editor began comparing two documents to
+  // decide whether formatting had changed -- a comparison, not a body.
+  assert.equal((CLIENT.match(/body: JSON\.stringify\(/g) ?? []).length, 1)
   assert.equal(CLIENT.split('body: JSON.stringify(attempt.body)').length - 1, 1)
   assert.equal((CLIENT.match(/await fetch\(/g) ?? []).length, 4,
     'the PATCH, the reload GET, the extraction POST, and the analysis POST')
@@ -1106,7 +1178,7 @@ test('unconfirmed: THE DELIBERATE RETRY IS THE ONLY RESCHEDULER', () => {
   // It needs something pending, uses the engine's own edited event, and starts
   // no request of its own -- so the existing driver and in-flight guard apply.
   assert.match(retry, /if \(pendingPrompt\.current === null\) return/)
-  assert.match(retry, /setSave\(\(state\) => reduce\(state, \{ type: 'edited'/)
+  assert.match(retry, /markEdited\(\)/)
   for (const forbidden of ['fetch(', 'startSave(', 'draftApiPath', "method: 'PATCH'", 'setTimeout']) {
     assert.equal(retry.includes(forbidden), false, `the retry must not ${forbidden}`)
   }
@@ -1172,7 +1244,7 @@ test('unconfirmed: THE SELECTION ALONE SCHEDULES A SAVE', () => {
   // status -- never the title or the essay -- so a prompt change with no text
   // change still saves. The engine proves it; this pins the dispatch.
   const choose = CLIENT.slice(CLIENT.indexOf('const choosePrompt'), CLIENT.indexOf('const retryPromptSave'))
-  assert.match(choose, /type: 'edited'/)
+  assert.match(choose, /markEdited\(\)/)
   // And it does not touch the document.
   for (const forbidden of ['setTitle(', 'setEssay(', 'essayRef.current =']) {
     assert.equal(choose.includes(forbidden), false, `choosePrompt must not ${forbidden}`)
@@ -1252,6 +1324,8 @@ test('the conflict wording is Statement’s, and never the engine’s sentence',
   // And nothing the component can render says it either.
   assert.doesNotMatch(CLIENT, /was changed somewhere else/)
   assert.doesNotMatch(CLIENT, /save\.error|state\.error/)
+  // And the one place that MAY read it is Statement's own module, not here.
+  assert.match(CLIENT, /saveFailedOnExpiredSession\(save\)/)
 })
 
 test('a reload accepts only a genuinely usable draft', () => {
@@ -1657,7 +1731,7 @@ test('Reload fetches the document, not just the stored revision', () => {
 
 test('the failed-save Retry goes through the engine’s own retry event', () => {
   const retry = CLIENT.slice(CLIENT.indexOf('const retrySave'), CLIENT.indexOf('const leave ='))
-  assert.match(retry, /canRetrySave\(\{ state: save, title, essay \}\)/)
+  assert.match(retry, /canRetrySave\(\{ state: save, title, essay, savedCharacterCeiling: savedCeiling \}\)/)
   assert.match(retry, /type: 'retry', at: Date\.now\(\)/)
   assert.doesNotMatch(retry, /fetch\(|initialState\(|revision:/)
   assert.match(CLIENT, /Try again/)
@@ -1832,7 +1906,7 @@ test('nothing normalises the title BEFORE the server has confirmed it', () => {
   // Mid-flight there is nothing to reconcile to.
   assert.equal(titleAfterSave({ snapshot: null, currentTitle: PADDED }), null)
   // The component only calls titleAfterSave inside the save-succeeded branch.
-  const body = CLIENT.slice(CLIENT.indexOf('const event = saveEventFrom'), CLIENT.indexOf('setSave((state) => reduce(state, event))'))
+  const body = CLIENT.slice(CLIENT.indexOf('let event = saveEventFrom'), CLIENT.indexOf('setSave((state) => reduce(state, event))'))
   assert.match(body, /event\.type === 'save-succeeded' && snapshotRef\.current === snapshot/)
   assert.equal(CLIENT.split('titleAfterSave(').length - 1, 1, 'exactly one reconciliation site')
 })
@@ -2088,15 +2162,21 @@ test('the prompt panel sticks without covering anything or trapping scroll', () 
   assert.match(CLIENT, /items-start/, 'and the row must not stretch its children')
 })
 
-test('the writing area is still a textarea, and still refuses to truncate', () => {
-  assert.match(CLIENT, /<textarea/)
-  assert.match(CLIENT, /value=\{essay\}/)
+test('the writing area still refuses to truncate, and still holds plain text', () => {
+  /*
+   * THIS USED TO INSIST ON A TEXTAREA, which was the right rule while there
+   * was one. There is now one editor for every draft, so what is asserted is
+   * what the textarea was protecting: nothing shortens what the applicant
+   * typed, and the writing surface carries no markup the model cannot hold.
+   */
+  assert.match(CLIENT, /<PaginatedEditor/)
+  assert.match(CLIENT, /essay=\{essay\}/)
   assert.match(CLIENT, /readOnly=\{conflicted\}/)
   assert.doesNotMatch(CLIENT, /maxLength/)
   assert.doesNotMatch(CLIENT, /\.slice\(0,|substring\(/)
-  // No rich-text editor arrived wearing a layout change's clothes.
+  // NO HTML IS AUTHORED OR INJECTED HERE. The editor owns its own contentEditable;
+  // this component never writes one, and never reaches a browser command.
   assert.doesNotMatch(CLIENT, /contentEditable|dangerouslySetInnerHTML|execCommand/)
-  assert.match(CLIENT, /min-h-\[32rem\]/, 'and it is generous before anything is typed')
 })
 
 test('the import control is still reachable by keyboard', () => {
@@ -2162,7 +2242,7 @@ test('the saved prompt is rendered once, by the panel, not twice', () => {
   assert.equal((CLIENT.match(/\{prompt\.promptText\}/g) ?? []).length, 1)
   // And the panel keeps everything the applicant needs beside it.
   assert.match(CLIENT, /schoolNameFor\(schools, prompt\.schoolId\)/)
-  assert.match(CLIENT, /wordLimitLabel\(prompt\.statedMaxWords\)/)
+  assert.match(CLIENT, /wordLimitLabel\(prompt\.statedMaxWords, promptOrigin\)/)
   assert.match(CLIENT, /\{promptNotice\}/)
 })
 
@@ -2326,10 +2406,11 @@ test('the results sit BELOW the writing area, not beside it', () => {
   // Feedback is long and wants the full column; the reference panel would have
   // squeezed both. Nothing above it moves when it appears.
   const results = CLIENT.indexOf('aria-labelledby="analysis-heading"')
-  const textarea = CLIENT.indexOf('<textarea')
+  // The writing area is the editor now, not a textarea.
+  const writing = CLIENT.indexOf('<PaginatedEditor')
   const aside = CLIENT.indexOf('aria-labelledby="prompt-heading"')
-  assert.ok(textarea !== -1 && results !== -1 && aside !== -1)
-  assert.ok(textarea < results, 'after the writing area')
+  assert.ok(writing !== -1 && results !== -1 && aside !== -1)
+  assert.ok(writing < results, 'after the writing area')
   assert.ok(results < aside, 'and still inside the left column')
 })
 

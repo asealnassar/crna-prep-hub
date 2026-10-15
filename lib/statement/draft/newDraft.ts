@@ -37,7 +37,7 @@ export type CreatePath = 'school' | 'general'
 
 /** The screens, in the order they are reached. */
 export type NewDraftStep =
-  'choice' | 'school' | 'requirement' | 'prompt' | 'paste' | 'title'
+  'choice' | 'school' | 'requirement' | 'prompt' | 'paste' | 'report' | 'title'
 
 /**
  * Every word the dialog can show that is not already PICKER_MESSAGES'.
@@ -60,13 +60,39 @@ export const NEW_DRAFT_MESSAGES = {
    * which ends "you can keep writing -- a prompt is optional": true in the
    * editor, where a draft already exists, and meaningless here, where nothing
    * has been created yet. What this reader needs is the way forward.
+   *
+   * IT SAYS WHOSE GAP IT IS. "No prompts are listed" reads as a fact about the
+   * school; the applicant's reasonable conclusion is that there is nothing to
+   * write yet, which is false and costs them the feature. "We don't have it
+   * yet" is the same fact, attributed correctly, and it makes the next sentence
+   * an offer rather than an apology.
    */
-  noPrompts: 'No prompts are listed for this school yet.',
+  noPrompts: 'We don\u2019t have this school\u2019s current writing prompt yet.',
+  /**
+   * The offer that follows it.
+   *
+   * TWO CLAUSES, AND THE SECOND IS THE ONE THAT MATTERS. An applicant asked to
+   * contribute to a directory is doing us a favour; an applicant told they can
+   * start writing immediately is being offered something. Both are true, and
+   * the order reflects which one answers "why would I?".
+   */
+  noPromptsInvite:
+    'Have the prompt from your application? Add it here and you can start '
+    + 'writing immediately.',
   /** The way forward, and it keeps whatever title has been typed. */
   startGeneral: 'Start a general statement instead',
-  /** The third way to start, offered alongside a school's listed questions. */
-  pastePrompt: 'Don\u2019t see your prompt? Paste it here.',
-  pasteHeading: 'Paste your school\u2019s prompt',
+  /**
+   * The third way to start, offered alongside a school's listed questions.
+   *
+   * IT NAMES THE REASON SCHOOLS CHANGE. "Don't see your prompt?" invites a
+   * reader who thinks they have missed something to look again. School prompts
+   * are rewritten between application cycles, so the common case is not that
+   * the applicant cannot find ours -- it is that theirs is newer. Saying so
+   * makes submitting the obvious move rather than a last resort, and it is how
+   * a changed prompt reaches the review queue at all.
+   */
+  pastePrompt: 'My school gave me a different or newer prompt',
+  pasteHeading: 'Add your school prompt',
   /**
    * THE CONSENT SENTENCE, shown before the box is sent and not after.
    *
@@ -85,8 +111,16 @@ export const NEW_DRAFT_MESSAGES = {
   requirementBody:
     'This school asks for the documents below. Start whichever you want to write first '
     + '— each one is saved and analysed separately, and you can come back for the rest.',
-  /** The escape to the older catalog, for a school that has rows in both. */
-  otherPrompts: 'Looking for a different prompt? See this school’s listed prompts.',
+  /**
+   * The escape back to the school list.
+   *
+   * IT USED TO READ "Looking for a different prompt? See this school's listed
+   * prompts." -- which described what it did, and what it did was the wrong
+   * thing: it stayed on the school already chosen and offered that school's
+   * OTHER prompts. An applicant who has picked the wrong school reads "a
+   * different prompt" as the way out and lands back in the same place.
+   */
+  otherPrompts: 'See Other School Prompts',
   /** A requirement-backed create with an empty title. */
   requirementTitleRequired: 'Name this draft before creating it.',
   /** Shown on the control itself when the backend for this is not switched on. */
@@ -113,6 +147,47 @@ export const NEW_DRAFT_MESSAGES = {
  * The general path skips straight to the title: there is nothing to choose, and
  * a screen with one button that says "continue" is a screen that wastes a click.
  */
+
+/**
+ * The state that returning to "Choose a school" must leave behind.
+ *
+ * ---------------------------------------------------------------------------
+ * A LABEL CHANGE WOULD NOT HAVE FIXED THIS
+ * ---------------------------------------------------------------------------
+ * The control this belongs to used to call a handler that set `step` and
+ * nothing else, so the chosen school survived the transition and the applicant
+ * was shown the same school's other prompts. Renaming the button would have
+ * made it lie more clearly.
+ *
+ * DECLARED AS DATA so the dialog and its test read one list. Every field that
+ * identifies a school, a prompt or a requirement is here and is null; a new
+ * one added to the dialog without being added here is a field that survives
+ * the reset, which is the bug all over again.
+ *
+ * THE TITLE IS ABSENT ON PURPOSE, like every other transition in this dialog:
+ * moving between screens is navigation, and navigation does not throw away
+ * what the applicant typed.
+ */
+export const SCHOOL_CHOICE_RESET = {
+  step: 'school',
+  path: 'school',
+  school: null,
+  prompt: null,
+  pasted: null,
+  /*
+   * A CHANGED-PROMPT REPORT IS ABOUT ONE CATALOG ROW, so it is as school-
+   * specific as anything else here. Leaving it behind would carry a report
+   * against Rush's prompt into a visit to Duke, and the submission would name
+   * a requirement the applicant is no longer looking at.
+   */
+  report: null,
+  requirementId: null,
+  requirementSets: null,
+  prompts: null,
+  promptNotice: null,
+  message: null,
+} as const
+
 export function stepForPath(path: CreatePath): NewDraftStep {
   return path === 'school' ? 'school' : 'title'
 }
@@ -147,6 +222,11 @@ export function stepBefore(step: NewDraftStep, path: CreatePath | null): NewDraf
     // version of it that had no prompts to list -- so Back returns there.
     case 'paste':
       return 'prompt'
+    // The report form is reached from the CHECKLIST, because that is where the
+    // row being reported is shown. Back to the prompt list would be back to
+    // the other catalog, which has no card the applicant just clicked.
+    case 'report':
+      return 'requirement'
     case 'title':
       // The general path never saw the middle screens, so its Back goes all
       // the way to the choice rather than to a school it never picked.
@@ -272,6 +352,29 @@ export interface PastedPrompt {
   readonly sourceUrl: string | null
   /** Their explicit agreement that this wording may be published. */
   readonly confirmed: boolean
+  // ---- what else their school may have told them, all optional -----------
+  //
+  // NINE MORE FIELDS AND NOT ONE MORE REQUIRED ONE. The form keeps them behind
+  // a disclosure for exactly this reason: an applicant who has only the wording
+  // must be able to submit in two fields, and an applicant holding a page of
+  // instructions must not have to throw most of it away.
+  //
+  // NO ENFORCEMENT REGISTER AMONG THEM. Deciding whether "about 500 words" is a
+  // cap or a target is a judgement the administrator makes from this evidence;
+  // asking the applicant would manufacture reviewed-looking data nobody
+  // reviewed. See 20261006_008.
+  readonly documentLabel: string | null
+  /** Their words for the kind of document. Never our nine-value taxonomy. */
+  readonly documentTypeHint: string | null
+  readonly statedMinWords: number | null
+  readonly statedMaxCharacters: number | null
+  /** A number, when they have a clean one. One decimal place, so 1.5 works. */
+  readonly statedMaxPages: number | null
+  /** Their own wording, for everything a number cannot hold. */
+  readonly statedPagesText: string | null
+  readonly formattingInstructions: string | null
+  readonly otherInstructions: string | null
+  readonly submitterNote: string | null
 }
 
 /**
@@ -294,6 +397,15 @@ export const EMPTY_PASTE: PastedPrompt = {
   applicationCycle: null,
   sourceUrl: null,
   confirmed: false,
+  documentLabel: null,
+  documentTypeHint: null,
+  statedMinWords: null,
+  statedMaxCharacters: null,
+  statedMaxPages: null,
+  statedPagesText: null,
+  formattingInstructions: null,
+  otherInstructions: null,
+  submitterNote: null,
 }
 
 /**
@@ -341,6 +453,17 @@ export type PastedDraftRequest =
           readonly applicationCycle: string | null
           readonly sourceUrl: string | null
           readonly confirmed: true
+          // 20261006_008. Nullable, never absent: a key that is sometimes
+          // missing is a shape the route would have to reason about twice.
+          readonly documentLabel: string | null
+          readonly documentTypeHint: string | null
+          readonly statedMinWords: number | null
+          readonly statedMaxCharacters: number | null
+          readonly statedMaxPages: number | null
+          readonly statedPagesText: string | null
+          readonly formattingInstructions: string | null
+          readonly otherInstructions: string | null
+          readonly submitterNote: string | null
         }
       }
     }
@@ -376,6 +499,24 @@ export function newPastedDraftRequest(
         applicationCycle: pasted.applicationCycle,
         sourceUrl: pasted.sourceUrl,
         confirmed: true,
+        // PASSED THROUGH UNREAD. Every one is validated by
+        // checkPromptSubmission on the server; this builder's job is to carry
+        // what was typed, not to decide whether it is usable.
+        //
+        // COALESCED TO null, NEVER undefined, AND THAT IS NOT COSMETIC.
+        // JSON.stringify DROPS an undefined value, so a caller holding an older
+        // PastedPrompt would send a body with the key missing rather than
+        // present-and-empty -- and the declared type here says `string | null`,
+        // which would then be a lie about what crossed the wire.
+        documentLabel: pasted.documentLabel ?? null,
+        documentTypeHint: pasted.documentTypeHint ?? null,
+        statedMinWords: pasted.statedMinWords ?? null,
+        statedMaxCharacters: pasted.statedMaxCharacters ?? null,
+        statedMaxPages: pasted.statedMaxPages ?? null,
+        statedPagesText: pasted.statedPagesText ?? null,
+        formattingInstructions: pasted.formattingInstructions ?? null,
+        otherInstructions: pasted.otherInstructions ?? null,
+        submitterNote: pasted.submitterNote ?? null,
       },
     },
   }

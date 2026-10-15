@@ -219,11 +219,16 @@ test('A PAGE-LIMITED CARD SHOWS PAGES AND NO WORD ESTIMATE', () => {
     const card = row.kind === 'document' ? row.card : null
     assert.equal(card?.constraintSummary, '1 page maximum')
     assert.doesNotMatch(card!.constraintSummary, /word/i)
-    assert.equal(card?.showUnmeasuredNotice, true)
+    // AND NOTHING ON IT NEEDS A HUMAN ANY MORE. This card used to carry the
+    // blanket notice, because a one-page limit was something a textarea could
+    // not see. The Studio lays the page out and counts it, so the page is the
+    // measured line and there is nothing left to tell the applicant to check.
+    // ASSERTED ON THE CHIPS, which are now the only presentation of this.
+    assert.deepEqual(card!.constraints.filter((c) => c.register === 'manual'), [])
     // The counter is words, with nothing to compare against -- which is honest.
     assert.deepEqual([...card!.liveCounts], ['words'])
-    const measured = card!.constraints.filter((c) => c.measured)
-    assert.deepEqual(measured, [], 'nothing on this card is checkable here')
+    const measured = card!.constraints.filter((c) => c.measured).map((c) => c.kind)
+    assert.deepEqual(measured, ['pages'], 'the page limit is what is measured')
   }
 })
 
@@ -233,7 +238,12 @@ test('a card with nothing stated says so', () => {
   const card = view.rows[0]!.kind === 'document' ? view.rows[0] : null
   assert.equal(card!.kind === 'document' && card!.card.constraintSummary,
     'No length requirement stated')
-  assert.equal(card!.kind === 'document' && card!.card.showUnmeasuredNotice, false)
+  assert.deepEqual(
+    card!.kind === 'document'
+      ? card!.card.constraints.filter((c) => c.register === 'manual')
+      : null,
+    [],
+  )
 })
 
 test('the two Minnesota documents show DIFFERENT units side by side', () => {

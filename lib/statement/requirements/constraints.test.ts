@@ -3,11 +3,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  DEFAULT_ENFORCEMENT, ENFORCEMENTS, NO_CONSTRAINTS, UNMEASURED_NOTICE, characterCount,
+  DEFAULT_ENFORCEMENT, ENFORCEMENTS, NO_CONSTRAINTS, characterCount,
   characterLimit, characterLimitAmbiguous, constraintKinds, hasAdvisoryLength,
-  hasTruncationPolicy, hasUnmeasurableConstraint, isStrict, liveCounts, measurableInEditor,
+  analyzerUnmeasuredKinds, hasTruncationPolicy, isStrict, liveCounts,
   overages, pageLimit, parseEnforcement, shortfalls, strictOverages, truncatedKinds,
-  unmeasurableKinds, wordLimit, type Constraints,
+  wordLimit, type Constraints,
 } from './constraints.ts'
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
@@ -23,28 +23,34 @@ function withChars(max: number | null, spacesCount: boolean | null): Constraints
 
 // -------------------------------------------------- what can be measured
 
-test('words and characters are measurable; nothing else is', () => {
-  assert.equal(measurableInEditor('words'), true)
-  assert.equal(measurableInEditor('characters'), true)
-  for (const kind of ['pages', 'spacing', 'font', 'margins', 'citation', 'other'] as const) {
-    assert.equal(measurableInEditor(kind), false, kind)
-  }
-})
-
-test('a page limit is reported as unmeasurable, and never as a word limit', () => {
+test('THE ANALYSER\u2019S SCOPE IS FROZEN, AND IS NOT THE CAPABILITY MODEL', () => {
+  /*
+   * This file used to assert that words and characters were the only things
+   * this product could measure. That is no longer true -- the Studio lays out
+   * the page and counts it -- and what each field is worth now lives in
+   * lib/statement/layout/capabilities.ts.
+   *
+   * What survives here is narrower and belongs to one caller: the kinds the
+   * REVIEW PROMPT tells the model not to score. Widening it would change what
+   * the analyser is asked to judge, which is a RUBRIC_VERSION decision.
+   */
   const pages: Constraints = { ...NO_CONSTRAINTS,
     pages: pageLimit({ min: null, max: 2, spacing: 'double', enforcement: 'enforced' }) }
-  assert.deepEqual([...unmeasurableKinds(pages)], ['pages', 'spacing'])
-  assert.equal(hasUnmeasurableConstraint(pages), true)
+  assert.deepEqual([...analyzerUnmeasuredKinds(pages)], ['pages', 'spacing'])
+  assert.deepEqual([...analyzerUnmeasuredKinds(withWords(null, 500))], [])
+})
+
+test('a page limit NEVER becomes a word limit', () => {
+  const pages: Constraints = { ...NO_CONSTRAINTS,
+    pages: pageLimit({ min: null, max: 2, spacing: 'double', enforcement: 'enforced' }) }
   // THE LOAD-BEARING ASSERTION: no word bound materialises from a page count.
   assert.equal(pages.words, null)
   // And the live counter falls back to a plain word count with nothing to compare.
   assert.deepEqual([...liveCounts(pages)], ['words'])
 })
 
-test('a word-only requirement needs no notice', () => {
-  assert.equal(hasUnmeasurableConstraint(withWords(null, 500)), false)
-  assert.deepEqual([...unmeasurableKinds(withWords(null, 500))], [])
+test('a word-only requirement states nothing beyond its words', () => {
+  assert.deepEqual([...constraintKinds(withWords(null, 500))], ['words'])
 })
 
 test('constraintKinds reports every kind present, and only those', () => {
@@ -74,12 +80,19 @@ test('margins alone still register, and font alone does not claim margins', () =
   assert.deepEqual([...constraintKinds(fontOnly)], ['font'])
 })
 
-test('the notice says what it cannot check, and promises no checking', () => {
-  assert.match(UNMEASURED_NOTICE, /counts words and characters only/)
-  for (const unmeasured of ['page count', 'spacing', 'font', 'margins', 'citation']) {
-    assert.ok(UNMEASURED_NOTICE.includes(unmeasured), unmeasured)
-  }
-  assert.doesNotMatch(UNMEASURED_NOTICE, /verif(y|ied)|check(ed|s) your (page|font|margin)/i)
+test('THE BLANKET NOTICE IS GONE AND MUST NOT COME BACK', () => {
+  /*
+   * It told every applicant that this editor "counts words and characters only"
+   * and could not check page count, spacing, font or margins. The Studio lays
+   * out the page and measures it, so the sentence understated what the product
+   * knew and sent people to re-do work it had already done.
+   *
+   * Asserted on the source, so a helpful future re-addition fails here.
+   */
+  const source = readFileSync(new URL('./constraints.ts', import.meta.url), 'utf8')
+  assert.equal(source.includes("'This editor counts words"), false)
+  assert.equal(/export function measurableInEditor/.test(source), false)
+  assert.equal(/export const UNMEASURED_NOTICE/.test(source), false)
 })
 
 // -------------------------------------------------- live counters
@@ -321,7 +334,7 @@ test('THE REGISTER CHANGES NO COUNT AND NO MEASURABILITY', () => {
     }
     assert.equal(characterCount(text, constraints.characters!.spacesCount), 10, enforcement)
     assert.deepEqual([...liveCounts(constraints)], ['characters'], enforcement)
-    assert.deepEqual([...unmeasurableKinds(constraints)], [], enforcement)
+    assert.deepEqual([...analyzerUnmeasuredKinds(constraints)], [], enforcement)
   }
 })
 
@@ -410,8 +423,7 @@ test('NOTHING ABOUT UT KNOXVILLE’S PAGES OR SPACING IS CLAIMED AS MEASURED', (
   // It also states 3-5 double-spaced pages. The editor has no pages, so those
   // are displayed and never checked, and no overage can come from them.
   assert.deepEqual([...liveCounts(UTK)], ['characters'], 'the counter is characters only')
-  assert.deepEqual([...unmeasurableKinds(UTK)], ['pages', 'spacing'])
-  assert.equal(hasUnmeasurableConstraint(UTK), true)
+  assert.deepEqual([...analyzerUnmeasuredKinds(UTK)], ['pages', 'spacing'])
   assert.equal(UTK.words, null, 'and no word bound materialised from the pages')
   // A draft of 200,000 whitespace-padded characters is over the CHARACTER
   // maximum and is not "over" any page count, because none was measured.
@@ -443,10 +455,8 @@ test('AN UNENFORCED LENGTH CAN NEVER PRODUCE AN OVERAGE OR A SHORTFALL', () => {
 })
 
 test('IT IS NOT MEASURABLE, AND IT IS NOT A TRUNCATION', () => {
-  assert.equal(measurableInEditor('unenforced-length'), false)
   assert.deepEqual([...constraintKinds(SHOWN_NOT_ENFORCED)], ['unenforced-length'])
-  assert.deepEqual([...unmeasurableKinds(SHOWN_NOT_ENFORCED)], ['unenforced-length'])
-  assert.equal(hasUnmeasurableConstraint(SHOWN_NOT_ENFORCED), true)
+  assert.deepEqual([...analyzerUnmeasuredKinds(SHOWN_NOT_ENFORCED)], ['unenforced-length'])
   // No register, so no truncation policy can be read off it.
   assert.equal(hasTruncationPolicy(SHOWN_NOT_ENFORCED), false)
   assert.deepEqual([...truncatedKinds(SHOWN_NOT_ENFORCED)], [])

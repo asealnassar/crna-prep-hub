@@ -23,6 +23,8 @@ export {
   MAX_UPLOAD_BYTES,
   MAX_EXTRACTED_CHARS,
   MAX_SAVED_CHARS,
+  EXPANDED_SAVED_CHARS,
+  maxSavedChars,
   PRODUCTION_DEADLINE_MS,
 } from './limits.ts'
 

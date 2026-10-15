@@ -283,7 +283,7 @@ test('the page applies the STATEMENT gate, and before it lists anything', () => 
   const gate = PAGE.indexOf('statementStudioAccess({')
   const refuse = PAGE.indexOf('notFound()')
   const token = PAGE.indexOf('readAccessToken()')
-  const client = PAGE.indexOf('createClient(')
+  const client = PAGE.indexOf('statementDbClient(')
   const list = PAGE.indexOf('listDrafts(db')
   for (const [name, at] of [
     ['the gate', gate], ['a refusal', refuse], ['the token read', token],
@@ -305,8 +305,12 @@ test('the page lists through the repository, never off the table', () => {
 
 test('the page holds no service role key', () => {
   assert.doesNotMatch(PAGE, /SERVICE_ROLE/i)
-  assert.match(PAGE, /NEXT_PUBLIC_SUPABASE_ANON_KEY/)
-  assert.match(PAGE, /Authorization: `Bearer \$\{token\}`/)
+  // THE CLIENT MOVED, THE PROPERTY DID NOT. Every statement path now takes its
+  // client from statementDbClient(), which builds the same anon-key,
+  // caller-scoped client and is asserted to hold no service role in
+  // lib/statement/devMode/writeIsolation.test.ts. Pinning the inline
+  // createClient() here would now pin a call that no longer exists.
+  assert.match(PAGE, /statementDbClient\(token, \{/)
 })
 
 test('a repository failure leaks no detail', () => {
@@ -356,23 +360,25 @@ test('the dialog POSTs to the gated API and builds no body of its own', () => {
   // The body is the pure module's, verbatim. No object literal is assembled here.
   assert.match(DIALOG, /body: JSON\.stringify\(request\.body\)/)
   assert.doesNotMatch(DIALOG, /title:\s*[a-zA-Z]/, 'the dialog must not assemble a payload')
-  // FIVE REQUESTS, AND EXACTLY FIVE, each accounted for:
+  // FOUR REQUESTS, AND EXACTLY FOUR, each accounted for:
   //
   //   2 x NEW_DRAFT_ENDPOINT   the prompt/paste/general create, and the
   //                            requirement create. Two because a
   //                            requirement-backed body carries requirementId
   //                            and no promptId, and merging the two builders
   //                            would mean one body that could be either.
-  //   2 x promptsPath          the prompt list, reached from the school screen
-  //                            and again from the checklist's "listed prompts"
-  //                            escape, which keeps the shipped flow reachable.
+  //   1 x promptsPath          the prompt list, reached from the school screen.
   //   1 x requirementsPath     the requirement catalog, asked once per school.
+  //
+  // IT WAS FIVE, WITH A SECOND promptsPath. The checklist's "listed prompts"
+  // escape asked again for the school already chosen; that control now returns
+  // to the school list instead, so the request is gone rather than unused.
   //
   // STILL NO PATCH. Whatever a draft is born against rides its create.
   assert.equal(DIALOG.split('fetch(NEW_DRAFT_ENDPOINT').length - 1, 2, 'two create requests')
-  assert.equal(DIALOG.split('fetch(promptsPath(').length - 1, 2, 'two prompt-list requests')
+  assert.equal(DIALOG.split('fetch(promptsPath(').length - 1, 1, 'one prompt-list request')
   assert.equal(DIALOG.split('fetch(requirementsPath(').length - 1, 1, 'one catalog request')
-  assert.equal(DIALOG.split('fetch(').length - 1, 5, 'and no other request anywhere')
+  assert.equal(DIALOG.split('fetch(').length - 1, 4, 'and no other request anywhere')
   assert.doesNotMatch(DIALOG, /method: 'PATCH'|PATCH/, 'a created draft is never patched')
   // AND THE REQUIREMENT BODY IS THE PURE MODULE'S TOO. No object literal.
   assert.match(DIALOG, /body: JSON\.stringify\(requirementDraftRequest\(title, requirementId\)\)/)
@@ -417,12 +423,41 @@ test('on success the dialog neither closes nor releases the guard', () => {
 
 test('the dialog never retries by itself, and keeps the title when it fails', () => {
   assert.doesNotMatch(DIALOG, /setTimeout\([^)]*submit|setInterval|retryCount|attempts/)
-  // The only writes to the title are the applicant's keystrokes and the reset
-  // when the dialog opens. A refusal path never clears it.
+  /*
+   * EVERY WRITE TO THE TITLE IS INVENTORIED, and the inventory is the test.
+   *
+   * The applicant's keystrokes (two inputs: the title screen and the report
+   * screen), the reset when the dialog opens, and ONE pre-fill: opening a
+   * changed-prompt report takes the document's own label when the title is
+   * still empty, because reporting is a single screen and the draft still
+   * needs a name.
+   *
+   * THE PRE-FILL CANNOT DISCARD ANYTHING. It is written with an updater that
+   * returns `current` unless the field is blank, which is asserted below --
+   * so the property this test was written for is unchanged: no path clears a
+   * title the applicant typed, least of all a refusal.
+   */
+  // The inventory is matched with a non-greedy pattern, so the updater shows
+  // up truncated at its first bracket; its whole body is asserted below.
   assert.deepEqual(DIALOG.match(/setTitle\([^)]*\)/g), [
     "setTitle('')",
+    'setTitle((current)',
+    'setTitle(event.target.value)',
     'setTitle(event.target.value)',
   ])
+  // THE PRE-FILL KEEPS WHAT IS THERE. Blank becomes the label; anything else
+  // is returned unchanged, which is the whole safety property.
+  assert.match(DIALOG,
+    /setTitle\(\(current\) => \(current\.trim\(\) === '' \? label : current\)\)/)
+  // THE RESET IS THE OPEN EFFECT'S, AND NOTHING ELSE EMPTIES IT.
+  assert.equal(DIALOG.split("setTitle('')").length - 1, 1)
+  // AND THE SUBMIT FLOW TOUCHES IT NOT AT ALL.
+  const flow = DIALOG.slice(
+    DIALOG.indexOf('const submit = useCallback'),
+    DIALOG.indexOf('if (!open) return null'),
+  )
+  assert.ok(flow.length > 0, 'the create flow was not found')
+  assert.doesNotMatch(flow, /setTitle/, 'no create path may write the title')
 })
 
 test('the dialog renders only its own controlled message', () => {
@@ -435,7 +470,11 @@ test('the dialog renders only its own controlled message', () => {
 })
 
 test('the title input does not silently truncate', () => {
+  // NEITHER TITLE INPUT CARRIES ONE -- the title screen's or the report
+  // screen's. A title over the limit is refused and counted, never shortened.
   assert.doesNotMatch(DIALOG, /maxLength/, 'maxLength would shorten a pasted title')
+  assert.equal(DIALOG.split('MAX_TITLE_CHARS').length - 1, 7,
+    'both title inputs must show the same counter')
   assert.doesNotMatch(DIALOG, /\.slice\(0,|substring\(/)
   // The dialog picks neither builder itself: createRequestFor does, from the
   // path, so a general body and a school body cannot be swapped by a typo here.
@@ -661,6 +700,13 @@ test('the library pulls in nothing it does not need', () => {
   // from lib/statement/requirements, which is pure TypeScript.
   const imported = [...LIST.matchAll(/from '([^']+)'/g)].map((found) => found[1])
   assert.deepEqual([...new Set(imported)].sort(), [
+      // AND NOW A SECOND, FOR THE SAME REASON. ./CatalogReview renders the 63
+      // imported requirement sets for local review. It is a CLIENT component
+      // that receives those sets as PROPS -- it imports no payload, reads no
+      // file and queries nothing, so it adds no runtime dependency either. The
+      // payload is read on the server inside the preview branch, and reaching
+      // it through an import here is exactly what this pin exists to catch.
+      './CatalogReview',
     './NewDraftDialog',
     './RequirementPreview',
     '@/lib/SidebarContext',
@@ -678,7 +724,10 @@ test('THE REQUIREMENT PREVIEW CANNOT RENDER WITHOUT THE SERVER SAYING SO', () =>
   assert.match(LIST, /requirementsPreview = false/)
   // RENDERED INSTEAD OF THE LIBRARY. The `&&` form made it a second child of
   // the flex root, which turned it into a column beside the page.
-  assert.match(LIST, /\{requirementsPreview \? \(/)
+  // THE CONDITION WIDENED when ?preview=requirements became the real catalog
+  // and ?preview=fixtures kept the shapes. The FORM is what matters here:
+  // one ternary that replaces the library, never the `&&` sibling form.
+  assert.match(LIST, /\{requirementsPreview \|\| fixturesPreview \? \(/)
   assert.doesNotMatch(LIST, /\{requirementsPreview && \(/)
   // AND IT IS IN PLACE OF THE LIBRARY, not below it. This assertion used to
   // say the opposite -- "below everything an applicant uses, not in place of
@@ -863,12 +912,17 @@ test('the stale-response guard wraps the prompt list, and reads a REF', () => {
   // must not land under a different school's name.
   assert.match(DIALOG, /mayApplyPrompts\(\{ requestedFor: option\.id, browsingNow: browsing\.current \}\)/)
   assert.match(DIALOG, /const browsing = useRef<string \| null>\(null\)/)
-  // Guarded on BOTH outcomes of EVERY request that can land late. Six: the
-  // prompt list's reply and failure, the requirement catalog's reply and
-  // failure, and the "listed prompts" escape's reply and failure. A school
-  // switched mid-flight must not show one school's requirements under
-  // another's name any more than it may show its prompts.
-  assert.equal(DIALOG.split('mayApplyPrompts(').length - 1, 6, 'every reply and every failure')
+  // Guarded on BOTH outcomes of EVERY request that can land late. Four: the
+  // prompt list's reply and failure, and the requirement catalog's reply and
+  // failure. A school switched mid-flight must not show one school's
+  // requirements under another's name any more than it may show its prompts.
+  //
+  // IT WAS SIX. The "listed prompts" escape made a third request, from the
+  // checklist, for the school already chosen; that control now leaves the
+  // school instead of re-offering it, so the request -- and its two guards --
+  // are gone. The escape clears the ref rather than guarding a reply.
+  assert.equal(DIALOG.split('mayApplyPrompts(').length - 1, 4, 'every reply and every failure')
+  assert.match(DIALOG, /browsing\.current = null/, 'and leaving a school clears the marker')
   // And a stale reply returns without writing anything.
   assert.match(DIALOG, /if \(!mayApplyPrompts\([^)]*\)\) return/)
 })
@@ -900,10 +954,13 @@ test('the general path is offered wherever a school path can dead-end', () => {
 test('neither path is preselected', () => {
   assert.match(DIALOG, /useState<CreatePath \| null>\(null\)/)
   assert.match(DIALOG, /useState<NewDraftStep>\('choice'\)/)
-  // Both choices are explicit clicks. setPath('school') twice: the choice
-  // itself, and starting a requirement -- which is a school draft and must
-  // carry the school path even though it reached the title by another screen.
-  assert.equal(DIALOG.split("setPath('school')").length - 1, 2)
+  /*
+   * Both choices are explicit clicks. setPath('school') three times: the
+   * choice itself, starting a requirement, and reporting that one has changed
+   * -- the last two are school drafts reached from the checklist rather than
+   * from the prompt list, and both must carry the school path.
+   */
+  assert.equal(DIALOG.split("setPath('school')").length - 1, 3)
   assert.equal(DIALOG.split("setPath('general')").length - 1, 2, 'the choice, and the dead-end exit')
 })
 
@@ -943,9 +1000,15 @@ test('the dialog authors no canonical value on the APPROVED path', () => {
 })
 
 test('a pasted prompt never travels the approved-prompt branch', () => {
-  // The paste is tested FIRST, so a request carrying one can never fall
-  // through to the branch that means "the catalog vouches for this".
-  assert.match(DIALOG, /const request = pasted !== null\s*\n\s*\? newPastedDraftRequest/)
+  /*
+   * THE PRECEDENCE, AS ONE CHAIN. Neither a report nor a paste may fall
+   * through to the branch that means "the catalog vouches for this", so both
+   * are tested before it -- and the report is tested before the paste, because
+   * a report sent as a paste would lose the id of the row it contradicts.
+   */
+  assert.match(DIALOG, /const request = report !== null\s*\n\s*\? newPromptChangeRequest/)
+  assert.match(DIALOG, /: pasted !== null\s*\n\s*\? newPastedDraftRequest/)
+  assert.match(DIALOG, /: createRequestFor\(\{ path, title, promptId:/)
   // Choosing a listed prompt clears any paste, and pasting clears any choice.
   assert.match(DIALOG, /setPasted\(null\); setPrompt\(choice\)/)
   assert.match(DIALOG, /setPrompt\(null\)\s*\n\s*setPasted\(EMPTY_PASTE\)/)
@@ -979,7 +1042,10 @@ test('PREVIEW CAN DRAW THE SCREENS BUT NEVER SEND ANYTHING', () => {
     DIALOG.indexOf('const submit = useCallback'),
     DIALOG.indexOf('if (!open) return null'),
   )
-  assert.match(flow, /if \(pasted !== null && !pasteSubmissionAllowed\(\{ submissionsEnabled \}\)\) \{[\s\S]*?return\s*\n\s*\}/)
+  // BOTH KINDS OF SUBMISSION ARE STOPPED BY IT. A changed-prompt report is a
+  // submission -- same table, same function, same rate limit -- so a build
+  // where the backend is off has nowhere to put one either.
+  assert.match(flow, /if \(\(pasted !== null \|\| report !== null\)\s*\n\s*&& !pasteSubmissionAllowed\(\{ submissionsEnabled \}\)\) \{[\s\S]*?return\s*\n\s*\}/)
   assert.doesNotMatch(flow, /pasteSubmissionAllowed[\s\S]{0,200}createRequestFor/,
     'the block must not fall through to the general builder')
 })

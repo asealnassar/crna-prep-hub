@@ -59,6 +59,22 @@ export function reviewPreviewRequested(value: unknown): boolean {
  */
 export const REQUIREMENTS_PREVIEW_VALUE = 'requirements'
 
+/**
+ * The value that means "draw the eight hand-built SHAPE fixtures".
+ *
+ * SPLIT FROM 'requirements' WHEN THE REAL CATALOG ARRIVED. `?preview=requirements`
+ * now shows the 63 imported sets, which is what somebody reviewing the catalog
+ * before release is actually asking for. The fixtures answer a different
+ * question -- does the interface handle every requirement SHAPE -- and keep
+ * their own address rather than being deleted for having been superseded.
+ */
+export const FIXTURES_PREVIEW_VALUE = 'fixtures'
+
+/** Whether the address asked for the shape fixtures. Exact value, one of it. */
+export function fixturesPreviewRequested(value: unknown): boolean {
+  return value === FIXTURES_PREVIEW_VALUE
+}
+
 /** Whether the address asked for the requirement preview. Exact value, one of it. */
 export function requirementsPreviewRequested(value: unknown): boolean {
   return value === REQUIREMENTS_PREVIEW_VALUE

@@ -17,7 +17,7 @@
 import { extractStatementPdf } from './extractStatementPdf.ts'
 import { detectStatementFormat, decodeUtf8Strict, type StatementFormat } from './format.ts'
 import { pdfCapacity, type PdfCapacity } from './capacity.ts'
-import { MAX_EXTRACTED_CHARS, MAX_SAVED_CHARS, MAX_UPLOAD_BYTES } from './limits.ts'
+import { MAX_EXTRACTED_CHARS, MAX_UPLOAD_BYTES, maxSavedChars } from './limits.ts'
 
 /**
  * Every way this can refuse. One code per thing a caller might need to say
@@ -126,8 +126,8 @@ function finish(format: StatementFormat, text: string, pages?: number): Document
     format,
     text,
     characters,
-    saveable: characters <= MAX_SAVED_CHARS,
-    maxSavedCharacters: MAX_SAVED_CHARS,
+    saveable: characters <= maxSavedChars(),
+    maxSavedCharacters: maxSavedChars(),
     ...(pages === undefined ? {} : { pages }),
   }
 }

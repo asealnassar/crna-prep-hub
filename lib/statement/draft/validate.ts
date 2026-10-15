@@ -71,7 +71,7 @@
  * would refuse is accepted here.
  */
 
-import { MAX_SAVED_CHARS } from '../extract/limits.ts'
+import { maxSavedChars } from '../extract/limits.ts'
 
 /**
  * Approved: a draft title is 1-200 characters, measured AFTER trimming.
@@ -165,6 +165,27 @@ export interface DraftCreateInput {
 export interface DraftUpdateInput extends DraftCreateInput {
   /** The revision the caller read, to be compared and swapped by the repository. */
   readonly expectedRevision: number
+  /**
+   * The constrained editor document, when the caller sent one.
+   *
+   * ABSENT MEANS LEAVE IT ALONE, which is what the plain textarea sends. The
+   * API has already checked that its extracted text equals `essay`; the
+   * repository stores it without re-deciding that.
+   */
+  readonly editorDocument?: unknown
+  readonly editorDocumentVersion?: number
+  /**
+   * The chosen face, when the caller sent one.
+   *
+   * THREE STATES, AND THEY ARE THE COLUMN'S THREE STATES:
+   *   absent  no change. Every keystroke's autosave sends this.
+   *   null    back to the Studio default.
+   *   an id   that bundled face.
+   *
+   * ABSENT IS NOT undefined-AS-A-VALUE. The key is omitted entirely, so an
+   * ordinary save cannot clear a preference by saying nothing about it.
+   */
+  readonly documentFont?: string | null
 }
 
 export type DraftCreateCheck =
@@ -212,11 +233,18 @@ export function checkTitle(value: unknown): TitleCheck {
  * EMPTY IS VALID. A draft exists before a word is written, and the column
  * defaults to ''.
  */
-export function checkEssay(value: unknown): EssayCheck {
+export function checkEssay(value: unknown, ceiling?: number): EssayCheck {
   if (typeof value !== 'string') return { ok: false, code: 'invalid-essay' }
 
   const characters = value.length
-  if (characters > MAX_SAVED_CHARS) {
+  /*
+    THE CEILING IS PASSED IN WHERE THE CALLER KNOWS IT, and read from the
+    environment only when nobody said -- which is the server, where the
+    environment is readable. A browser cannot answer this: see
+    ceilingFromServer in limits.ts for what went wrong when it tried.
+  */
+  const limit = ceiling ?? maxSavedChars()
+  if (characters > limit) {
     // The count, so the caller can say how much has to go. Never the text.
     return { ok: false, code: 'essay-too-long', characters }
   }
@@ -320,11 +348,13 @@ export function checkDraftUpdate(input: {
   readonly title?: unknown
   readonly essay?: unknown
   readonly expectedRevision?: unknown
+  /** The resolved ceiling, when the caller has one. See checkEssay. */
+  readonly savedCharacterCeiling?: number
 }): DraftUpdateCheck {
   const title = checkTitle(input.title)
   if (!title.ok) return forward(title)
 
-  const essay = checkEssay(input.essay)
+  const essay = checkEssay(input.essay, input.savedCharacterCeiling)
   if (!essay.ok) return forward(essay)
 
   const revision = checkExpectedRevision(input.expectedRevision)

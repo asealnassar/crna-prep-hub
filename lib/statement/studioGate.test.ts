@@ -316,8 +316,12 @@ test('the id validator is shared with the draft API, not re-written', () => {
 
 test('the page never holds the service role key', () => {
   assert.doesNotMatch(PAGE, /SERVICE_ROLE/i)
-  assert.match(PAGE, /NEXT_PUBLIC_SUPABASE_ANON_KEY/)
-  assert.match(PAGE, /Authorization: `Bearer \$\{token\}`/)
+  // THE CLIENT MOVED, THE PROPERTY DID NOT. Every statement path now takes its
+  // client from statementDbClient(), which builds the same anon-key,
+  // caller-scoped client and is asserted to hold no service role in
+  // lib/statement/devMode/writeIsolation.test.ts. Pinning the inline
+  // createClient() here would now pin a call that no longer exists.
+  assert.match(PAGE, /statementDbClient\(token, \{/)
 })
 
 test('absence and invisibility end the same way, and a fault does not', () => {
@@ -385,8 +389,21 @@ test('the draft is rendered as escaped text, whitespace preserved', () => {
   // DOM properties and never parsed as markup. Neither is interpolated into
   // HTML, and nothing anywhere sets raw HTML.
   assert.match(editor, /<input\n[\s\S]*?value=\{title\}/)
-  assert.match(editor, /value=\{essay\}/)
+  /*
+   * THE ESSAY NOW REACHES A PROP, NOT A textarea's `value`.
+   *
+   * It is handed to the editor as `essay={essay}`, and the editor turns it
+   * into a ProseMirror document whose text nodes React renders as text. No
+   * step anywhere parses it as markup -- which is the guarantee, unchanged;
+   * only the component that holds it moved.
+   */
+  assert.match(editor, /essay=\{essay\}/)
   assert.doesNotMatch(editor, /dangerouslySetInnerHTML/)
+  const surface = stripComments(readFileSync(
+    path('../../app/statement-studio/components/PaginatedEditor.tsx'), 'utf8'))
+  assert.doesNotMatch(surface, /dangerouslySetInnerHTML/,
+    'the editor must never set raw HTML either')
+  // The applicant's own line breaks survive on every surface that shows prose.
   assert.match(editor, /whitespace-pre-wrap/)
 
   // A conflict makes the title read-only -- still visible, still selectable --

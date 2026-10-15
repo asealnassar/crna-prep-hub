@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url'
 import {
   ENFORCEMENTS, NO_CONSTRAINTS, characterLimit, isStrict, pageLimit, wordLimit,
   type Constraints, type Enforcement,
-  unmeasurableKinds,
   statedLength,
 } from './constraints.ts'
+import { analyzerUnmeasuredKinds } from './constraints.ts'
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 
@@ -15,7 +15,7 @@ import { UT_KNOXVILLE } from './fixtures.ts'
 import {
   NO_STATED_LENGTH, UNENFORCED_LENGTH_NOTICE, UNENFORCED_LENGTH_SUMMARY_NOTICE, constraintLines,
   constraintSummary, labelledConstraints, liveCountLabel, overageMessage, shortfallMessage,
-  showUnmeasuredNotice, statedWordings, truncationNotice, unenforcedLengthIsVerbatim,
+  needsManualReview, statedWordings, truncationNotice, unenforcedLengthIsVerbatim,
   unenforcedLengthNotice,
 } from './constraintText.ts'
 
@@ -113,8 +113,12 @@ test('every line is tagged with whether this editor checks it', () => {
   const labelled = labelledConstraints(mixed)
   const measured = labelled.filter((l) => l.measured).map((l) => l.kind)
   const unmeasured = labelled.filter((l) => !l.measured).map((l) => l.kind)
-  assert.deepEqual(measured, ['words'])
-  assert.deepEqual(unmeasured, ['pages', 'font', 'margins', 'citation', 'other'])
+  // PAGES JOINED THE MEASURED SIDE when the editor started laying out the page.
+  // The font size and the margins are applied rather than measured, so they
+  // stay on the other side of this particular split -- it asks which lines
+  // carry a live figure, not which ones the Studio honours.
+  assert.deepEqual(measured, ['words', 'pages'])
+  assert.deepEqual(unmeasured, ['font', 'margins', 'citation', 'other'])
   // MEASURED COMES FIRST, so the reader sees the watched number before the rest.
   assert.equal(labelled[0]!.kind, 'words')
 })
@@ -139,11 +143,22 @@ test('the labelled view and the plain view never disagree', () => {
     [...constraintLines(summarised)])
 })
 
-test('the notice appears only when something is unmeasurable', () => {
-  assert.equal(showUnmeasuredNotice({ ...NO_CONSTRAINTS,
+test('A PAGE LIMIT AND A SPACING NO LONGER NEED A HUMAN', () => {
+  /*
+   * The behavioural change, stated as a test. This used to be true for a
+   * 2-page double-spaced school, because the editor was a textarea and could
+   * see neither. The Studio lays the page out, measures it, and applies the
+   * spacing -- so there is nothing left for the applicant to check, and saying
+   * otherwise sent them to re-do work that had already been done.
+   */
+  assert.equal(needsManualReview(pages(2, 'double')), false)
+  assert.equal(needsManualReview({ ...NO_CONSTRAINTS,
     words: wordLimit({ min: null, max: 500, enforcement: 'enforced' }) }), false)
-  assert.equal(showUnmeasuredNotice(pages(2, 'double')), true)
-  assert.equal(showUnmeasuredNotice(NO_CONSTRAINTS), false)
+  assert.equal(needsManualReview(NO_CONSTRAINTS), false)
+  // It stays true for what genuinely cannot be settled here.
+  assert.equal(needsManualReview({ ...NO_CONSTRAINTS,
+    citation: { family: 'apa', statedAs: 'APA 7th edition', minReferences: null } }), true)
+  assert.equal(needsManualReview({ ...NO_CONSTRAINTS, otherInstructions: ['Typewritten'] }), true)
 })
 
 // -------------------------------------------------- the live counter label
@@ -415,12 +430,17 @@ test('THE COUNTER SAYS WHAT IT IS COUNTING, NOT JUST A NUMBER', () => {
   const label = liveCountLabel({
     kind: 'characters', constraints, words: 2, text: 'ab cd',
   })
-  assert.equal(label, '4 / 18,000 characters excluding spaces')
-  // THREE THINGS IN ONE STRING, and all three are needed: the count, the bound
+  // THE SCHOOL STATED A RANGE, 5,000-18,000, and the counter now says so. It
+  // used to show "4 / 18,000": the floor was invisible, which reads as though
+  // four characters were merely a long way from the ceiling rather than far
+  // below the minimum.
+  assert.equal(label, '4 characters excluding spaces — required 5,000–18,000')
+  // FOUR THINGS IN ONE STRING, and all four are needed: the count, BOTH bounds
   // it is measured against, and the RULE it was measured by. Drop the last and
   // an applicant at 17,900 cannot tell whether their spaces are in the number.
   assert.match(label, /^4 /, 'the count')
-  assert.match(label, /18,000/, 'the school’s bound')
+  assert.match(label, /5,000/, 'the school’s floor')
+  assert.match(label, /18,000/, 'the school’s ceiling')
   assert.match(label, /excluding spaces/, 'the counting rule')
 })
 
@@ -452,19 +472,33 @@ test('THE PAGE AND SPACING REQUIREMENTS NEVER REACH THE COUNTER', () => {
     const label = liveCountLabel({ kind, constraints, words: 900, text: 'x '.repeat(900) })
     assert.doesNotMatch(label, /\bpages?\b/i, kind)
     assert.doesNotMatch(label, /spaced/i, kind)
-    assert.doesNotMatch(label, /\b[3-5]\b/, `${kind}: a page bound leaked into the counter`)
+    /*
+      THE PAGE BOUND ITSELF, NOT ANY DIGIT IN ITS RANGE.
+
+      This read /\b[3-5]\b/ -- any bare 3, 4 or 5 -- which was only ever a
+      proxy for "3-5 pages". It started failing when the character counter
+      began showing the school's real floor, because "5,000" opens with a 5.
+      A proxy that rejects a correct string is not guarding the rule it was
+      written for, so it is replaced by the rule: the page range must not
+      appear as a bound.
+    */
+    assert.doesNotMatch(label, /\b3\s*[–-]\s*5\b/, `${kind}: the page range leaked`)
+    assert.doesNotMatch(label, /\/\s*[35]\b/, `${kind}: a page bound leaked as a ceiling`)
   }
-  // They are DISPLAYED instead, in the school's own unit, and flagged unchecked.
+  // They are DISPLAYED instead, in the school's own unit.
   const lines = constraintLines(constraints)
   assert.ok(lines.some((line) => /3–5 pages \(double-spaced\)/.test(line)))
-  assert.equal(showUnmeasuredNotice(constraints), true)
-  const unmeasured = labelledConstraints(constraints).filter((line) => !line.measured)
-  // ONE LINE, NOT TWO: the spacing is part of what a page MEANS here, so it is
-  // rendered inside the page line rather than as a requirement of its own.
-  // unmeasurableKinds() still names both, because both are things this editor
-  // cannot check -- the two views answer different questions.
-  assert.deepEqual(unmeasured.map((line) => line.kind), ['pages'])
-  assert.deepEqual([...unmeasurableKinds(constraints)], ['pages', 'spacing'])
+
+  // AND THE PAGE LINE IS NOW A MEASURED ONE. It used to be flagged unchecked
+  // alongside the spacing, because a textarea could see neither; the Studio
+  // lays the page out, counts it, and applies the spacing.
+  const unchecked = labelledConstraints(constraints).filter((line) => !line.measured)
+  assert.deepEqual(unchecked.map((line) => line.kind), [])
+  assert.equal(needsManualReview(constraints), false)
+
+  // The analyser's own scope is unchanged and still names both, deliberately:
+  // widening what the model is asked to score is a rubric decision.
+  assert.deepEqual([...analyzerUnmeasuredKinds(constraints)], ['pages', 'spacing'])
 })
 
 // ===========================================================================

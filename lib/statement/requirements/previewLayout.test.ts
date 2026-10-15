@@ -88,7 +88,12 @@ test('THE SIBLING FORM IS GONE', () => {
   // a preview rendered as `{requirementsPreview && (...)}` after the content
   // column's closing tag rather than inside it.
   assert.doesNotMatch(LIBRARY, /\{requirementsPreview && \(/)
-  assert.match(LIBRARY, /\{requirementsPreview \? \(/)
+  assert.doesNotMatch(LIBRARY, /\{fixturesPreview && \(/)
+  // THE CONDITION WIDENED WHEN THE REAL CATALOG ARRIVED -- ?preview=requirements
+  // shows the 63 imported sets and ?preview=fixtures shows the eight shapes --
+  // but the FORM is the thing this test defends: still one ternary, still
+  // replacing the library rather than appearing after it.
+  assert.match(LIBRARY, /\{requirementsPreview \|\| fixturesPreview \? \(/)
   // And no second centring wrapper, which is what narrowed it further.
   assert.doesNotMatch(LIBRARY, /max-w-6xl/)
 })
@@ -106,7 +111,7 @@ test('THE PREVIEW IS INSIDE THE CONTENT COLUMN, at the same depth as the library
 })
 
 test('IT REPLACES THE LIBRARY RATHER THAN SITTING BESIDE IT', () => {
-  assert.match(LIBRARY, /\{requirementsPreview \? \(/)
+  assert.match(LIBRARY, /\{requirementsPreview \|\| fixturesPreview \? \(/)
   // Two <main>s, and they are the two arms of one conditional -- so exactly
   // one renders.
   assert.equal((LIBRARY.match(/<main\b/g) ?? []).length, 2)

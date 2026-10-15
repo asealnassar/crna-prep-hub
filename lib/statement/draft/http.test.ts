@@ -286,13 +286,16 @@ const withPrompt: StatementDraft = {
   statedMaxWords: 500,
 }
 
-test('publicDraft: drops userId and keeps exactly the TEN client fields', () => {
+test('publicDraft: drops userId and keeps exactly the TWELVE client fields', () => {
+  // TWELVE SINCE 015. editorDocument carries which characters are bold and
+  // documentFont which face the page is laid out in; the essay beside them is
+  // still the canonical text, and userId still never ships.
   const result = publicDraft(stored)
   assert.deepEqual(Object.keys(result).sort(), [
-    'createdAt', 'essay', 'id', 'promptId', 'promptText', 'revision',
-    'schoolId', 'statedMaxWords', 'title', 'updatedAt',
+    'createdAt', 'documentFont', 'editorDocument', 'essay', 'id', 'promptId',
+    'promptText', 'revision', 'schoolId', 'statedMaxWords', 'title', 'updatedAt',
   ])
-  assert.equal(Object.keys(result).length, 10)
+  assert.equal(Object.keys(result).length, 12)
   assert.equal('userId' in result, false)
   assert.equal(JSON.stringify(result).includes(stored.userId), false)
 })
@@ -314,7 +317,12 @@ test('publicDraft: a GENERIC draft serialises four EXPLICIT nulls', () => {
     assert.equal(key in parsed, true, `${key} must survive serialisation`)
     assert.equal(parsed[key], null, `${key} must be null, not absent`)
   }
-  assert.equal(Object.keys(parsed).length, 10)
+  // AND THE DOCUMENT AND THE FONT ARE PRESENT AND NULL TOO, for the same reason.
+  assert.equal('editorDocument' in parsed, true)
+  assert.equal(parsed.editorDocument, null)
+  assert.equal('documentFont' in parsed, true)
+  assert.equal(parsed.documentFont, null)
+  assert.equal(Object.keys(parsed).length, 12)
 })
 
 test('publicDraft: a chosen prompt with no stated limit keeps a null limit', () => {

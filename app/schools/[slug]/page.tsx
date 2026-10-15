@@ -1,10 +1,11 @@
 import Link from 'next/link'
 import type { Metadata } from 'next'
-import { notFound } from 'next/navigation'
+import { notFound, permanentRedirect } from 'next/navigation'
 import {
   buildSlugMap,
   getPublicSchools,
   getSchoolBySlug,
+  retiredSlugDestination,
   slugForSchool,
   type PublicSchool,
 } from '@/lib/schools'
@@ -217,7 +218,28 @@ const usd = (n: number) =>
 export default async function SchoolPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
   const school = await getSchoolBySlug(slug)
-  if (!school) notFound()
+
+  /*
+    A SLUG THIS SCHOOL USED TO HAVE STILL RESOLVES, PERMANENTLY.
+
+    The slug comes from `schools.name`, so correcting a misspelled name retires
+    a URL that is in our own sitemap and in other people's search results and
+    bookmarks. RETIRED_SCHOOL_SLUGS maps the old address to the current one and
+    this sends a 308, so the link keeps working and search engines are told
+    where it went.
+
+    ONLY WHEN THE OLD SLUG IS GENUINELY GONE. retiredSlugDestination consults
+    the LIVE slug map first: while the old name is still what the database
+    holds, the page below serves it as it always did. The name correction is
+    applied in the SQL editor rather than in a deploy, so this has to be
+    correct on both sides of that moment without being redeployed.
+  */
+  if (!school) {
+    const live = buildSlugMap(await getPublicSchools())
+    const destination = retiredSlugDestination(slug, live)
+    if (destination !== null) permanentRedirect(`/schools/${destination}`)
+    notFound()
+  }
 
   /**
    * Other programs in the same state.

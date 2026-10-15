@@ -1,14 +1,15 @@
 import { notFound, redirect } from 'next/navigation'
-import { createClient } from '@supabase/supabase-js'
+import { statementDbClient } from '@/lib/statement/devMode/guardedClient'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
 import { statementStudioAccess, statementStudioMode } from '@/lib/statement/studioGate'
 import { listDrafts } from '@/lib/statement/draft/draftRepo'
 import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
 import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
 import {
-  PASTE_PREVIEW_PARAM, pastePreviewAllowed, pastePreviewRequested,
-  requirementsPreviewRequested,
+  PASTE_PREVIEW_PARAM, fixturesPreviewRequested, pastePreviewAllowed,
+  pastePreviewRequested, requirementsPreviewRequested,
 } from '@/lib/statement/draft/pastePreview'
+import { loadLocalReviewCatalog } from '@/lib/statement/requirements/localReviewCatalog'
 import LibraryClient from './components/LibraryClient'
 
 /**
@@ -72,14 +73,15 @@ export default async function StatementStudioLibraryPage({
   // The anon key plus the caller's bearer token: a caller-scoped client, so the
   // list below is subject to the same RLS the API is. The service role key is
   // deliberately absent -- a page has no business bypassing RLS.
-  const db = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      auth: { autoRefreshToken: false, persistSession: false },
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    }
-  )
+  //
+  // THE CALLER GOES WITH IT, for the reason the editor page gives at length:
+  // simulated live has no auth.uid() and the local stores scope on this. The
+  // list here passes auth.userId explicitly so it did not depend on it, but a
+  // client that knows who is asking cannot quietly return nobody's rows.
+  const db = statementDbClient(token, {
+    userId: auth.userId,
+    isAdmin: isAdminEmail(auth.email),
+  })
 
   const listed = await listDrafts(db, auth.userId)
   // listDrafts has no 'not-found': an applicant with no drafts gets an empty
@@ -137,6 +139,30 @@ export default async function StatementStudioLibraryPage({
     requested: requirementsPreviewRequested(params[PASTE_PREVIEW_PARAM]),
   })
 
+  // The eight hand-built SHAPE fixtures, at their own address now that
+  // ?preview=requirements shows the real catalog. Same gate, same three
+  // conditions; only the screen differs.
+  const fixturesPreview = pastePreviewAllowed({
+    nodeEnv: process.env.NODE_ENV,
+    isAdmin: isAdminEmail(auth.email),
+    requested: fixturesPreviewRequested(params[PASTE_PREVIEW_PARAM]),
+  })
+
+  // THE 63 IMPORTED SETS, READ FROM A LOCAL FILE ON THE SERVER.
+  //
+  // READ ONLY INSIDE THIS BRANCH, so the file is never touched -- and the
+  // catalog never exists in a response -- unless all three preview conditions
+  // have already passed. `requirementsPreview` is false in production by
+  // construction (NODE_ENV), so this expression is `null` there whatever the
+  // address says.
+  //
+  // IT IS NOT A FALLBACK FOR THE FIXTURES AND THE FIXTURES ARE NOT A FALLBACK
+  // FOR IT. A missing payload yields null and the client says so plainly;
+  // quietly showing eight worked examples to somebody who asked to review 63
+  // real schools would be the worst outcome available, because it looks like
+  // an answer.
+  const reviewCatalog = requirementsPreview ? loadLocalReviewCatalog() : null
+
   // Newest edit first, exactly as the repository ordered it. The client does not
   // re-sort: one ordering, decided by the index that serves the query.
   return (
@@ -147,6 +173,8 @@ export default async function StatementStudioLibraryPage({
       submissionsEnabled={promptSubmissionsEnabled()}
       pastePreview={pastePreview}
       requirementsPreview={requirementsPreview}
+      fixturesPreview={fixturesPreview}
+      reviewCatalog={reviewCatalog}
     />
   )
 }

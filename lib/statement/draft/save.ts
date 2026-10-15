@@ -68,6 +68,17 @@ export const SAVE_MESSAGES = {
   unreadable: 'The server sent a reply this editor could not read.',
   /** 5xx. The only retryable case. */
   server: 'The server could not save this.',
+  /**
+   * The save was never acknowledged inside its deadline.
+   *
+   * SAID PLAINLY, BECAUSE THE ALTERNATIVE WAS SAYING NOTHING. Before this,
+   * an unacknowledged save left "Saving…" on screen for ever: the applicant
+   * was told a save was in progress when nothing was going to report on it,
+   * every later save was refused by the single-flight rule, and leaving the
+   * page waited on a promise that could not resolve. "Not saved" with a
+   * working Try again is the honest version of that situation.
+   */
+  timeout: 'That save was not confirmed in time.',
 } as const
 
 /** `2xx`, matching what `Response.ok` means, so a driver need not re-decide. */

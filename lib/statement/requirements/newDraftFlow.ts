@@ -22,7 +22,9 @@
  */
 
 import type { RequirementSet } from './requirement.ts'
-import { requirementFromRow } from './repo.ts'
+import { UNVERIFIED, evidenceKindFrom, type Verification } from './verification.ts'
+import { columnsFromConstraints, requirementFromRow } from './repo.ts'
+import type { Constraints } from './constraints.ts'
 
 export const REQUIREMENTS_ENDPOINT = '/api/statement/requirements'
 
@@ -121,12 +123,35 @@ export function requirementStepFrom(input: {
  * than cast: a browser receiving a malformed document must drop it, not render
  * a card with no question on it.
  */
+/**
+ * The wire's constraints, trusted only as far as their SHAPE.
+ *
+ * The endpoint sends the canonical model, so there is nothing to re-interpret
+ * here -- but it has crossed the wire, so an object that is not one is
+ * rejected and the document falls back to no constraints rather than
+ * fabricating any.
+ */
+function normalisedConstraints(value: unknown): Constraints | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Constraints
+}
+
 function requirementFromRowOrModel(value: unknown) {
   if (value === null || typeof value !== 'object') return null
   const row = value as Record<string, unknown>
   // The wire shape is camelCase; requirementFromRow reads the database's
   // snake_case. Translate the four keys whose names differ, then reuse the one
   // validator rather than writing a second interpretation of the same shape.
+  /*
+    THE CONSTRAINTS GO BACK THROUGH THE READER'S OWN INVERSE.
+
+    This used to flatten them with a list written here, and that list was
+    eleven columns short -- every enforcement register among them -- so the
+    dialog called an advisory length a maximum while the editor did not. See
+    columnsFromConstraints, which lives beside the reader and is round-trip
+    tested over every served document.
+  */
+  const constraints = normalisedConstraints(row.constraints)
   return requirementFromRow({
     id: row.id,
     label: row.label,
@@ -137,43 +162,16 @@ function requirementFromRowOrModel(value: unknown) {
     is_optional: row.optional,
     notes: row.notes,
     display_order: row.displayOrder,
-    ...flattenConstraints(row.constraints),
+    ...(constraints === null ? {} : columnsFromConstraints(constraints)),
   })
 }
 
-/** The constraint object back into the column names requirementFromRow reads. */
-function flattenConstraints(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== 'object') return {}
-  const c = value as Record<string, unknown>
-  const words = c.words as Record<string, unknown> | null | undefined
-  const characters = c.characters as Record<string, unknown> | null | undefined
-  const pages = c.pages as Record<string, unknown> | null | undefined
-  const typography = c.typography as Record<string, unknown> | null | undefined
-  const citation = c.citation as Record<string, unknown> | null | undefined
-  return {
-    min_words: words?.min ?? null,
-    max_words: words?.max ?? null,
-    min_characters: characters?.min ?? null,
-    max_characters: characters?.max ?? null,
-    characters_include_spaces: characters?.spacesCount ?? null,
-    min_pages: pages?.min ?? null,
-    max_pages: pages?.max ?? null,
-    page_spacing: pages?.spacing ?? null,
-    font_size_pt: typography?.fontSizePt ?? null,
-    font_family: typography?.fontFamily ?? null,
-    margins_inches: typography?.marginsInches ?? null,
-    citation_style: citation?.statedAs ?? null,
-    citation_family: citation?.family ?? null,
-    min_references: citation?.minReferences ?? null,
-    other_instructions: c.otherInstructions ?? [],
-  }
-}
-
-function parseVerification(value: unknown) {
+function parseVerification(value: unknown): Verification {
   const known = ['unverified', 'needs-review', 'verified', 'conflicting'] as const
-  if (value === null || typeof value !== 'object') {
-    return { status: 'unverified' as const, sourceUrl: null, verifiedOn: null, verbatim: false }
-  }
+  // THE SHARED CONSTANT, not a copy of it: a response this build cannot read
+  // is research with no source and no date, which is exactly what UNVERIFIED
+  // means. Copying its fields was how a literal evidence kind got in here.
+  if (value === null || typeof value !== 'object') return UNVERIFIED
   const row = value as Record<string, unknown>
   const status = typeof row.status === 'string' && (known as readonly string[]).includes(row.status)
     ? (row.status as typeof known[number])
@@ -185,6 +183,11 @@ function parseVerification(value: unknown) {
     sourceUrl: typeof row.sourceUrl === 'string' ? row.sourceUrl : null,
     verifiedOn: typeof row.verifiedOn === 'string' ? row.verifiedOn : null,
     verbatim: row.verbatim === true,
+    // THE RESPONSE'S OWN VALUE. This was the literal 'official-source', which
+    // threw away the one field that distinguishes an applicant's approved
+    // submission from a school's published page -- and this parser is what the
+    // New Draft dialog builds every set from. See QA-001.
+    evidenceKind: evidenceKindFrom(row.evidenceKind),
   }
 }
 
@@ -194,17 +197,34 @@ function parseVerification(value: unknown) {
 
 export interface RequirementDraftRequest {
   readonly title: string
+  /**
+   * Empty, and PRESENT.
+   *
+   * A new draft starts with no essay -- the text arrives with the first save --
+   * but the server validates `essay` for every create before it looks at what
+   * kind of create it is, and checkEssay() refuses anything that is not a
+   * string. Omitting the key made the server answer `invalid-essay` to a body
+   * that was otherwise correct, which is how a requirement-backed draft could
+   * not be created at all. Both sibling builders have always sent it; this one
+   * did not, and that was the whole bug.
+   */
+  readonly essay: string
   readonly requirementId: string
 }
 
 /**
  * The create body for one document.
  *
- * TWO KEYS, AND NEITHER IS THE WORDING. No promptId, no snapshot, no
+ * THREE KEYS, AND NONE OF THEM IS THE WORDING. No promptId, no snapshot, no
  * constraints, no verification: the server resolves all of it from the catalog
  * under the caller's own client, and a body that named them would be naming
  * keys nothing reads. That is what makes a fabricated verified requirement
  * impossible to submit rather than merely unlikely.
+ *
+ * `essay: ''` IS THE THIRD, and it is not a relaxation of that rule: an empty
+ * essay is the applicant's own text, not the school's question. It is sent for
+ * the same reason the prompt path sends it -- the server validates the essay on
+ * every create, before it decides which kind of create this is.
  *
  * THE TITLE IS TRIMMED HERE AND VALIDATED THERE. Same division the prompt path
  * uses: the browser sends what the applicant typed, tidied, and the server's
@@ -214,7 +234,7 @@ export function requirementDraftRequest(
   title: string,
   requirementId: string
 ): RequirementDraftRequest {
-  return { title: title.trim(), requirementId }
+  return { title: title.trim(), essay: '', requirementId }
 }
 
 /**

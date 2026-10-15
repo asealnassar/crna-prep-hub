@@ -1,14 +1,15 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
+  DEFAULT_AUTOSAVE,
   hasUnsavedWork,
   initialState,
   reduce,
   type AutosaveState,
 } from '@/lib/resume/draft/autosave'
-import { MAX_SAVED_CHARS } from '@/lib/statement/extract/limits'
+import { ceilingFromServer } from '@/lib/statement/extract/limits'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { MAX_TITLE_CHARS, isPromptId } from '@/lib/statement/draft/validate'
 import type { DraftPromptSnapshot, StatementDraft } from '@/lib/statement/draft/rows'
@@ -23,6 +24,13 @@ import {
 } from '@/lib/statement/draft/rubric'
 import { reviewIsStale, type StatementReview } from '@/lib/statement/draft/reviewSchema'
 import {
+  resolveRequirementCapabilities,
+} from '@/lib/statement/layout/capabilities'
+import { documentFontChoice } from '@/lib/statement/layout/studioFonts'
+import { formatProfileFor } from '@/lib/statement/layout/formatProfile'
+import PaginatedEditor from './PaginatedEditor'
+import RequirementsPanel from './RequirementsPanel'
+import {
   SAMPLE_GENERAL_WORDS, SAMPLE_NOTICE, SAMPLE_SCHOOL_MAX_WORDS, SAMPLE_SCHOOL_WORDS,
 } from '@/lib/statement/draft/reviewSample'
 import {
@@ -31,13 +39,15 @@ import {
 } from '@/lib/statement/draft/reviewClient'
 import {
   ANALYSIS_ACTION_LABELS, ANALYSIS_NO_CACHE_NOTICE, ANALYSIS_TIER_MESSAGE,
+  LOCAL_REAL_AI_NOTICE, LOCAL_REAL_AI_WARNING,
   ANALYSIS_UNAVAILABLE_MESSAGE, type AnalysisAction, type AnalysisAvailability,
 } from '@/lib/statement/draft/reviewAccess'
 import {
-  UNMEASURED_NOTICE, hasAdvisoryLength, liveCounts,
+  characterCount, hasAdvisoryLength, liveCounts,
 } from '@/lib/statement/requirements/constraints'
 import {
-  ADVISORY_LENGTH_NOTICE, labelledConstraints, liveCountLabel, statedWordings,
+  ADVISORY_LENGTH_NOTICE, labelledConstraints, liveCountLabel, liveCountStatus, liveCountVerdict,
+  statedWordings,
   truncationNotice, unenforcedLengthNotice,
 } from '@/lib/statement/requirements/constraintText'
 import { DOCUMENT_TYPE_LABELS } from '@/lib/statement/requirements/requirement'
@@ -47,7 +57,11 @@ import {
 } from '@/lib/statement/requirements/eligibility'
 import { SAVED_COPY_NOTICE } from '@/lib/statement/requirements/verification'
 import PromptPicker from './PromptPicker'
+import { ConstraintChips } from './constraintChips'
+import { TOUCH_TARGET } from './touchTarget'
 import { SAVE_MESSAGES, saveEventFrom } from '@/lib/statement/draft/save'
+import { browserSessionAlive } from '@/lib/statement/draft/sessionCheck'
+import type { PromptOrigin } from '@/lib/statement/draft/promptSubmission'
 import {
   ACCEPT_ATTRIBUTE,
   EXTRACT_ENDPOINT,
@@ -70,6 +84,7 @@ import {
   settleVerdict,
   statementDriverAction,
   statementSaveRequest,
+  documentWasEdited, draftStateMatches, saveFailedOnExpiredSession, type DraftState,
   statementStatus,
   titleAfterSave,
   wordCount,
@@ -143,10 +158,13 @@ export default function StatementStudioClient({
   schools,
   schoolsUnavailable,
   promptNotice = null,
+  promptOrigin = null,
+  savedCharacterCeiling,
   sampleReviews = null,
   analysisAllowed = false,
   analysisAvailable = 'unavailable',
   priorAnalysis = null,
+  localRealAi = false,
   requirement = null,
   requirementAuthentic = false,
 }: {
@@ -172,6 +190,26 @@ export default function StatementStudioClient({
    * of what the applicant sees.
    */
   promptNotice?: string | null
+  /**
+   * Where this draft's question came from: the catalog, or the applicant.
+   *
+   * A FACT, NOT A SENTENCE, so the heading, the badge and the limit line can
+   * each say the right thing about it. null for a catalog prompt and for a
+   * general draft -- neither needs a caveat.
+   */
+  promptOrigin?: PromptOrigin | null
+  /**
+   * The saved-character ceiling, RESOLVED ON THE SERVER.
+   *
+   * THE BROWSER MUST NOT WORK THIS OUT. maxSavedChars() reads the environment,
+   * and the env object a client bundle is handed has neither NODE_ENV nor the
+   * simulated-live opt-out in it -- so this component answered 20,000 while the
+   * API accepted 30,000 and refused to send an essay that met the school's
+   * published maximum. The server knows which schema is behind it; it says so.
+   *
+   * ABSENT OR MALFORMED FAILS CLOSED to the ceiling every schema has had.
+   */
+  savedCharacterCeiling?: number
   /**
    * DEVELOPMENT-ONLY: sample results, for reviewing the interface without
    * paying for an analysis.
@@ -207,6 +245,15 @@ export default function StatementStudioClient({
    * table does not exist until 20261002_004 is applied. The editor then offers
    * a fresh analysis, which is the behaviour it has now.
    */
+  /**
+   * Development only: the real analyser is running against localhost.
+   *
+   * DECIDED ON THE SERVER AND PASSED DOWN, never read from the environment
+   * here: a NEXT_PUBLIC_* variable is inlined into this bundle and would be a
+   * statement about what the browser was told rather than about the mode. It
+   * defaults to false, so a production render cannot show either notice.
+   */
+  localRealAi?: boolean
   priorAnalysis?: {
     readonly result: Omit<ReviewResult, 'essay'>
     readonly action: AnalysisAction
@@ -255,6 +302,62 @@ export default function StatementStudioClient({
   const [analyzing, setAnalyzing] = useState(false)
   const [reviewError, setReviewError] = useState<string | null>(null)
   const [openCategory, setOpenCategory] = useState<string | null>(null)
+  /**
+   * The rendered height of the essay, in points. null until the first layout.
+   *
+   * MEASURED BY THE EDITOR, NEVER ESTIMATED HERE. It is a fact about the text
+   * laid out at the school's geometry, which is the whole reason the page count
+   * can be shown at all.
+   */
+  const [contentHeightPt, setContentHeightPt] = useState<number | null>(null)
+  /**
+   * Pages occupied, as the editor's own layout pass counted them.
+   *
+   * MEASURED, NOT DERIVED, so the figure in the panel and the line drawn on the
+   * page are the same answer. null until the first pass, and on the plain
+   * textarea, which has no pages to count.
+   */
+  const [pagesUsed, setPagesUsed] = useState<number | null>(null)
+  /**
+   * The constrained editor document.
+   *
+   * ---------------------------------------------------------------------------
+   * FORMATTING IS STATE THE ESSAY CANNOT HOLD
+   * ---------------------------------------------------------------------------
+   * Bolding a word changes this and leaves `essay` byte-identical. That is the
+   * whole point: the analyser, the counters and the fingerprint all read the
+   * essay, so formatting costs nothing and invalidates nothing -- while the
+   * draft still has to save, and still has to say "Saved".
+   *
+   * STARTS FROM THE STORED DOCUMENT, or null for a draft written before
+   * formatting existed, which the editor reconstructs from the essay.
+   */
+  const [editorDocument, setEditorDocument] = useState<unknown>(
+    draft.editorDocument ?? null)
+  const documentRef = useRef<unknown>(draft.editorDocument ?? null)
+  /**
+   * The face this document is laid out in.
+   *
+   * A LAYOUT PREFERENCE, HELD BESIDE THE DOCUMENT AND NOT INSIDE IT. The
+   * document model holds paragraphs, text and bold; a font is not an inline
+   * fact and putting it there would put an attribute inside the string whose
+   * plain text must equal `essay`.
+   *
+   * THE REF IS WHAT THE SAVE READS, written synchronously before the dispatch,
+   * for the same reason the pending prompt is: startSave may run on the very
+   * next tick and must send the choice that was just made.
+   */
+  const [documentFont, setDocumentFont] = useState<string | null>(draft.documentFont ?? null)
+  const fontRef = useRef<string | null>(draft.documentFont ?? null)
+  /**
+   * Whether the font has been changed since this draft loaded.
+   *
+   * WITHOUT IT, EVERY AUTOSAVE WOULD CARRY A FONT. That is not harmful but it
+   * is not honest either: a body that names a column is a body that writes it,
+   * and a keystroke is not a decision about the font. The key is sent only
+   * once a choice has actually been made.
+   */
+  const fontTouched = useRef(false)
   /** Which sample is on screen, when a developer is previewing the interface. */
   const [sampleKind, setSampleKind] = useState<'general' | 'school'>('school')
   /**
@@ -267,6 +370,31 @@ export default function StatementStudioClient({
 
   /** Read-only, but stateful: a reload may bring a title changed elsewhere. */
   const [title, setTitle] = useState(draft.title)
+  /*
+    ONE RESOLVED NUMBER for every surface in this component: the status line,
+    the blocked message and the save request all refuse at the same place, and
+    that place is the one the SERVER named. Declared here because the save
+    callbacks below close over it.
+  */
+  const savedCeiling = ceilingFromServer(savedCharacterCeiling)
+
+  /*
+    WHAT IS ACTUALLY STORED, so a no-op can be recognised as one.
+
+    SEEDED FROM THE SERVER'S OWN DRAFT and advanced on every successful save.
+    markEdited() below compares against it, which is what stops the editor
+    MERELY ARRIVING from marking the draft dirty -- see draftStateMatches and
+    QA-011. Nothing else may write it: a baseline that moved without a save
+    would make a real edit look like a no-op, which is the one failure worse
+    than the one it fixes.
+  */
+  const persistedRef = useRef<DraftState>({
+    title: draft.title,
+    essay: draft.essay,
+    document: draft.editorDocument ?? null,
+    font: draft.documentFont ?? null,
+  })
+
   const [essay, setEssay] = useState(draft.essay)
   /**
    * WHICH PROMPT THIS DRAFT ANSWERS, as the server read it. Stateful for one
@@ -389,8 +517,11 @@ export default function StatementStudioClient({
    * keystroke, so the comparison is always against what is on screen now.
    */
   const essayRef = useRef(essay)
+  /** The live title, for the leave-flush, which cannot read React state. */
+  const titleRef = useRef(title)
   useEffect(() => {
     essayRef.current = essay
+    titleRef.current = title
   }, [essay])
 
   /** Identity of the extraction in flight. One at a time, and no other may apply. */
@@ -416,14 +547,70 @@ export default function StatementStudioClient({
     for (const resolve of waiting) resolve(verdict)
   }, [save])
 
+  /**
+   * A promise that resolves when the save settles -- OR when waiting stops
+   * being honest.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY IT HAS A DEADLINE AT ALL
+   * ---------------------------------------------------------------------------
+   * settleVerdict() is null for dirty, saving AND retrying, so an unacknowledged
+   * save that backs off and tries again three times can legitimately keep this
+   * promise pending for a minute -- and before the liveness fix above it could
+   * keep it pending for ever, which is what left "Saving before leaving…" on the
+   * All Drafts button with nothing on the way.
+   *
+   * So the wait is bounded, and a bounded wait reports `false`: not "saved", not
+   * "lost" -- UNSETTLED. The caller keeps the applicant on the page with every
+   * character still on screen and says so. Nothing is discarded by giving up on
+   * waiting, which is the whole reason this can safely give up.
+   */
   const whenSettled = useCallback(
-    () => new Promise<boolean>((resolve) => { settleWaiters.current.push(resolve) }),
+    (timeoutMs = DEFAULT_AUTOSAVE.saveTimeoutMs) => new Promise<boolean>((resolve) => {
+      let done = false
+      const once = (saved: boolean) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolve(saved)
+      }
+      const timer = setTimeout(() => {
+        // Drop this waiter so the transition effect does not resolve it twice,
+        // and so a long-lived component does not accumulate dead callbacks.
+        settleWaiters.current = settleWaiters.current.filter((w) => w !== once)
+        once(false)
+      }, timeoutMs)
+      settleWaiters.current.push(once)
+    }),
     []
   )
 
-  /** Unmount: nothing may resolve into a component that is gone. */
+  /**
+   * Liveness, asserted on EVERY mount and withdrawn on every unmount.
+   *
+   * ---------------------------------------------------------------------------
+   * THE MISSING LINE WAS THE SAVE HANG
+   * ---------------------------------------------------------------------------
+   * This used to be a cleanup with an empty body: `useEffect(() => () => {...})`.
+   * React's StrictMode mounts, runs effects, runs cleanups, and mounts again --
+   * so the cleanup ran once during that simulated unmount, set `alive` to false,
+   * and nothing ever set it back, because a ref initialiser runs once and the
+   * effect body did nothing.
+   *
+   * For the rest of that component's life every `if (!alive.current) return`
+   * fired: the save response arrived, was parsed, and was DISCARDED before it
+   * could be dispatched. The indicator stayed at "Saving…" for ever, the
+   * single-flight rule then refused every later save, and leaving the page
+   * waited on a promise that could not resolve -- so a paste after the first
+   * save was never persisted and a refresh lost it.
+   *
+   * The body is the fix: a mounted component is alive, whatever happened to a
+   * previous one. Nothing here depends on StrictMode being on or off.
+   */
   useEffect(
-    () => () => {
+    () => {
+      alive.current = true
+      return () => {
       alive.current = false
       snapshotRef.current = null
       uploadRef.current = null
@@ -431,6 +618,7 @@ export default function StatementStudioClient({
       const waiting = settleWaiters.current
       settleWaiters.current = []
       for (const resolve of waiting) resolve(false)
+      }
     },
     []
   )
@@ -438,7 +626,7 @@ export default function StatementStudioClient({
   // --- saving --------------------------------------------------------------
 
   const startSave = useCallback(
-    async (revision: number, rawTitle: string, rawEssay: string) => {
+    async (revision: number, rawTitle: string, rawEssay: string, leaving = false) => {
       if (inFlight.current) return
 
       // CAPTURED ONCE, SYNCHRONOUSLY, before anything can await. `captured` is
@@ -449,9 +637,17 @@ export default function StatementStudioClient({
       // The snapshot is taken HERE, from the values this save is about, and is
       // never recomputed from React state afterwards.
       const attempt = saveAttemptFor({
+        savedCharacterCeiling: savedCeiling,
         title: rawTitle,
         essay: rawEssay,
         revision,
+        // THE DOCUMENT RIDES THE SAME PATCH, and the server refuses any whose
+        // text disagrees with the essay above. Omitted entirely when this
+        // draft has no formatting, so the plain surface's body is unchanged.
+        ...(documentRef.current === null ? {} : { document: documentRef.current }),
+        // THE FONT RIDES THE SAME PATCH, and only once it has been chosen. See
+        // fontTouched: an ordinary keystroke must not write this column.
+        ...(fontTouched.current ? { font: fontRef.current } : {}),
         // undefined when nothing is pending, so the body stays the three keys
         // it has always been. null means clear; a uuid means select.
         prompt: promptForRequest(captured),
@@ -463,16 +659,76 @@ export default function StatementStudioClient({
       inFlight.current = true
       setSave((state) => reduce(state, { type: 'save-started', at: Date.now() }))
 
+      /*
+        A DEADLINE ON THE SOCKET AS WELL AS ON THE STATUS.
+
+        The watchdog in statementDriverAction() is what guarantees the
+        indicator cannot sit at "Saving…" for ever -- it fires whatever
+        happened to this request. This abort is the other half: without it a
+        request the editor has stopped believing in keeps running, and could
+        still write the draft minutes later, under a revision the applicant has
+        moved past.
+
+        SAME DEADLINE, deliberately. Two different numbers would mean a window
+        in which the status has given up and the request has not.
+      */
+      const deadline = new AbortController()
+      const timer = setTimeout(() => deadline.abort(), DEFAULT_AUTOSAVE.saveTimeoutMs)
       try {
         const response = await fetch(draftApiPath(draft.id), {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(attempt.body),
+          signal: deadline.signal,
+          // KEEPALIVE ONLY ON THE WAY OUT. A normal fetch is cancelled when the
+          // document goes away, which is precisely when the leave-flush runs;
+          // a keepalive request is allowed to outlive it. It is not the default
+          // because keepalive requests are capped in size and number, and an
+          // ordinary autosave has a live page to report back to.
+          keepalive: leaving,
         })
         const body = await response.json().catch(() => null)
         // THE ONE MAPPING. saveEventFrom decides success, conflict, and whether
         // a failure is retryable; none of that is repeated here.
-        const event = saveEventFrom({ status: response.status, body, at: Date.now() })
+        let event = saveEventFrom({ status: response.status, body, at: Date.now() })
+
+        /*
+          A 404 MAY MEAN "YOUR SESSION WENT AWAY", AND SAYING "DELETED" IS WORSE
+          THAN SAYING NOTHING.
+
+          The Studio gate answers an unadmitted caller with a 404 whose body is
+          deliberately empty of meaning -- it must not reveal that a gate, a
+          draft or an endpoint exists. saveEventFrom therefore has only the
+          status to go on and maps it to "This draft no longer exists."
+
+          For an applicant whose session merely expired, that sentence is false
+          and frightening: they are told their work was deleted while it is
+          still on screen, and the message gives them nowhere to go. So the
+          editor asks the one question the server cannot answer for it -- does
+          this browser still hold a session? -- and re-words the failure when
+          the answer is no.
+
+          NOTHING ABOUT THE DRAFT IS INVOLVED, so the gate's neutrality is
+          untouched: no request is made, and the answer would be the same for
+          an id that never existed.
+
+          ONLY ON THIS ONE REASON. A genuine deletion still reports a deletion,
+          because the session is alive and the probe says so.
+        */
+        if (event.type === 'save-failed' && event.reason === SAVE_MESSAGES.missing) {
+          const signedIn = await browserSessionAlive()
+          if (!signedIn) {
+            event = {
+              type: 'save-failed',
+              at: Date.now(),
+              reason: SAVE_MESSAGES.expired,
+              // RETRYABLE, so the engine's own backoff keeps the work moving
+              // the moment the applicant signs back in -- and Try again is
+              // there for them in the meantime.
+              retryable: true,
+            }
+          }
+        }
         if (!alive.current) return
 
         // RECONCILE ONLY ON SUCCESS, AND ONLY FOR THIS SNAPSHOT. A conflict or a
@@ -480,6 +736,15 @@ export default function StatementStudioClient({
         // snapshot that has been retired -- by a reload, or by a later save --
         // is no longer about the document on screen.
         if (event.type === 'save-succeeded' && snapshotRef.current === snapshot) {
+          // THE BASELINE MOVES WITH THE DATABASE, and only here. What this save
+          // sent is now what is stored, so the next no-op comparison is against
+          // the right thing. See persistedRef.
+          persistedRef.current = {
+            title: snapshot.sent,
+            essay: snapshot.essay,
+            document: documentRef.current,
+            font: fontRef.current,
+          }
           // The functional form reads the LIVE title at commit time, which is
           // what makes "has anyone typed since?" answerable at all.
           setTitle((current) => titleAfterSave({ snapshot, currentTitle: current }) ?? current)
@@ -535,6 +800,7 @@ export default function StatementStudioClient({
           })
         )
       } finally {
+        clearTimeout(timer)
         // This request is over either way; its snapshot must not outlive it.
         if (snapshotRef.current === snapshot) snapshotRef.current = null
         inFlight.current = false
@@ -544,7 +810,8 @@ export default function StatementStudioClient({
   )
 
   useEffect(() => {
-    const action = statementDriverAction({ state: save, now: Date.now(), title, essay })
+    const action = statementDriverAction({
+      state: save, now: Date.now(), title, essay, savedCharacterCeiling: savedCeiling })
 
     if (action.kind === 'blocked') {
       // No request and NO TIMER. The work stays on screen, visibly unsaved.
@@ -552,6 +819,29 @@ export default function StatementStudioClient({
       return
     }
     setBlocked(null)
+
+    /*
+      THE SAVE THE EDITOR HAS STOPPED BELIEVING IN.
+
+      Reported as a RETRYABLE failure, so the engine's own backoff tries again
+      -- an unacknowledged save is usually a slow connection, not a broken
+      document -- and so an exhausted one lands in 'failed' with a working Try
+      again rather than in a status nothing can leave.
+
+      THE REQUEST ITSELF IS ABORTED BY ITS OWN DEADLINE, above. This does not
+      reach into it: the two share one number and neither waits on the other.
+    */
+    if (action.kind === 'timed-out') {
+      setSave((state) =>
+        reduce(state, {
+          type: 'save-failed',
+          at: Date.now(),
+          reason: SAVE_MESSAGES.timeout,
+          retryable: true,
+        })
+      )
+      return
+    }
 
     if (action.kind === 'idle') return
     if (action.kind === 'wait') {
@@ -600,7 +890,7 @@ export default function StatementStudioClient({
     // A newer choice supersedes any warning about an older one.
     setPromptConfirmFailed(null)
     setNotice(null)
-    setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
+    markEdited()
     // `prompt.promptId` is read above, so this handler is rebuilt when the
     // server's snapshot changes. A click handler has no stale-closure hazard
     // the way startSave does -- it runs from the render it was built in.
@@ -622,7 +912,7 @@ export default function StatementStudioClient({
   const retryPromptSave = useCallback(() => {
     if (pendingPrompt.current === null) return
     setNotice(null)
-    setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
+    markEdited()
   }, [])
 
   /**
@@ -633,8 +923,89 @@ export default function StatementStudioClient({
   const onTitleChange = useCallback((value: string) => {
     setTitle(value)
     setNotice(null)
+    markEdited()
+  }, [])
+
+  /*
+    THE ONE PLACE A DRAFT BECOMES DIRTY.
+
+    Seven handlers used to dispatch the engine's `edited` event directly, and
+    most of them fire while the editor is only arriving. They all come through
+    here now, and here asks draftStateMatches whether anything a save would
+    write is actually different. Nothing different, nothing dispatched: no
+    dirty state, no timer, no PATCH.
+
+    READS THE REFS, NOT STATE, because the handlers that call it have just
+    written the refs synchronously and React has not re-rendered yet.
+  */
+  const markEdited = useCallback(() => {
+    const proposed: DraftState = {
+      title: titleRef.current,
+      essay: essayRef.current,
+      document: documentRef.current,
+      font: fontRef.current,
+    }
+    if (draftStateMatches(persistedRef.current, proposed)) return
     setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
   }, [])
+
+  /**
+   * The document changed, and perhaps only the document.
+   *
+   * DISPATCHES THE SAME `edited` EVENT typing does. The engine has one idea of
+   * dirty, and a formatting change is an edit to this draft -- it marks it
+   * unsaved, it debounces, it saves, it bumps the revision. What it does NOT
+   * do is touch `essay`, which is why nothing downstream re-analyses.
+   *
+   * COMPARED BEFORE DISPATCHING, because the editor emits on every
+   * transaction including ones that changed nothing a document can hold --
+   * a caret move, a selection. Dispatching on those would keep the draft
+   * permanently dirty and autosaving for ever.
+   *
+   * AND COMPARED SEMANTICALLY, which is what documentWasEdited is for. A byte
+   * comparison also fired on the editor merely ARRIVING: a draft with no
+   * stored document -- every new one -- emitted the essay as a document and
+   * looked like a change against null, so opening a draft saved it and bumped
+   * its revision without the applicant touching anything. See QA-011.
+   *
+   * THE REF STILL TAKES THE NEW DOCUMENT EITHER WAY. It is what the editor
+   * actually holds, and the next save must carry it; what the comparison
+   * decides is only whether there is anything to save YET.
+   */
+  const onDocumentChange = useCallback((next: unknown) => {
+    // A CHEAP BAIL-OUT ONLY: the editor emits on every transaction, including
+    // a caret move that changed nothing at all, and re-rendering for those is
+    // waste. Whether this COUNTS as an edit is markEdited's question, asked
+    // against what is stored rather than against the last emission.
+    if (JSON.stringify(documentRef.current) === JSON.stringify(next)) return
+    documentRef.current = next
+    setEditorDocument(next)
+    markEdited()
+  }, [markEdited])
+
+  /**
+   * The applicant chose a font. THIS IS AN EDIT, and nothing more.
+   *
+   * IT ISSUES NO REQUEST AND TOUCHES NO TEXT. It records the choice and
+   * dispatches the engine's own `edited` event; the existing driver saves the
+   * document on its ordinary debounce with the font travelling inside the same
+   * PATCH and the same compare-and-swap. There is no font-only save path.
+   *
+   * `essay` IS NOT READ OR WRITTEN HERE, which is the whole reason a font
+   * change cannot move the word count, the character count or the analysis
+   * fingerprint -- and therefore cannot cost the applicant a second paid
+   * analysis. The page count DOES move, because the browser re-lays the text
+   * out in the new face and the editor re-measures what it actually rendered.
+   */
+  const onFontChange = useCallback((id: string) => {
+    if (fontRef.current === id) return
+    fontRef.current = id
+    fontTouched.current = true
+    setDocumentFont(id)
+    setNotice(null)
+    markEdited()
+  }, [])
+
 
   const onEssayChange = useCallback((value: string) => {
     setEssay(value)
@@ -643,11 +1014,11 @@ export default function StatementStudioClient({
     setNotice(null)
     setCopied('idle')
     setImportNotice(null)
-    // Dispatched on EVERY edit, including during a save. The engine restarts the
-    // dirty window while a request is in flight, so a success landing after this
-    // reports 'dirty' rather than 'saved'.
-    setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
-  }, [])
+    // Dispatched on EVERY REAL edit, including during a save. The engine
+    // restarts the dirty window while a request is in flight, so a success
+    // landing after this reports 'dirty' rather than 'saved'.
+    markEdited()
+  }, [markEdited])
 
   // --- leaving the tab -----------------------------------------------------
 
@@ -666,6 +1037,55 @@ export default function StatementStudioClient({
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [])
+
+  /**
+   * The last resort: save on the way out, whatever the way out was.
+   *
+   * ---------------------------------------------------------------------------
+   * WHAT THE OTHER GUARDS DO NOT COVER
+   * ---------------------------------------------------------------------------
+   * `beforeunload` warns, and only for a real unload. `visibilitychange`
+   * flushes a hiding tab. `goToLibrary` flushes and waits for its own link.
+   * Between them they miss the ordinary case: an applicant clicks any other
+   * link -- the sidebar, the dashboard, Log out -- and this component unmounts
+   * with up to 1.2 seconds of typing that has never been sent. Nothing warns,
+   * because nothing is unloading; the edits are simply gone, and the draft
+   * reopens without the last sentence.
+   *
+   * keepalive IS WHAT MAKES THIS POSSIBLE. A normal fetch is cancelled when the
+   * document goes away, which is exactly when this runs; a keepalive request is
+   * allowed to outlive it. The payload is small -- well inside the 64KB the
+   * spec allows -- because it is one draft's text.
+   *
+   * IT IS STILL A COMPARE-AND-SWAP. The body carries the same revision any
+   * other save would, so a request that loses a race is refused by the server
+   * rather than overwriting a newer version. Nothing here bypasses the
+   * concurrency rule to get the write in.
+   *
+   * NO STATE IS TOUCHED. The component is going away; dispatching into it would
+   * be writing to something unmounted, and the result cannot be displayed
+   * anyway. The next load reads whatever the server accepted.
+   */
+  useEffect(() => {
+    const flushOnLeave = () => {
+      if (!hasUnsavedWork(saveRef.current)) return
+      // A save already in flight is the engine's business, and a second request
+      // for the same revision would simply be refused.
+      if (inFlight.current) return
+      // THE SAME SAVE PATH, with one flag. There is still exactly one place
+      // that builds a body and one that issues a PATCH; a second would be a
+      // second set of rules about revisions and prompts to keep in step.
+      void startSave(saveRef.current.revision, titleRef.current, essayRef.current, true)
+    }
+    // pagehide COVERS WHAT beforeunload DOES NOT, including a page entering the
+    // back/forward cache, where unload never fires at all.
+    window.addEventListener('pagehide', flushOnLeave)
+    return () => {
+      window.removeEventListener('pagehide', flushOnLeave)
+      // AND THE UNMOUNT ITSELF, which is the in-app navigation case.
+      flushOnLeave()
+    }
+  }, [draft.id, startSave])
 
   /**
    * A hiding tab may never come back, so stop waiting out the debounce. This
@@ -767,7 +1187,7 @@ export default function StatementStudioClient({
         // The SAME event typing dispatches. The driver decides the rest: a
         // document over the save ceiling simply blocks, with no request and no
         // timer, until the applicant trims it.
-        setSave((state) => reduce(state, { type: 'edited', at: Date.now() }))
+        markEdited()
       } catch {
         if (alive.current && uploadRef.current === token) {
           setImportError(IMPORT_MESSAGES.network)
@@ -931,7 +1351,7 @@ export default function StatementStudioClient({
   }, [draft.id, essay])
 
   const retrySave = useCallback(() => {
-    if (!canRetrySave({ state: save, title, essay })) return
+    if (!canRetrySave({ state: save, title, essay, savedCharacterCeiling: savedCeiling })) return
     setNotice(null)
     setSave((state) => reduce(state, { type: 'retry', at: Date.now() }))
   }, [save, title, essay])
@@ -981,6 +1401,7 @@ export default function StatementStudioClient({
       }
 
       const request = statementSaveRequest({
+        savedCharacterCeiling: savedCeiling,
         title,
         essay,
         revision: saveRef.current.revision,
@@ -1010,11 +1431,47 @@ export default function StatementStudioClient({
   const conflicted = save.status === 'conflict'
   /** Trimmed, because that is the length the limit actually applies to. */
   const titleCharacters = title.trim().length
-  const canRetry = canRetrySave({ state: save, title, essay })
+  const canRetry = canRetrySave({ state: save, title, essay, savedCharacterCeiling: savedCeiling })
+  /**
+   * Whether the failure on screen is an expired session rather than anything
+   * about the draft. Read from the reason the driver recorded, which is the
+   * only place that distinction is known -- see the 404 handling in startSave.
+   */
+  const sessionExpired = saveFailedOnExpiredSession(save)
+  /**
+   * Whether the question on screen is the applicant's own, unreviewed wording.
+   *
+   * READ FROM THE SERVER'S ANSWER. originOf() resolves it from which column the
+   * draft carries, and the page passes the result down; this component never
+   * infers provenance from the presence of text.
+   */
+  const userProvidedPrompt = promptOrigin === 'user'
 
   /** Display only. Nothing is saved, limited or refused because of these. */
   const words = wordCount(essay)
-  const limit = wordLimitProgress({ words, statedMaxWords: prompt.statedMaxWords })
+  /**
+   * The legacy single-maximum readout, or null.
+   *
+   * ---------------------------------------------------------------------------
+   * WITHDRAWN WHENEVER A STRUCTURED WORD BOUND EXISTS
+   * ---------------------------------------------------------------------------
+   * This panel knows one number -- the draft's stored statedMaxWords -- and a
+   * structured requirement can carry two. For a school asking 100-200 words it
+   * therefore rendered "99 / 200 — 101 left", which reads as room to spare,
+   * while the status bar a few pixels away correctly said "under the minimum".
+   * Two readouts of one requirement, disagreeing.
+   *
+   * The status bar is the one that knows the whole bound and its register, so
+   * it keeps the job. This panel remains for drafts whose only length
+   * information IS the single number: a prompt from the older catalog, or a
+   * limit the applicant typed into the paste form.
+   *
+   * KEYED ON THE DATA, NOT ON A SCHOOL. Any requirement carrying a word bound
+   * suppresses it; any draft without one keeps it.
+   */
+  const limit = requirement?.constraints.words != null
+    ? null
+    : wordLimitProgress({ words, statedMaxWords: prompt.statedMaxWords })
   /** The saved snapshot's school, named from the directory the server sent. */
   const promptSchool = schoolNameFor(schools, prompt.schoolId)
   const hasPrompt = prompt.promptText !== null
@@ -1029,6 +1486,61 @@ export default function StatementStudioClient({
    * The same predicate the picker renders the warning with decides this, so the
    * two cannot disagree.
    */
+  /**
+   * What the Studio can do with this school's requirement.
+   *
+   * ---------------------------------------------------------------------------
+   * ONE RESOLVER DRIVES THE WHOLE SURFACE
+   * ---------------------------------------------------------------------------
+   * The writing surface, the page it is laid out on, the figures in the panel
+   * and the lines that still need a human all come from here. There is no
+   * second opinion anywhere in this component about what this school requires
+   * or what we can do about it -- which is what stops a school-shaped condition
+   * appearing in the UI the first time one record behaves unlike the others.
+   *
+   * RESOLVED FOR EVERY DRAFT, including those with no requirement at all: the
+   * result is then the Studio defaults throughout, each marked as such.
+   */
+  /**
+   * What the applicant may choose, from this draft's own record.
+   *
+   * THE RECORD DECIDES WHAT IS LEGAL; THE PREFERENCE DECIDES WHICH OF THOSE IS
+   * IN FORCE. Both are read here, in one place, so no screen can offer a font
+   * the school forbade and no stored value can render one.
+   */
+  const fontChoice = useMemo(() => {
+    const typography = requirement?.constraints?.typography ?? null
+    return documentFontChoice({
+      statedFamily: typography?.fontFamily ?? null,
+      permittedFamilies: typography?.fontFamilyOptions ?? null,
+      profile: formatProfileFor(requirement?.constraints?.formatProfile ?? null),
+      preferred: documentFont,
+    })
+  }, [requirement, documentFont])
+
+  /**
+   * THE FONT IS PART OF THE GEOMETRY, which is what makes a font change move
+   * the page limit as well as the page: the line box, the content height and
+   * the allowance the compliance rows are measured against all come from here.
+   */
+  const capabilities = useMemo(
+    () => resolveRequirementCapabilities(requirement?.constraints ?? null, {
+      metrics: fontChoice.selected.font.metrics,
+      cssFamily: fontChoice.selected.font.cssFamily,
+      sizePt: fontChoice.selected.sizePt,
+    }),
+    [requirement, fontChoice],
+  )
+  const pageGeometry = capabilities.geometry
+  /**
+   * Whether to write on a page rather than in a box.
+   *
+   * THE SCHOOL'S OWN RECORD DECIDES, through the resolver. A school that said
+   * anything about the physical page gets one, because that is how the Studio
+   * honours it. A school that states 500 words is measuring words, and a page
+   * surface would invite the applicant to watch a number nobody asked for.
+   */
+  const paginated = capabilities.paginated
   /** Whether this draft is long enough to analyse, and what it would take. */
   const eligibility = eligibilityFor({ words, statedMaxWords: prompt.statedMaxWords })
   const canAnalyze = canAnalyzeNow({
@@ -1231,16 +1743,44 @@ export default function StatementStudioClient({
                 watching the wrong number, so the unit the school used leads.
                 The storage ceiling below is a different fact and stays.
               */}
-              {requirement !== null && requirementCounts.map((kind) => (
-                <span key={kind} className="contents">
-                  <span aria-hidden="true">·</span>
-                  <span className="font-semibold text-slate-300">
-                    {liveCountLabel({
-                      kind, constraints: requirement.constraints, words, text: essay,
-                    })}
+              {requirement !== null && requirementCounts.map((kind) => {
+                /*
+                  COLOURED BY THE SAME BOUNDS THAT PRODUCED THE NUMBER.
+
+                  This was grey at every count, because the only thing that
+                  warned read a legacy single maximum carried on the draft --
+                  null for every structured requirement. A school asking for
+                  100-200 words therefore showed "154 / 200" and never warned
+                  at 201, and never said anything at all at 99.
+                */
+                const status = liveCountStatus({
+                  kind, constraints: requirement.constraints, words, text: essay,
+                })
+                const tone = status === 'over' || status === 'under'
+                  ? 'text-amber-300'
+                  : status === 'within' ? 'text-emerald-300' : 'text-slate-300'
+                return (
+                  <span key={kind} className="contents">
+                    <span aria-hidden="true">·</span>
+                    <span className={`font-semibold ${tone}`}>
+                      {liveCountLabel({
+                        kind, constraints: requirement.constraints, words, text: essay,
+                      })}
+                      {/* THE VERDICT IN WORDS, not colour alone: the count and
+                          the bound are both numbers, and which side of the
+                          bound you are on should not need a legend.
+
+                          WORDED BY THE REGISTER, NOT BY THE STATUS. These two
+                          lines used to read the status alone and say "over the
+                          maximum" for a school that published a length rather
+                          than a limit. liveCountVerdict() owns the sentence. */}
+                      {liveCountVerdict({
+                        kind, constraints: requirement.constraints, words, text: essay,
+                      })}
+                    </span>
                   </span>
-                </span>
-              ))}
+                )
+              })}
               {/*
                 THE STORAGE CEILING, LABELLED AS ONE.
 
@@ -1256,7 +1796,7 @@ export default function StatementStudioClient({
               <span aria-hidden="true">·</span>
               <span>
                 {essay.length.toLocaleString('en-US')} of{' '}
-                {MAX_SAVED_CHARS.toLocaleString('en-US')} characters stored
+                {savedCeiling.toLocaleString('en-US')} characters stored
                 {requirement !== null && requirementCounts.includes('characters')
                   ? ' (this editor’s own limit, spaces included)'
                   : ''}
@@ -1322,7 +1862,7 @@ export default function StatementStudioClient({
                 <button
                   type="button"
                   onClick={() => void copyMine()}
-                  className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-900 transition hover:bg-red-100"
+                  className={`${TOUCH_TARGET} rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-900 transition hover:bg-red-100`}
                 >
                   Copy my version
                 </button>
@@ -1330,7 +1870,7 @@ export default function StatementStudioClient({
                   type="button"
                   onClick={() => void reloadLatest()}
                   disabled={reloading}
-                  className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  className={`${TOUCH_TARGET} rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60`}
                 >
                   {reloading ? 'Loading…' : 'Reload latest version'}
                 </button>
@@ -1344,15 +1884,41 @@ export default function StatementStudioClient({
             </div>
           )}
 
+          {/*
+            A FAILED SAVE SAYS THE WORK IS SAFE FIRST, and offers the one action
+            that moves it on. When the reason is an expired session it also
+            offers the only thing that can actually fix it -- signing back in --
+            because "Try again" alone would fail again for a reason the
+            applicant has no way to guess.
+          */}
           {canRetry && (
             <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
               <p className="text-sm text-red-900">
-                The last save did not go through. Your text is still here.
+                {sessionExpired
+                  ? 'Your session expired, so the last save did not go through. Your text is still here — sign in again, then try the save.'
+                  : 'The last save did not go through. Your text is still here.'}
               </p>
+              {sessionExpired && (
+                /*
+                  A NEW TAB, DELIBERATELY. Navigating this one away would take
+                  the unsaved text with it; signing in beside the editor leaves
+                  the work on screen and makes Try again work when they return.
+                */
+                <a
+                  href="/login"
+                  target="_blank"
+                  rel="noopener"
+                  className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                >
+                  Sign in again
+                </a>
+              )}
               <button
                 type="button"
                 onClick={retrySave}
-                className="rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800"
+                className={`${TOUCH_TARGET} ${sessionExpired
+                  ? 'rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-semibold text-red-800 transition hover:bg-red-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2'
+                  : 'rounded-lg bg-red-700 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2'}`}
               >
                 Try again
               </button>
@@ -1424,22 +1990,100 @@ export default function StatementStudioClient({
                   autosave engine sends a string; a rich-text editor would be a
                   content-format change wearing a layout change's clothes.
                 */}
-                <textarea
-                  value={essay}
-                  onChange={(event) => onEssayChange(event.target.value)}
-                  readOnly={conflicted}
-                  spellCheck
-                  aria-label="Personal statement"
-                  placeholder="Write your personal statement here."
-                  className="block min-h-[32rem] w-full resize-y whitespace-pre-wrap rounded-b-2xl border-0 bg-white px-6 py-6 text-[15px] leading-[1.9] text-slate-800 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 read-only:bg-slate-50 lg:min-h-[38rem] lg:px-8"
-                />
+                {/*
+                  ONE EDITOR, FOR EVERY DRAFT.
+                  
+                  ---------------------------------------------------------------
+                  IT USED TO BE TWO, AND THAT WAS THE BOLD BUG
+                  ---------------------------------------------------------------
+                  This was `paginated ? <PaginatedEditor/> : <textarea/>`, where
+                  `paginated` is true only when the school said something about
+                  the physical page -- a page bound, a spacing, a font size, a
+                  margin, or an APA profile. Everything else got a plain
+                  textarea: a school stating 500 words, a user-provided prompt,
+                  a General Statement.
+                  
+                  A textarea has no Bold. So Bold appeared for some schools and
+                  not others, with no rule an applicant could learn, which is
+                  exactly what the owner reported. The editing surface was being
+                  chosen by a LAYOUT fact.
+                  
+                  Bold is an editing capability and belongs to every editable
+                  draft. What the school stated still decides the LAYOUT -- the
+                  geometry below, the allowance rule, the page readout -- and
+                  that is the only thing it decides.
+                  
+                  THE STRING IS UNCHANGED EITHER WAY. The document model holds
+                  paragraphs, text and bold, and its plain text is required to
+                  equal `essay` -- so autosave, the revision compare-and-swap
+                  and the analysis fingerprint see exactly what the textarea
+                  gave them.
+                */}
+                <div className="rounded-b-2xl bg-slate-100 px-4 py-6">
+                  <PaginatedEditor
+                    essay={essay}
+                    geometry={pageGeometry}
+                    /* ONLY WHEN A SCHOOL STATED ONE. The allowance rule is a
+                       school's limit drawn on the page; a draft with no page
+                       maximum has nothing to draw and gets no line. */
+                    maxPages={capabilities.pages?.max ?? null}
+                    readOnly={conflicted}
+                    onEssayChange={onEssayChange}
+                    onDocumentChange={onDocumentChange}
+                    initialDocument={editorDocument}
+                    fontChoice={fontChoice}
+                    onFontChange={onFontChange}
+                    onMeasure={(measured) => {
+                      setContentHeightPt(measured.contentHeightPt)
+                      setPagesUsed(measured.pagesUsed)
+                    }}
+                  />
+                </div>
               </div>
 
-              {/* The school's stated maximum, when it stated one. */}
+              {/*
+                THE LIVE REQUIREMENTS PANEL, for a draft written on a page.
+                
+                It sits directly under the sheet because the figure it carries --
+                "1.21 / 1.50 pages" -- is about what is on that sheet, and a
+                reader checking their length should not have to look away from
+                it. Only rendered when the school measures pages; the word and
+                character counters below already serve the other bases.
+              */}
+              {paginated && requirement !== null && (
+                <div className="mt-3">
+                  <RequirementsPanel
+                    schoolName={requirement.label}
+                    capabilities={capabilities}
+                    measurements={{
+                      words,
+                      // THE CANONICAL COUNTER, which honours this school's own
+                      // spacesCount flag -- the same rule liveCountLabel uses,
+                      // so the panel and the counter cannot disagree.
+                      characters: characterCount(
+                        essay, requirement.constraints.characters?.spacesCount ?? null),
+                      contentHeightPt,
+                      pagesUsed,
+                    }}
+                  />
+                </div>
+              )}
+
+              {/*
+                THE SINGLE STATED MAXIMUM, when that is all this draft has.
+                Withdrawn for structured requirements -- see `limit` above.
+
+                AND IT SAYS WHOSE NUMBER IT IS. For a prompt the applicant
+                pasted, this figure came from an optional field they filled in,
+                not from the school; calling it a "stated word limit" with no
+                owner let their own guess read as a requirement.
+              */}
               {limit !== null && (
                 <div className="mt-3 rounded-xl border border-slate-200 bg-white px-5 py-3">
                   <p className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold text-slate-700">Stated word limit</span>
+                    <span className="font-semibold text-slate-700">
+                      {userProvidedPrompt ? 'Word limit you entered' : 'Stated word limit'}
+                    </span>
                     <span className={limit.over ? 'font-semibold text-amber-700' : 'text-slate-600'}>
                       {limit.words.toLocaleString('en-US')} /{' '}
                       {limit.limit.toLocaleString('en-US')}
@@ -1458,7 +2102,9 @@ export default function StatementStudioClient({
                     aria-valuemin={0}
                     aria-valuemax={limit.limit}
                     aria-valuenow={limit.words}
-                    aria-label="Words against the school's stated limit"
+                    aria-label={userProvidedPrompt
+                      ? 'Words against the limit you entered'
+                      : "Words against the school's stated limit"}
                     className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100"
                   >
                     <div
@@ -1492,7 +2138,7 @@ export default function StatementStudioClient({
                             type="button"
                             onClick={() => setSampleKind('school')}
                             aria-pressed={sampleKind === 'school'}
-                            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                            className={`${TOUCH_TARGET} rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
                               sampleKind === 'school' ? 'bg-amber-900 text-white' : 'text-amber-900'
                             }`}
                           >
@@ -1502,7 +2148,7 @@ export default function StatementStudioClient({
                             type="button"
                             onClick={() => setSampleKind('general')}
                             aria-pressed={sampleKind === 'general'}
-                            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                            className={`${TOUCH_TARGET} rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
                               sampleKind === 'general' ? 'bg-amber-900 text-white' : 'text-amber-900'
                             }`}
                           >
@@ -1546,7 +2192,7 @@ export default function StatementStudioClient({
                           type="button"
                           onClick={() => void analyze()}
                           disabled={!canAnalyze}
-                          className="font-semibold underline underline-offset-2 disabled:no-underline disabled:opacity-60"
+                          className={`${TOUCH_TARGET} font-semibold underline underline-offset-2 disabled:no-underline disabled:opacity-60`}
                         >
                           Analyze the current draft
                         </button>
@@ -1723,14 +2369,35 @@ export default function StatementStudioClient({
             >
               <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-200 px-5 py-3">
+                  {/*
+                    THE HEADING ITSELF CARRIES THE PROVENANCE.
+
+                    "Your school's prompt" is a claim, and for a prompt the
+                    applicant pasted or reported it is the wrong one -- nobody
+                    has checked that wording against the school. Calling it
+                    theirs is both accurate and the only version of this panel
+                    that cannot be misread by someone who never scrolls.
+                  */}
                   <h2 id="prompt-heading" className="text-sm font-bold text-slate-900">
-                    Your school&rsquo;s prompt
+                    {userProvidedPrompt ? 'Your prompt' : <>Your school&rsquo;s prompt</>}
                   </h2>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    {hasPrompt
-                      ? 'The question this draft answers.'
-                      : 'Attaching a school prompt is optional — a general statement needs none.'}
+                    {!hasPrompt
+                      ? 'Attaching a school prompt is optional — a general statement needs none.'
+                      : userProvidedPrompt
+                        ? 'The question you gave us. CRNAPREPHUB has not verified it with the school.'
+                        : 'The question this draft answers.'}
                   </p>
+                  {/*
+                    AND THE BADGE SITS WITH THE HEADING, not further down the
+                    panel where it was before. The applicant has to meet it
+                    before they read the wording, not after.
+                  */}
+                  {userProvidedPrompt && promptNotice !== null && (
+                    <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold text-amber-900">
+                      {promptNotice}
+                    </p>
+                  )}
                 </div>
 
                 <div className="px-5 py-4">
@@ -1802,25 +2469,19 @@ export default function StatementStudioClient({
                       )}
 
                       {/*
-                        THE LIMITS, WITH THE MEASURED ONES VISIBLY DIFFERENT.
-                        A solid chip is a number the counter is watching; an
-                        outlined chip is the school's requirement that this
-                        editor cannot check. An applicant must never read a page
-                        count as something we are tracking for them.
+                        THE LIMITS, IN THREE VISIBLY DIFFERENT REGISTERS.
+                        A solid chip is a number the counter is watching, a soft
+                        one is something the editor applies by rendering the
+                        page, and an outlined one sits under a label saying it
+                        is the applicant's to apply. An applicant must never
+                        read a page count as something we are tracking for
+                        them, nor a type size we typeset as homework.
+
+                        THE SAME COMPONENT THE CHECKLIST USES. See
+                        constraintChips.tsx.
                       */}
-                      {requirement !== null && requirementLimits.length > 0 && (
-                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                          {requirementLimits.map((limit) => (
-                            <span
-                              key={`${limit.kind}-${limit.text}`}
-                              className={limit.measured
-                                ? 'rounded-md bg-slate-900 px-2 py-0.5 text-[11px] font-semibold text-white'
-                                : 'rounded-md border border-slate-300 px-2 py-0.5 text-[11px] font-medium text-slate-600'}
-                            >
-                              {limit.text}
-                            </span>
-                          ))}
-                        </div>
+                      {requirement !== null && (
+                        <ConstraintChips limits={requirementLimits} />
                       )}
 
                       {/*
@@ -1830,16 +2491,24 @@ export default function StatementStudioClient({
                       */}
                       {requirement === null && (
                         <p className="mt-2 text-xs text-slate-500">
-                          {wordLimitLabel(prompt.statedMaxWords)}
+                          {wordLimitLabel(prompt.statedMaxWords, promptOrigin)}
                         </p>
                       )}
 
-                      {requirement !== null
-                        && requirementLimits.some((limit) => !limit.measured) && (
-                        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                          {UNMEASURED_NOTICE}
-                        </p>
-                      )}
+                      {/*
+                        AND NO SENTENCE RESTATING THEM.
+
+                        A blanket line here once told every applicant that this
+                        editor "counts words and characters only" and could not
+                        check pages, spacing, font or margins -- true of a
+                        textarea, false of a page the Studio lays out. What
+                        replaced it named only the fields a human still had to
+                        handle, and was then a word-for-word second copy of the
+                        chips immediately above.
+
+                        THE GROUP LABEL ON THE CHIPS SAYS IT INSTEAD, once,
+                        naming nothing twice.
+                      */}
 
                       {/*
                         A LENGTH THAT IS NOT A LIMIT, SAID ONCE.
@@ -1950,11 +2619,9 @@ export default function StatementStudioClient({
                     the submission feature is switched off. Rendered as escaped
                     text, never as markup.
                   */}
-                  {promptNotice !== null && (
-                    <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-xs font-medium text-amber-900">
-                      {promptNotice}
-                    </p>
-                  )}
+                  {/*
+                    MOVED TO THE HEADING, above. One badge, where it is read.
+                  */}
 
                   {/*
                     THE CONTROLS, COLLAPSED BY DEFAULT ONCE A PROMPT IS
@@ -1975,7 +2642,7 @@ export default function StatementStudioClient({
                       aria-expanded={pickerOpen}
                       aria-controls="statement-prompt-controls"
                       onClick={() => setPickerExpanded((open) => !open)}
-                      className="mb-4 w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                      className={`${TOUCH_TARGET} mb-4 w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500`}
                     >
                       {pickerOpen ? 'Hide school and prompt options' : 'Change school or prompt'}
                     </button>
@@ -2048,6 +2715,18 @@ export default function StatementStudioClient({
                 ) : (
                   <>
                     {/*
+                      WHAT THE CLICK COSTS, BEFORE THE CLICK. On localhost the
+                      analyser is the real one and the request is billed, so
+                      this sits above the button rather than beside the result.
+                      It is withdrawn when the button would open a stored result
+                      instead, because that makes no request.
+                    */}
+                    {localRealAi && analysisAction !== 'view' && (
+                      <p className="mt-3 rounded-xl border-2 border-amber-400 bg-amber-50 px-3 py-2.5 text-xs font-semibold leading-relaxed text-amber-900">
+                        {LOCAL_REAL_AI_WARNING}
+                      </p>
+                    )}
+                    {/*
                       VIEWING A STORED RESULT MAKES NO REQUEST. That analysis
                       already happened and was already paid for; opening it is
                       reading, not analysing, so this branch calls nothing.
@@ -2089,8 +2768,17 @@ export default function StatementStudioClient({
                   </>
                 )}
 
-                {/* LABELLED, AND PROMISING NOTHING ABOUT REUSE. */}
-                {analysisAvailable === 'development-no-cache' && (
+                {/*
+                  LABELLED, AND PROMISING NOTHING ABOUT REUSE.
+                  Locally the real model is called and the result IS kept -- in
+                  a gitignored file, not in production -- so the no-cache
+                  sentence would be false there and this one is shown instead.
+                */}
+                {localRealAi ? (
+                  <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
+                    {LOCAL_REAL_AI_NOTICE}
+                  </p>
+                ) : analysisAvailable === 'development-no-cache' && (
                   <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
                     {ANALYSIS_NO_CACHE_NOTICE}
                   </p>

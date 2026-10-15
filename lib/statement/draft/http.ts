@@ -242,6 +242,16 @@ export interface PublicDraft {
   readonly id: string
   readonly title: string
   readonly essay: string
+  /**
+   * The constrained editor document, or null.
+   *
+   * PRESENT AND null ON A DRAFT WITH NO FORMATTING, for the same reason the
+   * prompt snapshot is: an absent key cannot be told from a server too old to
+   * send one.
+   */
+  readonly editorDocument: unknown
+  /** The bundled face this draft is laid out in, or null for the default. */
+  readonly documentFont: string | null
   readonly revision: number
   readonly createdAt: string
   readonly updatedAt: string
@@ -271,6 +281,13 @@ export function publicDraft(draft: StatementDraft): PublicDraft {
     id: draft.id,
     title: draft.title,
     essay: draft.essay,
+    // FORMATTING TRAVELS WITH THE TEXT. Null for a draft that has none, which
+    // the editor reconstructs from `essay`; never omitted, so a client reads
+    // the absence rather than inferring it from a missing key.
+    editorDocument: draft.editorDocument ?? null,
+    // THE SAME RULE: present and null for a draft that has none, never omitted,
+    // so a client reads the absence rather than inferring it from a missing key.
+    documentFont: draft.documentFont ?? null,
     revision: draft.revision,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,

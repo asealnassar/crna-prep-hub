@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { statementDbClient } from '@/lib/statement/devMode/guardedClient'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
 import {
   STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
@@ -85,14 +86,13 @@ async function admit(): Promise<Caller | NextResponse> {
   const token = await readAccessToken()
   if (!token) return NextResponse.json(UNAUTHENTICATED_BODY, { status: 401 })
 
-  const db = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      auth: { autoRefreshToken: false, persistSession: false },
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    },
-  )
+  // THE VERIFIED SESSION'S OWN ANSWER, passed for simulated-live only: the
+  // local stand-in for the submission functions has no auth.uid() to read.
+  // Production ignores it. Nothing here comes from the request body.
+  const db = statementDbClient(token, {
+    userId: auth.userId,
+    isAdmin: isAdminEmail(auth.email),
+  })
   return { userId: auth.userId, db }
 }
 

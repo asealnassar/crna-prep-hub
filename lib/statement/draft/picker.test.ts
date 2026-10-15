@@ -83,7 +83,10 @@ test('search: THE STATE IS NOT SEARCHED', () => {
 })
 
 test('search: a null state is safe, and leaves no dangling punctuation', () => {
-  assert.equal(schoolLabel(school({ locationState: 'TX' })), 'Example University — TX')
+  // SPELLED OUT, from lib/states.ts. The column holds 'TX' for most rows and
+  // 'Minnesota' for twelve; one convention reaches the screen. See QA data
+  // quality, "picker state format".
+  assert.equal(schoolLabel(school({ locationState: 'TX' })), 'Example University — Texas')
   assert.equal(schoolLabel(school({ locationState: null })), 'Example University')
   // Blank and whitespace-only are treated as absent, not printed as a gap.
   assert.equal(schoolLabel(school({ locationState: '' })), 'Example University')
@@ -94,10 +97,35 @@ test('search: a null state is safe, and leaves no dangling punctuation', () => {
   }
 })
 
-test('search: a full state name is shown as stored', () => {
-  // lib/states.ts records that this column is inconsistent. The picker shows
-  // what is there; normalising is the directory's business, not a label's.
+test('search: both stored formats reach the screen the SAME way', () => {
+  /*
+   * The inconsistency lib/states.ts documents -- most rows abbreviated, twelve
+   * spelled out -- used to reach the picker as written, so "Duke University —
+   * NC" sat directly above "Mayo Clinic — Minnesota".
+   *
+   * BOTH NOW RESOLVE THROUGH THE SAME REVIEWED MAP, so the two shapes are
+   * indistinguishable by the time an applicant reads them.
+   */
+  // A SPELLED-OUT ROW and an ABBREVIATED ROW, both real values of this column.
   assert.equal(schoolLabel(school({ locationState: 'Michigan' })), 'Example University — Michigan')
+  assert.equal(schoolLabel(school({ locationState: 'NC' })), 'Example University — North Carolina')
+  assert.equal(schoolLabel(school({ locationState: 'nc' })), 'Example University — North Carolina')
+  /*
+   * A VALUE THE MAP DOES NOT KNOW IS STILL SHOWN, trimmed and no more.
+   *
+   * 'MI' IS SUCH A VALUE, WHICH IS WORTH KNOWING. lib/states.ts maps only the
+   * spellings this directory actually holds -- Michigan is stored spelled out,
+   * so there is no MI key -- deliberately, so no heading or URL can be derived
+   * from a value nobody has reviewed. Hiding an unmapped state would be worse
+   * than showing it: nobody would notice it had gone.
+   */
+  assert.equal(schoolLabel(school({ locationState: 'MI' })), 'Example University — MI')
+  assert.equal(schoolLabel(school({ locationState: 'ZZ' })), 'Example University — ZZ')
+  // AND THE LABEL'S OWN WHITESPACE IS TIDIED, which is this product's sentence
+  // to tidy. `name` itself is untouched everywhere else in this module.
+  assert.equal(
+    schoolLabel({ id: 'x', name: 'Example  University  ', locationState: ' PA ' }),
+    'Example University — Pennsylvania')
 })
 
 // ======================================================= directory notices
@@ -964,8 +992,17 @@ test('component: the CONFIRMATION WARNING is shown with a deliberate retry', () 
 
 test('component: no second save path, and no new PATCH field', () => {
   // The editor still has exactly one body expression, built by the validator.
+  /*
+    ONE REQUEST BODY, asserted as that rather than as "one JSON.stringify".
+
+    The proxy counted every stringify in the file, and started failing when
+    the editor began comparing two documents to decide whether formatting had
+    actually changed -- a comparison, not a body. A guard that rejects correct
+    code is not guarding the rule it was written for.
+  */
   assert.equal(CLIENT.split('body: JSON.stringify(attempt.body)').length - 1, 1)
-  assert.equal((CLIENT.match(/JSON\.stringify\(/g) ?? []).length, 1)
+  const bodies = CLIENT.match(/body: JSON\.stringify\(/g) ?? []
+  assert.equal(bodies.length, 1, 'exactly one request body')
   // Four fetches in the editor -- the autosave PATCH, the reload GET, the
   // extraction POST and the analysis POST -- and one in the picker, which is
   // the catalog GET this test is about.
@@ -991,7 +1028,7 @@ test('a saved snapshot can be given its school’s name', () => {
     { id: 'aaaaaaaa-0000-4000-8000-000000000001', name: 'Duke University', locationState: 'NC' },
     { id: 'aaaaaaaa-0000-4000-8000-000000000002', name: 'Rutgers', locationState: null },
   ]
-  assert.equal(schoolNameFor(schools, schools[0].id), 'Duke University — NC')
+  assert.equal(schoolNameFor(schools, schools[0].id), 'Duke University — North Carolina')
   // The null-state case goes through schoolLabel, so there is no dangling dash.
   assert.equal(schoolNameFor(schools, schools[1].id), 'Rutgers')
 })

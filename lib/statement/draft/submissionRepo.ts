@@ -1,8 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { PromptSubmissionInput, SubmissionStatus } from './promptSubmission.ts'
-import { isSubmissionStatus, provenanceOf, type PromptOrigin } from './promptSubmission.ts'
+import type {
+  PromptSubmissionInput, SubmissionKind, SubmissionStatus,
+} from './promptSubmission.ts'
+import {
+  isSubmissionKind, isSubmissionStatus, provenanceOf, type PromptOrigin,
+} from './promptSubmission.ts'
 import type { StatementDraft } from './rows.ts'
 import { draftFromRow, type StatementDraftRow } from './rows.ts'
+import { submissionFieldsEnabled, promptChangeReportsEnabled } from './rollout.ts'
 
 /**
  * The only module that reads or writes statement_prompt_submissions.
@@ -32,9 +37,26 @@ const SUBMISSIONS = 'statement_prompt_submissions'
  * runtime -- and so this file states, where it can be read, that review_note
  * and reviewed_by are not ours to select.
  */
-const OWN_SUBMISSION_COLUMNS =
+const OWN_SUBMISSION_COLUMNS_BASE =
   'id, school_id, prompt_text, stated_max_words, application_cycle, source_url, '
   + 'status, approved_prompt_id, created_at'
+
+/** The same ten, minus nothing: 008 grants every one of them to the submitter. */
+function ownSubmissionColumns(): string {
+  const base = submissionFieldsEnabled()
+    ? `${OWN_SUBMISSION_COLUMNS_BASE}, ${REVIEW_COLUMNS_FIELDS}`
+    : OWN_SUBMISSION_COLUMNS_BASE
+  return promptChangeReportsEnabled() ? `${base}, ${CHANGE_REPORT_FIELDS}` : base
+}
+
+/**
+ * 20261008_012's two columns.
+ *
+ * SELECTED ONLY BEHIND THE FLAG, for the reason OWN_SUBMISSION_COLUMNS_BASE
+ * gives: naming a column PostgREST cannot find fails the whole request with a
+ * 42703 rather than degrading, so the queue would stop working entirely.
+ */
+const CHANGE_REPORT_FIELDS = 'submission_kind, challenged_requirement_id'
 
 /**
  * Columns the REVIEW QUEUE reads. A superset, legitimate only for a caller the
@@ -47,10 +69,31 @@ const OWN_SUBMISSION_COLUMNS =
  * exists so a submission can be withdrawn by its author and counted against
  * their rate limit, which are machine uses rather than human ones.
  */
-const REVIEW_COLUMNS =
+const REVIEW_COLUMNS_BASE =
   'id, school_id, prompt_text, stated_max_words, application_cycle, source_url, '
   + 'status, reviewed_at, review_note, approved_prompt_id, duplicate_of_id, '
   + 'text_fingerprint, created_at'
+
+/**
+ * What 20261006_008 adds to the review projection.
+ *
+ * GATED LIKE EVERY OTHER UNAPPLIED COLUMN LIST. Naming an absent column in a
+ * PostgREST select does not degrade -- it fails the whole request with a 42703
+ * -- so the queue would stop working entirely rather than losing one field.
+ */
+const REVIEW_COLUMNS_FIELDS =
+  'document_label, document_type_hint, stated_min_words, stated_max_characters, '
+  + 'stated_max_pages, stated_pages_text, formatting_instructions, '
+  + 'other_instructions, submitter_note, approved_requirement_id'
+
+function reviewColumns(): string {
+  const base = submissionFieldsEnabled()
+    ? `${REVIEW_COLUMNS_BASE}, ${REVIEW_COLUMNS_FIELDS}`
+    : REVIEW_COLUMNS_BASE
+  // THE QUEUE NEEDS THE KIND MOST OF ALL: it is what tells an administrator
+  // they are looking at a report rather than a new prompt.
+  return promptChangeReportsEnabled() ? `${base}, ${CHANGE_REPORT_FIELDS}` : base
+}
 
 export type SubmissionRefusalReason =
   | 'not-authenticated'
@@ -78,6 +121,33 @@ export interface OwnSubmission {
   readonly status: SubmissionStatus
   readonly approvedPromptId: string | null
   readonly createdAt: string
+  // ---- 20261006_008 ------------------------------------------------------
+  // null WHEREVER THE COLUMN WAS NOT SELECTED, which is the same answer as
+  // "the applicant did not say". That is deliberate and harmless: with the
+  // flag off there are no submissions carrying these values, so the two cases
+  // cannot be confused by anything that exists.
+  readonly documentLabel: string | null
+  readonly documentTypeHint: string | null
+  readonly statedMinWords: number | null
+  readonly statedMaxCharacters: number | null
+  readonly statedMaxPages: number | null
+  readonly statedPagesText: string | null
+  readonly formattingInstructions: string | null
+  readonly otherInstructions: string | null
+  readonly submitterNote: string | null
+  /** The catalog row this became, or null. Never implies it is active. */
+  readonly approvedRequirementId: string | null
+  // ---- 20261008_012 ------------------------------------------------------
+  /**
+   * What this submission CLAIMS to be.
+   *
+   * DEFAULTS TO 'new-prompt' WHERE THE COLUMN WAS NOT SELECTED, matching the
+   * column's own default, so a reader behind the flag sees what the database
+   * would say rather than a third state meaning "unknown".
+   */
+  readonly kind: SubmissionKind
+  /** The catalog row a report contradicts. Null for a new prompt. */
+  readonly challengedRequirementId: string | null
 }
 
 /** One submission, as the review queue shows it. */
@@ -100,6 +170,21 @@ function fail(reason: SubmissionRefusalReason, detail: unknown): SubmissionResul
 const text = (value: unknown): string | null => (typeof value === 'string' ? value : null)
 const count = (value: unknown): number | null =>
   typeof value === 'number' && Number.isInteger(value) ? value : null
+
+/**
+ * A numeric(4,1) page count, from a number OR a decimal string.
+ *
+ * THE SAME PATTERN repo.ts uses for margins_inches and for the canonical page
+ * bounds, and for the same reason: PostgREST may send a numeric as either, and
+ * an integer-only reader silently drops every fractional page.
+ */
+const pageNumber = (value: unknown): number | null => {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null
+  if (typeof value !== 'string') return null
+  if (!/^\d+(\.\d+)?$/.test(value.trim())) return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
 
 /**
  * One row as an OwnSubmission, or null when it cannot be read coherently.
@@ -128,6 +213,23 @@ function ownSubmissionFrom(row: unknown): OwnSubmission | null {
     status,
     approvedPromptId: text(r.approved_prompt_id),
     createdAt,
+    documentLabel: text(r.document_label),
+    documentTypeHint: text(r.document_type_hint),
+    statedMinWords: count(r.stated_min_words),
+    statedMaxCharacters: count(r.stated_max_characters),
+    // numeric(4,1) ARRIVES AS A NUMBER OR A STRING depending on the driver, and
+    // 1.5 is not an integer -- so count() would read Boston College's page and
+    // a half as null, which is exactly the bug 20261005_007 was written to fix.
+    statedMaxPages: pageNumber(r.stated_max_pages),
+    statedPagesText: text(r.stated_pages_text),
+    formattingInstructions: text(r.formatting_instructions),
+    otherInstructions: text(r.other_instructions),
+    submitterNote: text(r.submitter_note),
+    approvedRequirementId: text(r.approved_requirement_id),
+    // AN UNRECOGNISED KIND IS NOT GUESSED AT -- it reads as the column's own
+    // default, which is the only value a row can have had before 012.
+    kind: isSubmissionKind(r.submission_kind) ? r.submission_kind : 'new-prompt',
+    challengedRequirementId: text(r.challenged_requirement_id),
   }
 }
 
@@ -184,6 +286,31 @@ export async function createDraftWithSubmission(
     p_stated_max_words: input.statedMaxWords,
     p_application_cycle: input.applicationCycle,
     p_source_url: input.sourceUrl,
+    // ---- 20261006_008 ----------------------------------------------------
+    // NAMED PARAMETERS WITH DEFAULTS, so this call still works against a
+    // database where 008 has not been applied: PostgREST matches a function by
+    // the argument names supplied, and the pre-008 signature has none of
+    // these. That is why they are passed only when the flag that releases them
+    // is on -- see submissionFieldsEnabled().
+    ...(submissionFieldsEnabled() ? {
+      p_document_label: input.documentLabel,
+      p_document_type_hint: input.documentTypeHint,
+      p_stated_min_words: input.statedMinWords,
+      p_stated_max_characters: input.statedMaxCharacters,
+      p_stated_max_pages: input.statedMaxPages,
+      p_stated_pages_text: input.statedPagesText,
+      p_formatting_instructions: input.formattingInstructions,
+      p_other_instructions: input.otherInstructions,
+      p_submitter_note: input.submitterNote,
+    } : {}),
+    // ---- 20261008_012 ----------------------------------------------------
+    // SAME PATTERN, SAME REASON. A database without 012 has no parameter of
+    // these names, and PostgREST matches on the names supplied -- so a report
+    // can only be sent where the column exists to receive it.
+    ...(promptChangeReportsEnabled() ? {
+      p_submission_kind: input.kind,
+      p_challenged_requirement_id: input.challengedRequirementId,
+    } : {}),
   })
   if (error) return fail('write-failed', error)
   if (typeof data !== 'object' || data === null) {
@@ -206,7 +333,7 @@ export async function readOwnSubmission(
 ): Promise<SubmissionResult<OwnSubmission>> {
   const { data, error } = await db
     .from(SUBMISSIONS)
-    .select(OWN_SUBMISSION_COLUMNS)
+    .select(ownSubmissionColumns())
     .eq('id', submissionId)
     .maybeSingle()
   if (error) return fail('read-failed', error)
@@ -222,7 +349,7 @@ export async function listOwnSubmissions(
 ): Promise<SubmissionResult<readonly OwnSubmission[]>> {
   const { data, error } = await db
     .from(SUBMISSIONS)
-    .select(OWN_SUBMISSION_COLUMNS)
+    .select(ownSubmissionColumns())
     .order('created_at', { ascending: false })
     .limit(100)
   if (error) return fail('read-failed', error)
@@ -273,7 +400,7 @@ export async function listSubmissionsForReview(
   adminDb: SupabaseClient,
   filter: { readonly status?: SubmissionStatus },
 ): Promise<SubmissionResult<readonly ReviewSubmission[]>> {
-  let query = adminDb.from(SUBMISSIONS).select(REVIEW_COLUMNS)
+  let query = adminDb.from(SUBMISSIONS).select(reviewColumns())
   if (filter.status) query = query.eq('status', filter.status)
 
   const { data, error } = await query.order('created_at', { ascending: false }).limit(500)
@@ -286,6 +413,32 @@ export async function listSubmissionsForReview(
     rows.push(submission)
   }
   return { ok: true, value: rows }
+}
+
+/**
+ * ONE submission, as the review queue shows it. ADMIN ONLY, same client rules
+ * as listSubmissionsForReview.
+ *
+ * WHY THE DECIDE PATH NEEDS IT. A report and a new prompt are published
+ * differently, and the choice between replacing a row and adding another is
+ * the administrator's. The handler has to KNOW which kind it is holding before
+ * it can insist on that choice -- and reading it from the request body would
+ * let the caller decide which rules apply to them.
+ */
+export async function readSubmissionForReview(
+  adminDb: SupabaseClient,
+  submissionId: string,
+): Promise<SubmissionResult<ReviewSubmission>> {
+  const { data, error } = await adminDb
+    .from(SUBMISSIONS)
+    .select(reviewColumns())
+    .eq('id', submissionId)
+    .maybeSingle()
+  if (error) return fail('read-failed', error)
+  if (!data) return fail('not-found', '')
+  const submission = reviewSubmissionFrom(data)
+  if (!submission) return fail('data-integrity', 'unreadable submission row')
+  return { ok: true, value: submission }
 }
 
 /** One moderation decision, through the locking definer function. */

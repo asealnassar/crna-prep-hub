@@ -33,6 +33,7 @@ const CHECKLIST_RAW = read('../../../app/statement-studio/components/Requirement
 const PREVIEW_RAW = read('../../../app/statement-studio/components/RequirementPreview.tsx')
 const EDITOR_RAW = read('../../../app/statement-studio/components/StatementStudioClient.tsx')
 const LIBRARY_RAW = read('../../../app/statement-studio/components/LibraryClient.tsx')
+const CHIPS_RAW = read('../../../app/statement-studio/components/constraintChips.tsx')
 const LIBRARY_PAGE_RAW = read('../../../app/statement-studio/page.tsx')
 const EDITOR_PAGE_RAW = read('../../../app/statement-studio/[id]/page.tsx')
 
@@ -40,6 +41,7 @@ const CHECKLIST = stripComments(CHECKLIST_RAW)
 const PREVIEW = stripComments(PREVIEW_RAW)
 const EDITOR = stripComments(EDITOR_RAW)
 const LIBRARY = stripComments(LIBRARY_RAW)
+const CHIPS = stripComments(CHIPS_RAW)
 
 // ===================================================== the checklist
 
@@ -66,19 +68,48 @@ test('a started card offers Continue and an unstarted one offers Start', () => {
   assert.match(CHECKLIST, /Continue \(preview only\)/)
 })
 
-test('A MEASURED LIMIT AND AN UNMEASURED ONE RENDER DIFFERENTLY', () => {
-  // The one visual rule this component adds. Both branches must exist, keyed
-  // off `measured` and nothing else.
-  assert.match(CHECKLIST, /limit\.measured/)
-  const chips = CHECKLIST.slice(CHECKLIST.indexOf('function LimitChips'))
-  assert.match(chips, /bg-slate-900/, 'solid chip for a watched number')
-  assert.match(chips, /border border-slate-300/, 'outlined chip for a stated rule')
+test('QA-010 THREE REGISTERS RENDER DIFFERENTLY, AND THE MANUAL ONES ARE LABELLED', () => {
+  /*
+   * The visual rule, now in the one component both surfaces use. A boolean
+   * gave two styles for three outcomes, so a type size the Studio typesets
+   * looked exactly like a citation style it cannot touch -- and the only thing
+   * telling them apart was the sentence that duplicated the chips.
+   *
+   * KEYED OFF `register` AND NOTHING ELSE. No kind, no school, no field name.
+   */
+  assert.match(CHIPS, /CHIP_CLASS\[limit\.register\]/)
+  for (const register of ['counted:', 'applied:', 'manual:']) {
+    assert.ok(CHIPS.includes(register), register)
+  }
+  assert.match(CHIPS, /bg-slate-900/, 'solid chip for a watched number')
+  assert.match(CHIPS, /bg-slate-100/, 'soft chip for something we apply')
+  assert.match(CHIPS, /border border-slate-300/, 'outlined chip for the applicant')
+  // The group, and a label that names no requirement.
+  assert.match(CHIPS, /register !== 'manual'/)
+  assert.match(CHIPS, /register === 'manual'/)
+  assert.match(CHIPS, /MANUAL_GROUP_LABEL/)
+  assert.doesNotMatch(CHIPS, /Check in your final document/)
 })
 
-test('the unmeasured notice is rendered from the shared constant', () => {
-  assert.match(CHECKLIST, /\{UNMEASURED_NOTICE\}/)
-  // Not a second copy of the wording.
+test('QA-010 THE CARD STATES EACH REQUIREMENT ONCE, AND WRITES NO COPY ITSELF', () => {
+  /*
+   * Two sentences have stood under these chips and both were wrong. The
+   * blanket one claimed the Studio could not check pages, spacing, font or
+   * margins. The narrow one that replaced it named exactly the fields a human
+   * still had to handle -- which are exactly the fields the describer already
+   * emitted a chip for, so every card that had the sentence printed its own
+   * chips again directly underneath.
+   *
+   * THE CARD NOW HAS NO SENTENCE SLOT AT ALL, which is the only way the
+   * duplication cannot come back: there is nowhere to put it.
+   */
+  assert.doesNotMatch(CHECKLIST, /manualReview/)
+  assert.doesNotMatch(CHECKLIST, /Check in your final document/)
+  assert.doesNotMatch(CHECKLIST, /UNMEASURED_NOTICE/)
   assert.doesNotMatch(CHECKLIST, /cannot check page count/)
+  assert.doesNotMatch(CHECKLIST, /counts words and characters only/)
+  // And the chips themselves come from the one shared renderer.
+  assert.match(CHECKLIST, /<ConstraintChips limits=\{card\.constraints\} \/>/)
 })
 
 test('a choice renders as ONE row with nested options', () => {
@@ -169,7 +200,10 @@ test('the preview defaults to OFF, so production renders none', () => {
   assert.match(LIBRARY, /requirementsPreview = false/)
   // RENDERED INSTEAD OF THE LIBRARY, not beside it: the `&&` form placed it
   // as a second child of the flex root and squeezed the real content.
-  assert.match(LIBRARY, /\{requirementsPreview \? \(/)
+  // THE CONDITION WIDENED when ?preview=requirements became the real catalog
+  // and ?preview=fixtures kept the shapes. The FORM is what matters here:
+  // one ternary that replaces the library, never the `&&` sibling form.
+  assert.match(LIBRARY, /\{requirementsPreview \|\| fixturesPreview \? \(/)
   assert.doesNotMatch(LIBRARY, /\{requirementsPreview && \(/)
 })
 
@@ -193,18 +227,37 @@ test('the editor shows the school’s own counter when it stated one', () => {
   assert.match(EDITOR, /liveCountLabel\(\{/)
 })
 
-test('the editor distinguishes measured from unmeasured limits', () => {
-  assert.match(EDITOR, /requirementLimits\.map/)
-  assert.match(EDITOR, /limit\.measured/)
-  assert.match(EDITOR, /requirementLimits\.some\(\(limit\) => !limit\.measured\)/)
-  assert.match(EDITOR, /\{UNMEASURED_NOTICE\}/)
+test('QA-010 the editor shows the SAME chips, from the same renderer, once each', () => {
+  /*
+   * The editor's prompt panel had its own copy of the chip markup and its own
+   * copy of the restating sentence, so the duplication had to be fixed twice
+   * and could drift apart in between. Both surfaces now call one component.
+   */
+  assert.match(EDITOR, /<ConstraintChips limits=\{requirementLimits\} \/>/)
+  assert.doesNotMatch(EDITOR, /limit\.measured/)
+  assert.doesNotMatch(EDITOR, /manualReview/)
+  assert.doesNotMatch(EDITOR, /UNMEASURED_NOTICE/)
+})
+
+test('ONE RESOLVER DRIVES THE EDITOR, AND NO SCHOOL IS NAMED', () => {
+  /*
+   * The architectural constraint, asserted on the markup. The surface, the
+   * page, the panel and the notice all come from resolveRequirementCapabilities
+   * -- so a school that behaves unlike the others is a record, not a branch.
+   */
+  assert.match(EDITOR, /resolveRequirementCapabilities/)
+  assert.match(EDITOR, /capabilities\.paginated/)
+  const code = EDITOR.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+  for (const forbidden of ['Boston', 'College']) {
+    assert.equal(code.includes(forbidden), false, `the editor names ${forbidden}`)
+  }
 })
 
 test('A LEGACY DRAFT KEEPS THE WORD-LIMIT LINE IT ALWAYS HAD', () => {
   // The backward-compatibility guarantee, in the markup: with no structured
   // requirement the panel renders wordLimitLabel and none of the new blocks.
   assert.match(EDITOR, /\{requirement === null && \(/)
-  assert.match(EDITOR, /\{wordLimitLabel\(prompt\.statedMaxWords\)\}/)
+  assert.match(EDITOR, /\{wordLimitLabel\(prompt\.statedMaxWords, promptOrigin\)\}/)
 })
 
 test('the requirement prop defaults to null', () => {
@@ -252,10 +305,13 @@ test('THE STRIPPER DOES NOT EAT CODE', () => {
       `${name}: stripping removed ${raw.length - stripped.length} of ${raw.length} characters`)
   }
   // And the specific identifiers the assertions above depend on survive.
-  for (const needle of ['function LimitChips', 'limit.measured', 'actions.onStart']) {
+  for (const needle of ['function LimitChips', 'ConstraintChips', 'actions.onStart']) {
     assert.ok(CHECKLIST.includes(needle), needle)
   }
-  assert.ok(EDITOR.includes('requirementLimits.map'))
+  assert.ok(CHIPS.includes('CHIP_CLASS'))
+  assert.ok(CHIPS.length > CHIPS_RAW.length * 0.3,
+    `chips: stripping removed ${CHIPS_RAW.length - CHIPS.length} of ${CHIPS_RAW.length}`)
+  assert.ok(EDITOR.includes('ConstraintChips'))
   assert.ok(PREVIEW.includes('RequirementChecklist'))
 })
 
@@ -316,7 +372,7 @@ test('EVERY NEW PANEL IS INSIDE THE requirement !== null BRANCH', () => {
   // none, and its single length line is unchanged -- that line is what every
   // such draft has shown since the feature shipped.
   assert.match(EDITOR, /\{requirement === null && \(/)
-  assert.match(EDITOR, /\{wordLimitLabel\(prompt\.statedMaxWords\)\}/)
+  assert.match(EDITOR, /\{wordLimitLabel\(prompt\.statedMaxWords, promptOrigin\)\}/)
   for (const guard of ['requirementAdvisory', 'requirementTruncation',
     'requirementUnenforcedNotice']) {
     const derivation = new RegExp(
@@ -343,7 +399,9 @@ test('THE STORAGE CEILING IS LABELLED AS A CEILING, not as "characters"', () => 
   // the school's (UT Knoxville's, excluding spaces) and this editor's storage
   // ceiling (including them). Both previously ended in the bare word
   // "characters", which is the unexplained number this row exists to avoid.
-  assert.match(EDITOR, /MAX_SAVED_CHARS\.toLocaleString\('en-US'\)\} characters stored/)
+  // READ THROUGH maxSavedChars(), not the constant: the ceiling moves with
+  // migration 016, and the label must show whatever the database enforces.
+  assert.match(EDITOR, /savedCeiling\.toLocaleString\('en-US'\)\} characters stored/)
   assert.match(EDITOR, /this editor’s own limit, spaces included/)
   // AND THE CLARIFICATION ONLY APPEARS WHERE IT IS NEEDED -- beside a character
   // counter, not on every draft in the product.
@@ -357,5 +415,19 @@ test('THE SCHOOL’S COUNTER COMES FROM liveCountLabel, which carries its own ru
   assert.match(EDITOR, /kind, constraints: requirement\.constraints, words, text: essay,/)
   // No hand-rolled character arithmetic against a requirement anywhere.
   assert.doesNotMatch(EDITOR, /replace\(\/\\s\+\/g, ''\)/)
-  assert.doesNotMatch(EDITOR, /characterCount\(/)
+  /*
+   * THE CANONICAL COUNTER MAY BE CALLED; A SECOND ONE MAY NOT.
+   *
+   * This used to forbid characterCount() outright, as a proxy for "no
+   * hand-rolled arithmetic". The compliance panel needs a measured count, and
+   * the right way to get one is the function that already carries the spaces
+   * rule -- calling it is the opposite of hand-rolling. What WOULD reintroduce
+   * the drift is calling it without the school's own flag, so that is what is
+   * forbidden now.
+   */
+  for (const call of EDITOR.match(/characterCount\([\s\S]{0,160}?\)/g) ?? []) {
+    assert.match(call, /spacesCount/, `characterCount without the flag: ${call}`)
+  }
+  // And it still never FORMATS the counter: that is liveCountLabel's job.
+  assert.doesNotMatch(EDITOR, /\$\{characterCount\(/)
 })

@@ -16,6 +16,7 @@ import {
 } from '@/lib/statement/draft/library'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import NewDraftDialog from './NewDraftDialog'
+import CatalogReview, { type CatalogReviewProps } from './CatalogReview'
 import RequirementPreview from './RequirementPreview'
 
 /**
@@ -60,6 +61,8 @@ export default function LibraryClient({
   submissionsEnabled,
   pastePreview,
   requirementsPreview = false,
+  fixturesPreview = false,
+  reviewCatalog = null,
 }: {
   drafts: readonly StatementDraftSummary[]
   /** The directory, three columns, read on the server after the gate. */
@@ -79,6 +82,15 @@ export default function LibraryClient({
    * parameter -- see app/statement-studio/page.tsx.
    */
   requirementsPreview?: boolean
+  /** The eight shape fixtures, at ?preview=fixtures. */
+  fixturesPreview?: boolean
+  /**
+   * The 63 imported sets, read on the server. Null when the gate is closed OR
+   * when the local payload has not been generated -- two states this screen
+   * distinguishes, because "not allowed" and "not built yet" need different
+   * answers.
+   */
+  reviewCatalog?: CatalogReviewProps | null
 }) {
   const [creating, setCreating] = useState(false)
   const [query, setQuery] = useState('')
@@ -135,9 +147,38 @@ export default function LibraryClient({
           layout below is rendered by exactly the markup that rendered it
           before -- not a reconstruction of it.
         */}
-        {requirementsPreview ? (
+        {requirementsPreview || fixturesPreview ? (
           <main className="mx-auto w-full max-w-7xl px-4 pb-16 pt-6 sm:px-6 lg:px-10 lg:pt-10">
-            <RequirementPreview />
+            {/* ?preview=fixtures -- the eight hand-built SHAPE examples. */}
+            {fixturesPreview ? <RequirementPreview /> : null}
+
+            {/* ?preview=requirements -- the 63 sets actually in production.
+                NO SILENT FALLBACK: if the payload has not been generated the
+                screen says so and shows nothing, because showing eight worked
+                examples to somebody reviewing 63 real schools would read as an
+                answer. */}
+            {requirementsPreview && reviewCatalog !== null
+              ? <CatalogReview {...reviewCatalog} />
+              : null}
+            {requirementsPreview && reviewCatalog === null ? (
+              <section className="rounded-2xl border-2 border-dashed border-rose-500 bg-rose-50 p-6">
+                <h2 className="text-sm font-black uppercase tracking-widest text-rose-900">
+                  Review payload not found
+                </h2>
+                <p className="mt-2 max-w-2xl text-xs font-semibold leading-relaxed text-rose-900">
+                  The imported catalog is read from{' '}
+                  <code className="font-mono">local-review/statement_requirements_catalog.json</code>
+                  , which is generated and untracked. Build it with:
+                </p>
+                <pre className="mt-2 overflow-x-auto rounded-lg bg-rose-900 px-3 py-2 text-[11px] text-rose-50">
+python3 scripts/build_statement_requirements_import_sql.py
+                </pre>
+                <p className="mt-2 text-[11px] text-rose-800">
+                  Nothing is shown in its place. The shape fixtures are a different
+                  screen, at <code className="font-mono">?preview=fixtures</code>.
+                </p>
+              </section>
+            ) : null}
           </main>
         ) : (
         <main className="mx-auto w-full max-w-7xl px-4 pb-16 pt-6 sm:px-6 lg:px-10 lg:pt-10">

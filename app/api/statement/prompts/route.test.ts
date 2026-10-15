@@ -160,9 +160,10 @@ test('source: NO SERVICE ROLE, and no write of any kind', () => {
   ]) {
     assert.equal(CODE.includes(forbidden), false, `${forbidden} must not appear`)
   }
-  // The anon key plus the caller's own JWT, exactly as the draft routes do it.
-  assert.match(CODE, /NEXT_PUBLIC_SUPABASE_ANON_KEY/)
-  assert.match(CODE, /Authorization: `Bearer \$\{token\}`/)
+    // THE CLIENT MOVED, THE PROPERTY DID NOT. Every statement path now takes
+    // its client from statementDbClient(), which is asserted to hold the anon
+    // key and no service role in lib/statement/devMode/writeIsolation.test.ts.
+    assert.match(CODE, /statementDbClient\(token,/)
 })
 
 test('source: per-request by construction, like every other Studio route', () => {

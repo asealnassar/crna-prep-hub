@@ -158,5 +158,26 @@ export const ANALYSIS_UNAVAILABLE_MESSAGE =
  * It promises nothing about deduplication, because there is none: this path
  * cannot tell whether an identical essay was analysed a minute ago.
  */
+/**
+ * What a developer running the REAL analyser against localhost is told.
+ *
+ * TWO SENTENCES, TWO JOBS. The notice sits with the result and says where it
+ * came from; the warning sits with the button and says what pressing it costs.
+ * Both are development-only -- the server decides whether they are shown and
+ * passes a boolean, because a notice the browser could turn on would be a
+ * statement about what the client was told rather than about the mode.
+ *
+ * THE FEEDBACK ITSELF IS NEVER STAMPED. It is the model's own output after
+ * production validation, and a prefix inside it would be a change to the thing
+ * being evaluated.
+ */
+export const LOCAL_REAL_AI_NOTICE =
+  'LOCAL REAL AI TEST — This analysis uses the real AI model but is not written '
+  + 'to production.'
+
+export const LOCAL_REAL_AI_WARNING =
+  'Analyzing makes a real, paid OpenAI request. The result is stored locally '
+  + 'only; production records nothing.'
+
 export const ANALYSIS_NO_CACHE_NOTICE =
   'Development mode: results are not stored, so every analysis is a new request.'

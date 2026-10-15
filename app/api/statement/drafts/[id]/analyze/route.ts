@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { statementDbClient } from '@/lib/statement/devMode/guardedClient'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
 import {
   STATEMENT_STUDIO_HIDDEN_BODY, statementStudioAccess, statementStudioMode,
@@ -28,10 +29,13 @@ import { parseRequirementSnapshot } from '@/lib/statement/requirements/snapshot'
 import {
   FLOOR_UNREACHABLE, eligibilityForRequirement, wordFloorFits,
 } from '@/lib/statement/requirements/eligibility'
-import { unmeasurableKinds } from '@/lib/statement/requirements/constraints'
+import { analyzerUnmeasuredKinds } from '@/lib/statement/requirements/constraints'
 import { draftProvenance } from '@/lib/statement/requirements/provenance'
 import { claimAnalysis, settleAnalysis } from '@/lib/statement/draft/analysisRepo'
 import { analysisCacheEnabled } from '@/lib/statement/draft/rollout'
+import { simulatedLiveEnabled } from '@/lib/statement/devMode/gate'
+import { RUBRIC_VERSION } from '@/lib/statement/draft/rubric'
+import { REVIEW_SCHEMA_VERSION } from '@/lib/statement/draft/reviewSchema'
 
 /**
  * Statement Studio V2 analysis. One draft, seven categories, or six.
@@ -109,14 +113,13 @@ async function admit(): Promise<Caller | NextResponse> {
   const token = await readAccessToken()
   if (!token) return NextResponse.json(UNAUTHENTICATED_BODY, { status: 401 })
 
-  const db = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      auth: { autoRefreshToken: false, persistSession: false },
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    },
-  )
+  // THE VERIFIED SESSION'S OWN ANSWER, passed for simulated-live only: the
+  // local stand-in for the submission functions has no auth.uid() to read.
+  // Production ignores it. Nothing here comes from the request body.
+  const db = statementDbClient(token, {
+    userId: auth.userId,
+    isAdmin: isAdminEmail(auth.email),
+  })
   return { userId: auth.userId, tier: auth.tier, db }
 }
 
@@ -153,6 +156,15 @@ type Context = { params: Promise<{ id: string }> }
 export async function POST(_request: NextRequest, context: Context): Promise<NextResponse> {
   const caller = await admit()
   if (caller instanceof NextResponse) return caller
+
+  // DEVELOPMENT ONLY, DECIDED ON THE SERVER, ONCE. Read here so every branch
+  // below answers to the same value, and so the three places it changes
+  // behaviour -- the local store read, the usage ledger and where the result is
+  // written -- cannot disagree about which mode this request is in.
+  //
+  // IT CHANGES NOTHING ABOUT WHAT IS ANALYSED. The prompt, the model, the
+  // validator and the refusals are the production ones either way.
+  const simulated = simulatedLiveEnabled()
 
   const { id } = await context.params
   // Checked before any query: Postgres casts this to uuid, and a malformed one
@@ -395,6 +407,38 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     claim = { id: claimed.value.id, claimToken: claimed.value.claimToken }
   }
 
+  // ---- SIMULATED LIVE: the local store, in place of the cache ------------
+  //
+  // THE SAME QUESTION PRODUCTION ASKS, ASKED OF A LOCAL FILE. Keyed on the
+  // fingerprint that was just computed, so an identical essay and requirement
+  // return the stored result and no paid call is made -- and a changed essay
+  // has a different fingerprint, so it reaches the model as it should.
+  //
+  // PLACED AFTER THE CLAIM BLOCK AND BEFORE THE ALLOWANCE, which is exactly
+  // where production's cache hit returns. Everything above it has already run
+  // for real: the gate, the tier check, the provenance verdict and every
+  // eligibility refusal.
+  //
+  // NO PRODUCTION RPC IS INVOLVED. claimAnalysis() is unreachable here anyway,
+  // because it is taken only when the cache flag is on; this is the substitute
+  // for the protection that flag would have provided.
+  if (simulated) {
+    const { localAnalysisFor } = await import('@/lib/statement/devMode/localAnalyses')
+    const stored = localAnalysisFor(id, fingerprint)
+    if (stored !== null) {
+      return NextResponse.json({
+        review: stored.review,
+        revision: stored.revision,
+        words: stored.words,
+        overLimit: stored.overLimit,
+        statedMaxWords: stored.statedMaxWords,
+        provenance: stored.provenance,
+        cached: true,
+        analyzedAt: stored.createdAt,
+      })
+    }
+  }
+
   // ---- the allowance ------------------------------------------------------
   // V2's OWN WINDOWS: burst protection with no daily ceiling, because Ultimate
   // is sold as unlimited analysis of changed essays. The legacy analyser keeps
@@ -417,7 +461,39 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
   // THE SAME OPERATION THE LEGACY ANALYSER RECORDS. One analysis is one
   // analysis: this introduces no new charge, no new allowance and no new
   // pricing, and it counts against the budget the applicant already has.
-  const usageId = await recordStatementAttempt(caller.db, STATEMENT_OPERATIONS.analyze)
+  // THE LEDGER IS NOT WRITTEN LOCALLY.
+  //
+  // record_ai_usage and settle_ai_usage are RPCs on the production ledger and
+  // the guarded client refuses both -- so this is not the safety mechanism, it
+  // is what lets the screen work instead of erroring. No attempt is recorded,
+  // so there is no attempt to settle, which settleUsage() below enforces.
+  //
+  // THE RATE DECISION ABOVE IS STILL REAL. It is a SELECT on the ledger, which
+  // the guard passes through untouched, so a local run is refused for the same
+  // reason production would refuse it -- without consuming anything.
+  const usageId = simulated
+    ? null
+    : await recordStatementAttempt(caller.db, STATEMENT_OPERATIONS.analyze)
+
+  /**
+   * Settle the attempt, if there is an attempt to settle.
+   *
+   * ONE PLACE WHERE THE LEDGER IS TOUCHED, instead of four. settleStatementUsage
+   * already returns on a null id, so this changes nothing about what happens --
+   * but it changes what has to be TRUE for nothing to happen. With four direct
+   * calls, "no usage RPC runs on a local request" was a property of a shared
+   * production function's first line; here it is a property of this route,
+   * provable by reading it. A test that replaces the ledger module with a
+   * tripwire catches the difference, which is how this was found.
+   *
+   * A NULL ID IS NOT A SIMULATED-LIVE SPECIAL CASE. It also happens in
+   * production when recordStatementAttempt fails, and skipping the settle is
+   * the right answer there too: there is no row to settle.
+   */
+  const settleUsage = async (outcome: 'proposed' | 'rejected' | 'failed'): Promise<void> => {
+    if (usageId === null) return
+    await settleStatementUsage(caller.db, usageId, outcome)
+  }
 
   let completion: string
   try {
@@ -434,7 +510,7 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
             content: reviewSystemPrompt(promptAttached, authoritative === null ? null : {
               componentCount: authoritative.components.length,
               hasOptionalComponent: authoritative.components.some((part) => part.optional),
-              hasUnmeasurable: unmeasurableKinds(authoritative.constraints).length > 0,
+              hasUnmeasurable: analyzerUnmeasuredKinds(authoritative.constraints).length > 0,
             }),
           },
           {
@@ -490,7 +566,7 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     // The NAME only. An OpenAI error echoes the request, and the request is
     // somebody's personal statement.
     console.error('statement analyze: model call failed', (error as { name?: string })?.name)
-    await settleStatementUsage(caller.db, usageId, 'failed')
+    await settleUsage('failed')
     await releaseClaim(caller.db, claim)
     return NextResponse.json({ error: MESSAGES.unavailable, code: 'unavailable' }, { status: 502 })
   }
@@ -499,7 +575,7 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
   try {
     raw = JSON.parse(completion)
   } catch {
-    await settleStatementUsage(caller.db, usageId, 'rejected')
+    await settleUsage('rejected')
     await releaseClaim(caller.db, claim)
     return NextResponse.json({ error: MESSAGES.malformed, code: 'malformed' }, { status: 502 })
   }
@@ -511,16 +587,35 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     // THE REASON IS LOGGED, THE OUTPUT IS NOT. A malformed analysis still
     // quotes the applicant's essay back.
     console.error('statement analyze: malformed model response —', parsed.reason)
-    await settleStatementUsage(caller.db, usageId, 'rejected')
+    await settleUsage('rejected')
     await releaseClaim(caller.db, claim)
     return NextResponse.json({ error: MESSAGES.malformed, code: 'malformed' }, { status: 502 })
   }
 
-  await settleStatementUsage(caller.db, usageId, 'proposed')
+  await settleUsage('proposed')
 
   // THE RESULT IS STORED ONLY AFTER IT VALIDATED. A malformed or failed
   // analysis released its claim above and wrote nothing, so no failure can ever
   // be read back as a cached success.
+  // SIMULATED LIVE: the result is kept locally, and only now.
+  //
+  // AFTER parseReview(), FOR THE SAME REASON PRODUCTION STORES ONLY THEN. A
+  // malformed or failed analysis must not be readable back as a success, or the
+  // next identical click would be served a result the validator rejected.
+  if (simulated) {
+    const { saveLocalAnalysis } = await import('@/lib/statement/devMode/localAnalyses')
+    saveLocalAnalysis({
+      draftId: id,
+      fingerprint,
+      review: parsed.review,
+      revision: draft.revision,
+      words,
+      overLimit: overLimit({ words, statedMaxWords: draft.statedMaxWords }),
+      statedMaxWords: draft.statedMaxWords,
+      provenance,
+    })
+  }
+
   if (claim !== null) {
     const stored = await settleAnalysis(caller.db, {
       id: claim.id,
@@ -546,6 +641,11 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     provenance,
     // SAID PLAINLY. False means this result was not stored, so asking again
     // will pay again -- the interface must not imply otherwise.
-    stored: availability === 'ready',
+    //
+    // TRUE LOCALLY BECAUSE IT IS TRUE LOCALLY: the local store will answer the
+    // next identical request without a model call, which is the behaviour the
+    // field describes. It is not a claim about production, which stored
+    // nothing.
+    stored: availability === 'ready' || simulated,
   })
 }

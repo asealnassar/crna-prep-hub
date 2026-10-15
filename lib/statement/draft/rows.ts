@@ -29,6 +29,10 @@ export interface StatementDraftRow {
   user_id: string | null
   title: string | null
   essay: string | null
+  /** 20261011_013. Null for every draft written before formatting existed. */
+  editor_document?: unknown
+  editor_document_version?: number | null
+  document_font?: unknown
   /** bigint. A number OR a decimal string. See parseStoredRevision. */
   revision: number | string | null
   created_at: string | null
@@ -44,6 +48,13 @@ export interface StatementDraftRow {
   prompt_text: string | null
   /** integer, so PostgREST sends a JSON number -- never a string. */
   stated_max_words: number | null
+  /**
+   * 20261002_001. Set when the applicant pasted their school's question.
+   *
+   * ABSENT WHEREVER THE PROJECTION DID NOT ASK FOR IT, which reads as "not
+   * pasted" -- the same discipline requirement_id gets.
+   */
+  prompt_submission_id?: string | null
 
   // ----------------------------------------------- the structured requirement
   // ABSENT, NOT NULL, ON EVERY ENVIRONMENT WHERE 20261002_005 IS UNAPPLIED --
@@ -80,6 +91,26 @@ export interface StatementDraft {
   readonly userId: string
   readonly title: string
   readonly essay: string
+  /**
+   * The constrained editor document, or null.
+   *
+   * NULL IS NOT AN ERROR: it is every draft written before 013, and the
+   * editor reconstructs one from `essay` as text with no bold. `essay`
+   * remains the canonical text either way.
+   */
+  readonly editorDocument: unknown
+  /**
+   * The bundled face this draft is laid out in, or null for the Studio default.
+   *
+   * A LAYOUT PREFERENCE, NOT PART OF THE TEXT. It is deliberately not a mark
+   * inside editorDocument: the whole document is in one font, and keeping it
+   * out of the document keeps "the document's plain text equals essay" a
+   * string comparison. See 20261013_015.
+   *
+   * UNVALIDATED HERE. rows.ts maps rows; whether 'arimo' is a face this build
+   * ships is studioFonts.ts's question, and the renderer asks it.
+   */
+  readonly documentFont: string | null
   readonly revision: number
   readonly createdAt: string
   readonly updatedAt: string
@@ -278,6 +309,26 @@ export function draftPromptFrom(fields: {
    * exists today is in.
    */
   readonly requirementId?: unknown
+  /**
+   * The applicant's own submission id, when they pasted the question.
+   *
+   * IT ADMITS A FOURTH SHAPE, and omitting it is what broke the paste feature.
+   * The state rule below was written in the requirement era as LEGACY /
+   * REQUIREMENT / NEITHER, and a pasted draft -- which carries neither a
+   * prompt_id nor a requirement_id -- fell into NEITHER and was refused. Every
+   * draft started from a pasted prompt was therefore unreadable: the create
+   * returned 500 after both rows had been written, and the editor could never
+   * load one.
+   *
+   * IT VOUCHES FOR NOTHING. A submission id says where the wording came from --
+   * the applicant -- which is exactly what NEITHER could not say. Whether the
+   * product stands behind it is a different question, answered by
+   * provenanceOf() against the catalog, and this parser does not touch it.
+   *
+   * Optional, so the callers that know nothing about submissions keep the
+   * behaviour they had.
+   */
+  readonly promptSubmissionId?: unknown
 }): DraftPromptSnapshot | undefined {
   const { schoolId: school, promptId: prompt, promptText: text, statedMaxWords: words } = fields
 
@@ -291,12 +342,18 @@ export function draftPromptFrom(fields: {
     ? fields.requirementId
     : null
 
+  // The same reading, for the submission id.
+  const submission = typeof fields.promptSubmissionId === 'string'
+    && SNAPSHOT_UUID.test(fields.promptSubmissionId)
+    ? fields.promptSubmissionId
+    : null
+
   if (school === null && prompt === null && text === null && words === null) {
     // A GENERIC DRAFT CANNOT CARRY A REQUIREMENT. If one is present with no
     // school and no wording, the row is incoherent and must not be read as a
     // general statement -- that would silently drop the question the essay
     // answers and hand it to the analyser with six categories.
-    return requirement === null ? NO_PROMPT : undefined
+    return requirement === null && submission === null ? NO_PROMPT : undefined
   }
 
   // THE SCHOOL AND THE WORDING ARE REQUIRED IN BOTH REMAINING SHAPES. They are
@@ -308,7 +365,7 @@ export function draftPromptFrom(fields: {
 
   // ---- which of the two prompted shapes is this? -------------------------
   //
-  // THREE STATES, NOT TWO, AND prompt_id IS WHAT DISTINGUISHES THEM:
+  // FOUR STATES, AND THE TWO OTHER IDS ARE WHAT DISTINGUISH THEM:
   //
   //   LEGACY     prompt_id set, requirement_id null. The wording came from
   //              public.statement_prompts (or from an applicant's paste), and
@@ -318,7 +375,11 @@ export function draftPromptFrom(fields: {
   //              public.statement_requirements and its identity lives in
   //              requirement_id and requirement_snapshot. prompt_id stays null
   //              because an id from a different table does not belong in it.
-  //   NEITHER    both null with a school and wording present: nothing can say
+  //   SUBMISSION prompt_id NULL, requirement_id NULL, prompt_submission_id
+  //              set. The wording is the applicant's own, pasted from their
+  //              school. Nothing vouches for it and nothing may show it as
+  //              though something did -- which provenanceOf() decides.
+  //   NEITHER    all three null with a school and wording present: nothing can say
   //              where this question came from, so the row is refused rather
   //              than displayed as though it were vouched for.
   //
@@ -326,13 +387,19 @@ export function draftPromptFrom(fields: {
   // refusing it here is the second answer to that, the first being the CHECK
   // constraint in 20261002_005.
   if (prompt === null) {
-    if (requirement === null) return undefined
+    // NEITHER an id of its own: nothing can say where this question came from.
+    if (requirement === null && submission === null) return undefined
+    // NOR BOTH. A row claiming the catalog's requirement AND an applicant's
+    // submission is two claims about one question -- the same objection the
+    // prompt_id/requirement_id pair gets below, and the same objection the
+    // CHECK constraints in 20261002_001 and _005 make.
+    if (requirement !== null && submission !== null) return undefined
     const statedMaxWords = parseStatedMaxWords(words)
     if (statedMaxWords === undefined) return undefined
     return { schoolId: school, promptId: null, promptText: text, statedMaxWords }
   }
 
-  if (requirement !== null) return undefined
+  if (requirement !== null || submission !== null) return undefined
   if (typeof prompt !== 'string' || !SNAPSHOT_UUID.test(prompt)) return undefined
 
   const statedMaxWords = parseStatedMaxWords(words)
@@ -359,6 +426,8 @@ function parseDraftPrompt(row: StatementDraftRow): DraftPromptSnapshot | undefin
     // and therefore as the legacy shape -- exactly right, because without the
     // column there are no requirement-backed drafts to read.
     requirementId: row.requirement_id,
+    // The same, for submissions: absent reads as "not pasted".
+    promptSubmissionId: row.prompt_submission_id,
   })
 }
 
@@ -397,6 +466,12 @@ export function draftFromRow(row: StatementDraftRow | null | undefined): Stateme
     userId: row.user_id,
     title: row.title,
     essay: row.essay,
+    // PASSED THROUGH, NOT PARSED HERE. The editor constrains whatever it gets,
+    // so a document written by a later build still loads -- as text.
+    editorDocument: row.editor_document ?? null,
+    documentFont: typeof row.document_font === 'string' && row.document_font !== ''
+      ? row.document_font
+      : null,
     revision,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

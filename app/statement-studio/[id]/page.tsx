@@ -1,5 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
-import { createClient } from '@supabase/supabase-js'
+import { statementDbClient } from '@/lib/statement/devMode/guardedClient'
+// THE SAVED-CHARACTER CEILING IS A SERVER FACT. See ceilingFromServer.
+import { maxSavedChars } from '@/lib/statement/extract/limits'
 import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAuth'
 import { statementStudioAccess, statementStudioMode } from '@/lib/statement/studioGate'
 import { isDraftId } from '@/lib/statement/draft/http'
@@ -7,6 +9,7 @@ import { readDraft } from '@/lib/statement/draft/draftRepo'
 import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
 import { readDraftPromptStatus } from '@/lib/statement/draft/submissionRepo'
 import { originOf, promptStatusLabel } from '@/lib/statement/draft/promptSubmission'
+import type { PromptOrigin } from '@/lib/statement/draft/promptSubmission'
 import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
 import {
   PASTE_PREVIEW_PARAM, pastePreviewAllowed, reviewPreviewRequested,
@@ -23,6 +26,7 @@ import { parseRequirementSnapshot } from '@/lib/statement/requirements/snapshot'
 import { draftProvenance } from '@/lib/statement/requirements/provenance'
 import { verifiedProvenance } from '@/lib/statement/draft/submissionRepo'
 import { analysisCacheEnabled } from '@/lib/statement/draft/rollout'
+import { simulatedLiveEnabled } from '@/lib/statement/devMode/gate'
 import StatementStudioClient from '../components/StatementStudioClient'
 
 /**
@@ -91,17 +95,25 @@ export default async function StatementStudioPage({
   const token = await readAccessToken()
   if (!token) notFound()
 
-  // The anon key plus the caller's bearer token: a caller-scoped client, so
-  // every statement below is subject to the same RLS the API is. The service
-  // role key is deliberately absent -- a page has no business bypassing RLS.
-  const db = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      auth: { autoRefreshToken: false, persistSession: false },
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    }
-  )
+  /*
+    The anon key plus the caller's bearer token: a caller-scoped client, so
+    every statement below is subject to the same RLS the API is. The service
+    role key is deliberately absent -- a page has no business bypassing RLS.
+
+    AND THE CALLER THE SERVER ALREADY ESTABLISHED, which this was not passing.
+    In production the parameter is unused: RLS reads auth.uid() from the token.
+    In simulated live there is no auth.uid(), so the local stores use this to
+    stand in for it -- and with it omitted they matched nobody. The draft read
+    still worked because the draft is fetched by its own id, but the
+    submission behind `prompt_submission_id` came back empty, so
+    readDraftPromptStatus reported "no submission", originOf had nothing to
+    derive from, and every applicant-reported prompt opened the editor under
+    the heading "Your school's prompt" with no badge. See QA-003.
+  */
+  const db = statementDbClient(token, {
+    userId: auth.userId,
+    isAdmin: isAdminEmail(auth.email),
+  })
 
   // BEFORE THE QUERY. Postgres casts this value to uuid, so a malformed segment
   // reaching the database is a 22P02 cast error -- a 500 for what is plainly a
@@ -157,14 +169,29 @@ export default async function StatementStudioPage({
   // snapshot is what the editor renders; losing the badge costs a label, not
   // the applicant's work, so a refusal degrades to null rather than throwing.
   let promptNotice: string | null = null
+  /**
+   * WHERE THIS DRAFT'S QUESTION CAME FROM, as a fact rather than a sentence.
+   *
+   * THE SENTENCE WAS NOT ENOUGH. A prepared string can only be rendered in one
+   * place, and the place it was rendered was far enough down the panel to be
+   * missed entirely -- while the panel's own heading went on calling an
+   * applicant's unreviewed paste "Your school's prompt". The origin travels
+   * separately so the heading, the badge and the limit line can each say the
+   * right thing.
+   *
+   * null MEANS "NOTHING TO SAY": a catalog prompt carries its own authority and
+   * a general draft answers no question.
+   */
+  let promptOrigin: PromptOrigin | null = null
   if (promptSubmissionsEnabled()) {
     const status = await readDraftPromptStatus(db, draft.id)
     if (status.ok) {
+      promptOrigin = originOf({
+        promptId: draft.promptId,
+        promptSubmissionId: status.value === null ? null : status.value.submissionId,
+      })
       promptNotice = promptStatusLabel({
-        origin: originOf({
-          promptId: draft.promptId,
-          promptSubmissionId: status.value === null ? null : status.value.submissionId,
-        }),
+        origin: promptOrigin,
         status: status.value === null ? null : status.value.status,
       })
     }
@@ -266,7 +293,42 @@ export default async function StatementStudioPage({
     requirementAuthentic: requirementVerdict?.authentic === true,
   })
   let priorAnalysis = null
-  if (analysisAllowed && analysisCacheEnabled()) {
+  // SIMULATED LIVE READS THE LOCAL STORE INSTEAD.
+  //
+  // The gate below is the cache flag, and it is off and staying off -- so on
+  // localhost nothing would ever offer "View previous analysis" and every
+  // reopen would be another paid call. The local file answers the same
+  // question, keyed the same way, and no production table is touched.
+  //
+  // BY FINGERPRINT, EXACTLY AS PRODUCTION ASKS. Not "the most recent result for
+  // this draft": that would hand the browser an analysis of an essay that is no
+  // longer on screen. Keyed this way, reopening an unchanged draft offers to
+  // view its result, and an edited one offers a fresh analysis -- which is the
+  // production behaviour, decided by the production function below.
+  const localPrior = simulatedLiveEnabled() && analysisAllowed
+    ? (await import('@/lib/statement/devMode/localAnalyses'))
+      .localAnalysisFor(draft.id, currentFingerprint)
+    : null
+  if (localPrior !== null) {
+    priorAnalysis = {
+      result: {
+        review: localPrior.review,
+        revision: localPrior.revision,
+        words: localPrior.words,
+        overLimit: localPrior.overLimit,
+        statedMaxWords: localPrior.statedMaxWords,
+        provenance: localPrior.provenance,
+      },
+      // THE SAME FUNCTION PRODUCTION USES, on the same two fingerprints, so
+      // 'view' and 'analyze' mean locally exactly what they mean in production:
+      // the latest local result for this draft is offered for viewing only when
+      // it describes the essay currently on screen.
+      action: analysisActionFor({
+        storedFingerprint: localPrior.fingerprint,
+        currentFingerprint,
+      }),
+    }
+  } else if (analysisAllowed && analysisCacheEnabled()) {
     // ASKED FOR BY FINGERPRINT, so restoring previously analysed content finds
     // its own result rather than the most recent one. Analyse A, edit to B,
     // analyse B, undo back to A: this returns A's analysis, which was paid for
@@ -299,9 +361,12 @@ export default async function StatementStudioPage({
       schools={schools.ok ? schools.value : []}
       schoolsUnavailable={!schools.ok}
       promptNotice={promptNotice}
+      promptOrigin={promptOrigin}
+      savedCharacterCeiling={maxSavedChars()}
       analysisAllowed={analysisAllowed}
       analysisAvailable={analysisAvailable}
       priorAnalysis={priorAnalysis}
+      localRealAi={simulatedLiveEnabled()}
       sampleReviews={analysisPreview
         ? { general: generalSample(), school: schoolSample() }
         : null}

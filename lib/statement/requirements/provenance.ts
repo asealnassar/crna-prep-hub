@@ -51,7 +51,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { requirementsEnabled } from '../draft/rollout.ts'
 import { provenanceOf, type PromptOrigin } from '../draft/promptSubmission.ts'
-import { activatableForApplicants, isIsoDate, type VerificationStatus } from './verification.ts'
+import {
+  activatableForApplicants, evidenceKindFrom, isIsoDate, type VerificationStatus,
+} from './verification.ts'
 import { snapshotOf, type RequirementSnapshot } from './snapshot.ts'
 import { REQUIREMENT_READ_COLUMNS, requirementFromRow } from './repo.ts'
 import { requirementDigest } from './digest.ts'
@@ -126,7 +128,7 @@ export async function requirementProvenance(
     // application_cycle and notes are needed to RECONSTRUCT the snapshot the
     // catalog would produce today, because snapshotOf() folds the set's notes
     // in with the document's.
-    .select(REQUIREMENT_READ_COLUMNS.SET_COLUMNS)
+    .select(REQUIREMENT_READ_COLUMNS.setColumns())
     .eq('id', setId)
     .maybeSingle()
   if (setRow.error) return UNVERIFIED_RESULT('read-failed')
@@ -150,8 +152,19 @@ export async function requirementProvenance(
     status,
     sourceUrl: typeof setFields.source_url === 'string' ? setFields.source_url : null,
     verifiedOn: isIsoDate(setFields.verified_on) ? setFields.verified_on : null,
-    // Not part of activation; the stored value is irrelevant to this test.
+    // Not part of activation: nothing here reads it.
     verbatim: false,
+    /*
+      AND THE EVIDENCE KIND IS PART OF ACTIVATION, WHICH IT DID NOT USED TO BE.
+
+      The comment here said the stored value was irrelevant to this test, and
+      that stopped being true when activatableForApplicants learned that an
+      approved applicant submission is activatable WITHOUT a source URL --
+      those rows have no school page to link. Passing the literal meant a
+      promoted submission failed condition 2 and every draft against one was
+      reported unverified.
+    */
+    evidenceKind: evidenceKindFrom(setFields.evidence_kind),
   })
   if (!verified) return UNVERIFIED_RESULT('set-not-verified')
 
@@ -186,7 +199,13 @@ export async function requirementProvenance(
       applicationCycle: typeof setFields.application_cycle === 'string'
         ? setFields.application_cycle
         : null,
-      verification: { status, sourceUrl: null, verifiedOn: null, verbatim: false },
+      verification: {
+        // NOT DIGESTED, all four of them: see requirementDigest's note on what
+        // the comparison deliberately leaves out. These are placeholders in a
+        // value that exists only to be hashed, not shown.
+        status, sourceUrl: null, verifiedOn: null, verbatim: false,
+        evidenceKind: 'official-source',
+      },
       originalText: '',
       requirements: [],
       notes: Array.isArray(setFields.notes)

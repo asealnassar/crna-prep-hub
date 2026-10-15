@@ -892,7 +892,27 @@ export const SOUTHERN_MISS: RequirementSet = {
             + 'font size). Only the first two pages will be read if your essay goes over the '
             + 'limit.',
         }),
-        typography: { fontSizePt: 12, fontFamily: 'Times Roman or Arial', marginsInches: null },
+        /*
+          A PERMISSION, NOT A REQUIREMENT.
+
+          This read `fontFamily: 'Times Roman or Arial'` and `fontSizePt: 12`,
+          which asserted two things the school never said: that one family named
+          "Times Roman or Arial" was required, and that 12 pt was the only size
+          allowed. The school permits either of two families and either of two
+          sizes, and that is a different fact.
+
+          THE SCHOOL'S OWN WORDING IS KEPT. "Times Roman" is not rewritten to
+          "Times New Roman" even though the font registry treats them as
+          aliases: what is recorded is what was verified, and alias resolution
+          is a rendering decision made later.
+        */
+        typography: {
+          fontSizePt: null,
+          fontFamily: null,
+          marginsInches: null,
+          fontFamilyOptions: ['Arial', 'Times Roman'],
+          fontSizePtOptions: [11, 12],
+        },
       },
       choiceGroup: null,
       optional: false,

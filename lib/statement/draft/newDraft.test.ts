@@ -300,6 +300,18 @@ test('a pasted request nests everything under one key, and carries NO promptId',
       applicationCycle: '2026',
       sourceUrl: 'https://example.edu/a',
       confirmed: true,
+      // 20261006_008. PRESENT AND null, never absent: JSON.stringify drops an
+      // undefined value, and a key that is sometimes missing is a shape the
+      // route would have to reason about twice.
+      documentLabel: null,
+      documentTypeHint: null,
+      statedMinWords: null,
+      statedMaxCharacters: null,
+      statedMaxPages: null,
+      statedPagesText: null,
+      formattingInstructions: null,
+      otherInstructions: null,
+      submitterNote: null,
     },
   })
   // THE SHAPE IS THE SAFEGUARD: no promptId at any level, so this body cannot

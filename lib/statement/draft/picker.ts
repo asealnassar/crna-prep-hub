@@ -18,8 +18,10 @@
  * one.
  */
 
+import type { PromptOrigin } from './promptSubmission.ts'
 import type { SchoolOption } from './schoolPicker.ts'
 import { draftPromptFrom } from './rows.ts'
+import { normalizeJurisdiction } from '../../states.ts'
 import type { DraftPromptSnapshot } from './rows.ts'
 
 /** The endpoint, named once. Checkpoint G built it; this only addresses it. */
@@ -96,10 +98,32 @@ export const PICKER_MESSAGES = {
   retryPromptSave: 'Try saving prompt again',
 } as const
 
-/** What a stated maximum reads as, including when a school states none. */
-export function wordLimitLabel(statedMaxWords: number | null): string {
+/**
+ * What a stated maximum reads as, including when none was stated.
+ *
+ * ---------------------------------------------------------------------------
+ * WHO STATED IT IS PART OF WHAT IT SAYS
+ * ---------------------------------------------------------------------------
+ * This used to end "as stated by the school" unconditionally. For a catalog
+ * prompt that is true. For a prompt an applicant pasted it is false twice
+ * over: the number came from an optional field THEY filled in, and nobody has
+ * checked it against the school at all. An applicant who typed 600 as a guess
+ * was shown their own guess back as their school's requirement.
+ *
+ * So the origin decides the sentence. It defaults to 'catalog', which is what
+ * every pre-existing caller means and keeps their wording identical.
+ */
+export function wordLimitLabel(
+  statedMaxWords: number | null,
+  origin: PromptOrigin | null = 'catalog',
+): string {
   if (statedMaxWords === null) return 'No stated word limit.'
-  return `${statedMaxWords.toLocaleString('en-US')}-word maximum, as stated by the school.`
+  const count = statedMaxWords.toLocaleString('en-US')
+  if (origin === 'user') {
+    return `${count}-word limit, as you entered it. CRNAPREPHUB has not checked this `
+      + 'against the school.'
+  }
+  return `${count}-word maximum, as stated by the school.`
 }
 
 // --------------------------------------------------------------- the search
@@ -136,11 +160,37 @@ export function matchingSchools(
  * render "Example University — null" for the rows that record no state, and
  * `state || ''` would leave a dangling dash. Both are refused here once rather
  * than in every place a school is printed.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE CONVENTION FOR THE STATE, BECAUSE THE COLUMN HAS TWO
+ * ---------------------------------------------------------------------------
+ * `schools.location_state` holds a two-letter abbreviation for 61 programmes
+ * and a spelled-out name for 12 -- a known inconsistency, documented in
+ * lib/states.ts, which also holds the reviewed map of every value present.
+ * Rendered raw, one picker listed "Duke University — NC" directly above
+ * "Mayo Clinic — Minnesota", which reads as two different kinds of fact.
+ *
+ * SPELLED OUT IS THE CONVENTION. The state is here to tell two similarly
+ * named programmes apart, and MI / MN / MO are three abbreviations an
+ * applicant scanning a list will not reliably distinguish.
+ *
+ * THROUGH lib/states.ts AND NOT A MAP OF ITS OWN. That table is the reviewed
+ * record of what this column contains; a second one here would be a copy that
+ * drifts. A value it does not recognise is shown as stored rather than
+ * dropped: an unmapped state is still better than no state, and silently
+ * hiding one would be the kind of wrongness nobody notices.
+ *
+ * WHITESPACE IS COLLAPSED IN THE LABEL, NOT IN THE NAME. A stored name with a
+ * double space put "Example  University — PA" on screen. The label is this
+ * product's sentence and may be tidied; `school.name` is the institution's own
+ * text and is returned untouched by everything else in this module.
  */
 export function schoolLabel(school: SchoolOption): string {
+  const name = school.name.replace(/\s+/g, ' ').trim()
   const state = school.locationState
-  if (typeof state !== 'string' || state.trim().length === 0) return school.name
-  return `${school.name} — ${state}`
+  if (typeof state !== 'string' || state.trim().length === 0) return name
+  const jurisdiction = normalizeJurisdiction(state)
+  return `${name} — ${jurisdiction?.name ?? state.trim()}`
 }
 
 /**

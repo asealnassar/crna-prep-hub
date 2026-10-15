@@ -1,4 +1,7 @@
 import type { Metadata } from 'next'
+import {
+  SIMULATED_LIVE_BANNER, simulatedLiveEnabled,
+} from '@/lib/statement/devMode/gate'
 
 /**
  * /statement-studio is Personal Statement Studio, and it is not released.
@@ -33,5 +36,34 @@ export default function StatementStudioLayout({
 }: {
   children: React.ReactNode
 }) {
-  return <>{children}</>
+  // THE BANNER EXISTS SO THIS CANNOT BE MISTAKEN FOR PRODUCTION.
+  //
+  // In simulated-live mode localhost deliberately looks like the released
+  // product: the catalog is populated, drafts save, the checklist renders. That
+  // is the whole point, and it is also exactly why a reviewer could forget
+  // which machine they are on. The strip is thin and fixed to the bottom so it
+  // changes no layout above it, and it states the two facts that matter: this
+  // is local, and production is still dark.
+  //
+  // RENDERED ON THE SERVER, FROM NODE_ENV. A deployed build never evaluates
+  // this to true, so the markup does not exist in production at all -- it is
+  // not hidden with CSS, which could be inspected away.
+  return (
+    <>
+      {children}
+      {simulatedLiveEnabled() ? (
+        <div
+          role="status"
+          className="pointer-events-none fixed inset-x-0 bottom-0 z-[100] flex justify-center
+                     px-3 pb-2"
+        >
+          <p className="pointer-events-auto rounded-full border border-amber-500 bg-amber-100/95
+                        px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-amber-950
+                        shadow-lg backdrop-blur">
+            {SIMULATED_LIVE_BANNER}
+          </p>
+        </div>
+      ) : null}
+    </>
+  )
 }
