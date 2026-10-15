@@ -17,10 +17,19 @@ const components = (statuses: readonly string[] = ['addressed']) =>
     evidence: 'the passage that covers it',
   }))
 
+/*
+  THE ESSAY THESE FIXTURES QUOTE. `excerpt` is verified against it whenever a
+  test passes it to parseReview(), which is what makes `evidenceFound: true`
+  provable rather than asserted. AI-QA-002.
+*/
+const ESSAY = 'I spent three years in a cardiothoracic ICU, mostly post-op CABG '
+  + 'and valve patients. I want to become a nurse anesthetist.'
+
 const category = (id: CategoryId, over: Record<string, unknown> = {}) => ({
   id,
   score: 8,
-  evidence: 'I spent three years in a cardiothoracic ICU.',
+  excerpt: 'I spent three years in a cardiothoracic ICU, mostly post-op CABG',
+  evidence: 'The unit and the patient population are both named.',
   evidenceFound: true,
   explanation: 'The example is concrete and tied to the specialty.',
   recommendation: 'Name one case and what you changed because of it.',
@@ -186,14 +195,20 @@ test('evidence is "not found" unless the model says otherwise', () => {
   // Scored 3 here, because the consistency rule below refuses an absence in the
   // Strong band -- the two rules interact and this isolates the first.
   const silent = body(CATEGORY_IDS)
-  silent.categories[0] = category('motivation', { evidenceFound: undefined, score: 3 })
+  // excerpt: null travels with the absence -- an excerpt beside one is now a
+  // refusal in its own right, tested separately below.
+  silent.categories[0] = category('motivation', {
+    evidenceFound: undefined, score: 3, excerpt: null,
+  })
   const parsed = parseReview({ raw: silent, promptAttached: true })
   assert.equal(parsed.ok, true)
   assert.equal(parsed.ok && parsed.review.categories[0].evidenceFound, false)
 
   for (const truthy of ['true', 1, {}, 'yes']) {
     const loose = body(CATEGORY_IDS)
-    loose.categories[0] = category('motivation', { evidenceFound: truthy, score: 3 })
+    loose.categories[0] = category('motivation', {
+      evidenceFound: truthy, score: 3, excerpt: null,
+    })
     const read = parseReview({ raw: loose, promptAttached: true })
     assert.equal(read.ok && read.review.categories[0].evidenceFound, false, String(truthy))
   }
@@ -204,7 +219,9 @@ test('STRONG CANNOT MEAN "the material is absent"', () => {
   // encounter". A low score with absent material is coherent; a high one is not.
   for (const score of [8, 9, 10]) {
     const bad = body(CATEGORY_IDS)
-    bad.categories[1] = category('clinical-experience', { score, evidenceFound: false })
+    bad.categories[1] = category('clinical-experience', {
+      score, evidenceFound: false, excerpt: null,
+    })
     const parsed = parseReview({ raw: bad, promptAttached: true })
     assert.equal(parsed.ok, false, `score ${score}`)
     assert.equal(parsed.ok === false && parsed.reason, 'inconsistent-score')
@@ -212,7 +229,9 @@ test('STRONG CANNOT MEAN "the material is absent"', () => {
   // Below the Strong band it is perfectly coherent.
   for (const score of [1, 3, 5, 7]) {
     const fine = body(CATEGORY_IDS)
-    fine.categories[1] = category('clinical-experience', { score, evidenceFound: false })
+    fine.categories[1] = category('clinical-experience', {
+      score, evidenceFound: false, excerpt: null,
+    })
     assert.equal(parseReview({ raw: fine, promptAttached: true }).ok, true, `score ${score}`)
   }
 })
@@ -284,11 +303,19 @@ test('A FABRICATED QUOTATION REFUSES THE RESULT', () => {
 })
 
 test('quotations are only checked when the model claims to have quoted', () => {
-  const essay = 'Nothing in here matches.'
+  /*
+   * THE ESSAY IS THE REAL ONE, because every OTHER category in this body
+   * claims an excerpt and those are now verified against it. An essay chosen
+   * to match nothing would fail six categories for a reason this test is not
+   * about -- which is the new contract working, and the reason this fixture
+   * changed when AI-QA-002 landed.
+   */
+  const essay = ESSAY
   const absent = body(CATEGORY_IDS)
   absent.categories[0] = category('motivation', {
     score: 3,
     evidenceFound: false,
+    excerpt: null,
     evidence: 'The draft never states why anesthesia rather than another speciality.',
   })
   assert.equal(parseReview({ raw: absent, promptAttached: true, essay }).ok, true)
@@ -296,6 +323,25 @@ test('quotations are only checked when the model claims to have quoted', () => {
   const lying = body(CATEGORY_IDS)
   lying.categories[0] = category('motivation', { evidence: '"a sentence that is not there at all"' })
   assert.equal(parseReview({ raw: lying, promptAttached: true }).ok, true)
+})
+
+// ===========================================================================
+// AI-QA-002 -- EVIDENCE CLAIMED AS PRESENT MUST BE PROVABLY PRESENT
+// ===========================================================================
+
+test('AI-QA-002 an excerpt beside an ABSENCE is a contradiction', () => {
+  /*
+   * A model describing what the essay does not contain, while handing over a
+   * passage from it, is contradicting itself -- and the passage is the half
+   * more likely to be invented. Refused rather than reconciled.
+   */
+  const bad = body(CATEGORY_IDS)
+  bad.categories[0] = category('motivation', {
+    score: 3, evidenceFound: false, excerpt: 'I spent three years in a cardiothoracic ICU',
+  })
+  const parsed = parseReview({ raw: bad, promptAttached: true, essay: ESSAY })
+  assert.equal(parsed.ok, false)
+  assert.equal(parsed.ok === false && parsed.reason, 'contradictory-evidence')
 })
 
 // ===========================================================================

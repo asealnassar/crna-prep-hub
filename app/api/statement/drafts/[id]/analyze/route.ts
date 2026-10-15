@@ -33,6 +33,7 @@ import { analyzerUnmeasuredKinds } from '@/lib/statement/requirements/constraint
 import { draftProvenance } from '@/lib/statement/requirements/provenance'
 import { claimAnalysis, settleAnalysis } from '@/lib/statement/draft/analysisRepo'
 import { analysisCacheEnabled } from '@/lib/statement/draft/rollout'
+import { beginAnalysis, endAnalysis } from '@/lib/statement/draft/analysisInFlight'
 import { simulatedLiveEnabled } from '@/lib/statement/devMode/gate'
 import { RUBRIC_VERSION } from '@/lib/statement/draft/rubric'
 import { REVIEW_SCHEMA_VERSION } from '@/lib/statement/draft/reviewSchema'
@@ -352,300 +353,339 @@ export async function POST(_request: NextRequest, context: Context): Promise<Nex
     requirementAuthentic: verdict.authentic,
   })
 
-  // THE CLAIM, NOT JUST ITS ID. The token is this request's authority to settle
-  // the row, and it is rotated by the database on every successful claim -- so
-  // holding both is what lets a superseded request be refused rather than
-  // overwriting whoever replaced it.
-  let claim: HeldClaim | null = null
-  if (availability === 'ready') {
-    const claimed = await claimAnalysis(caller.db, {
-      draftId: id,
-      fingerprint,
-      revision: draft.revision,
-      promptAttached,
-      provenance,
-      words,
-      statedMaxWords: draft.statedMaxWords,
-      overLimit: overLimit({ words, statedMaxWords: draft.statedMaxWords }),
-    })
-    if (!claimed.ok) {
-      // NO SILENT FALL-BACK TO A PAID CALL. With the cache on, a failure here
-      // means this request cannot tell whether the work has already been paid
-      // for -- and running the model anyway is exactly the charge this feature
-      // exists to prevent.
-      console.error('statement analyze: claim failed —', claimed.reason)
-      return NextResponse.json(
-        { error: MESSAGES.cacheUnavailable, code: 'unavailable' },
-        { status: 503 },
-      )
-    }
+  /*
+    AI-QA-017: WITHOUT THE DURABLE CLAIM, ONE SLOT PER KEY IN THIS PROCESS.
 
-    // A CACHE HIT. Zero model calls, no ledger entry, no allowance consumed.
-    if (claimed.value.state === 'complete') {
-      const stored = claimed.value.analysis
-      return NextResponse.json({
-        review: stored.review,
-        revision: stored.revision,
-        words: stored.words,
-        overLimit: stored.overLimit,
-        statedMaxWords: stored.statedMaxWords,
-        provenance: stored.provenance,
-        cached: true,
-        analyzedAt: stored.createdAt,
-      })
-    }
+    The claim below is taken only when the cache is on. With it off, production
+    has already answered 503 and nothing reaches here -- but a developer's
+    machine runs the model anyway, and four simultaneous requests for one essay
+    made four model calls. Measured, not supposed.
 
-    // Another request is already running for exactly these inputs. Two rapid
-    // clicks, or two tabs, land here and neither starts a second paid call.
-    if (claimed.value.state === 'running') {
-      return NextResponse.json(
-        { error: MESSAGES.running, code: 'already-running' },
-        { status: 409 },
-      )
-    }
+    SO THE SLOT IS TAKEN ONLY ON THAT PATH. Where the claim exists it is the
+    authority and this would be a second opinion; where it does not, this
+    collapses the burst a double-click or a second tab produces. It is
+    best-effort by construction -- see analysisInFlight.ts.
 
-    claim = { id: claimed.value.id, claimToken: claimed.value.claimToken }
-  }
-
-  // ---- SIMULATED LIVE: the local store, in place of the cache ------------
-  //
-  // THE SAME QUESTION PRODUCTION ASKS, ASKED OF A LOCAL FILE. Keyed on the
-  // fingerprint that was just computed, so an identical essay and requirement
-  // return the stored result and no paid call is made -- and a changed essay
-  // has a different fingerprint, so it reaches the model as it should.
-  //
-  // PLACED AFTER THE CLAIM BLOCK AND BEFORE THE ALLOWANCE, which is exactly
-  // where production's cache hit returns. Everything above it has already run
-  // for real: the gate, the tier check, the provenance verdict and every
-  // eligibility refusal.
-  //
-  // NO PRODUCTION RPC IS INVOLVED. claimAnalysis() is unreachable here anyway,
-  // because it is taken only when the cache flag is on; this is the substitute
-  // for the protection that flag would have provided.
-  if (simulated) {
-    const { localAnalysisFor } = await import('@/lib/statement/devMode/localAnalyses')
-    const stored = localAnalysisFor(id, fingerprint)
-    if (stored !== null) {
-      return NextResponse.json({
-        review: stored.review,
-        revision: stored.revision,
-        words: stored.words,
-        overLimit: stored.overLimit,
-        statedMaxWords: stored.statedMaxWords,
-        provenance: stored.provenance,
-        cached: true,
-        analyzedAt: stored.createdAt,
-      })
-    }
-  }
-
-  // ---- the allowance ------------------------------------------------------
-  // V2's OWN WINDOWS: burst protection with no daily ceiling, because Ultimate
-  // is sold as unlimited analysis of changed essays. The legacy analyser keeps
-  // its own limits, daily cap included -- nothing here changes them.
-  const rate = await statementRateDecision(
-    caller.db, caller.userId, { limits: V2_ANALYSIS_RATE_LIMITS },
-  )
-  if (!rate.allowed) {
+    THE SAME 409 EITHER WAY, so the applicant is told the same true thing and
+    the client needs no second code to understand.
+  */
+  const inFlightKey = `${caller.userId}:${id}:${fingerprint}`
+  const slotTaken = availability === 'ready' ? false : beginAnalysis(inFlightKey)
+  if (availability !== 'ready' && !slotTaken) {
     return NextResponse.json(
-      { error: MESSAGES.rateLimited, code: RATE_LIMIT_CODE },
-      { status: 429 },
+      { error: MESSAGES.running, code: 'already-running' },
+      { status: 409 },
     )
   }
 
-  if (!process.env.OPENAI_API_KEY) {
-    console.error('statement analyze: OPENAI_API_KEY is not configured')
-    return NextResponse.json({ error: MESSAGES.unavailable, code: 'unavailable' }, { status: 503 })
-  }
+  /** Give back whatever this request is holding, on every exit. */
+  const release = (): void => { if (slotTaken) endAnalysis(inFlightKey) }
 
-  // THE SAME OPERATION THE LEGACY ANALYSER RECORDS. One analysis is one
-  // analysis: this introduces no new charge, no new allowance and no new
-  // pricing, and it counts against the budget the applicant already has.
-  // THE LEDGER IS NOT WRITTEN LOCALLY.
-  //
-  // record_ai_usage and settle_ai_usage are RPCs on the production ledger and
-  // the guarded client refuses both -- so this is not the safety mechanism, it
-  // is what lets the screen work instead of erroring. No attempt is recorded,
-  // so there is no attempt to settle, which settleUsage() below enforces.
-  //
-  // THE RATE DECISION ABOVE IS STILL REAL. It is a SELECT on the ledger, which
-  // the guard passes through untouched, so a local run is refused for the same
-  // reason production would refuse it -- without consuming anything.
-  const usageId = simulated
-    ? null
-    : await recordStatementAttempt(caller.db, STATEMENT_OPERATIONS.analyze)
-
-  /**
-   * Settle the attempt, if there is an attempt to settle.
-   *
-   * ONE PLACE WHERE THE LEDGER IS TOUCHED, instead of four. settleStatementUsage
-   * already returns on a null id, so this changes nothing about what happens --
-   * but it changes what has to be TRUE for nothing to happen. With four direct
-   * calls, "no usage RPC runs on a local request" was a property of a shared
-   * production function's first line; here it is a property of this route,
-   * provable by reading it. A test that replaces the ledger module with a
-   * tripwire catches the difference, which is how this was found.
-   *
-   * A NULL ID IS NOT A SIMULATED-LIVE SPECIAL CASE. It also happens in
-   * production when recordStatementAttempt fails, and skipping the settle is
-   * the right answer there too: there is no row to settle.
-   */
-  const settleUsage = async (outcome: 'proposed' | 'rejected' | 'failed'): Promise<void> => {
-    if (usageId === null) return
-    await settleStatementUsage(caller.db, usageId, outcome)
-  }
-
-  let completion: string
+  /*
+    ONE finally FOR TEN EXITS. A slot left behind would read as "already
+    running" to the applicant's next attempt for the whole TTL -- the same
+    mistake an unreleased claim would be -- and there are ten ways out of
+    this function. Releasing at each one is ten chances to forget.
+  */
   try {
-    const response = await openai.chat.completions.create(
-      {
-        model: MODEL,
-        messages: [
-          {
-            role: 'system',
-            // THE AUTHENTICATED REQUIREMENT, so a fabricated component list
-            // cannot reach the instruction that says "there are N, return one
-            // entry for each" -- which is how a tampered draft would have been
-            // scored against requirements it wrote for itself.
-            content: reviewSystemPrompt(promptAttached, authoritative === null ? null : {
-              componentCount: authoritative.components.length,
-              hasOptionalComponent: authoritative.components.some((part) => part.optional),
-              hasUnmeasurable: analyzerUnmeasuredKinds(authoritative.constraints).length > 0,
-            }),
-          },
-          {
-            role: 'user',
-            content: buildReviewUserMessage({
-              essay: draft.essay,
-              // THE DRAFT'S OWN SNAPSHOT. Never re-read from the catalog: an
-              // essay is judged against the question its author saw.
-              promptText: draft.promptText,
-              statedMaxWords: draft.statedMaxWords,
-              // Measured here, so the model is told the count rather than
-              // asking the applicant to check something already known.
-              words,
-              // THE AUTHENTICATED REQUIREMENT. Everything this block would put
-              // in front of the model as the school's own -- the numbered
-              // questions, the label, the limits, the free-text formatting
-              // instructions, the "catalog records unresolved uncertainty"
-              // sentence -- is omitted entirely unless the catalog confirmed it.
-              // The essay is still assessed against draft.promptText, exactly
-              // as a legacy single-prompt draft is.
-              requirement: authoritative,
-            }),
-          },
-        ],
-        temperature: 0.3,
-        /*
-         * 4,000, NOT 3,000, AND THE ARITHMETIC IS WHY.
-         *
-         * A seven-category response carries 21 prose fields plus a summary with
-         * three lists. At the brevity the system prompt asks for that is around
-         * 1,200 tokens; at the verbosity this model actually tends toward it is
-         * closer to 2,200; and a plausibly wordy answer reaches about 3,300.
-         *
-         * TRUNCATION IS NOT A DEGRADED ANSWER, IT IS AN INVALID ONE. The reply
-         * is JSON, so cutting it mid-object makes it unparseable, parseReview
-         * refuses it, and the applicant is told the analysis could not be read.
-         * They also lose a slot: statementRateDecision counts every row in the
-         * window regardless of how it settled, so a truncated call costs them
-         * part of their allowance and returns nothing.
-         *
-         * THIS IS NOT A PRICING CHANGE. max_tokens is a ceiling, not a purchase
-         * -- billing is on tokens actually generated, and a response that would
-         * have fitted in 3,000 still costs exactly what it did. What changes is
-         * only that a longer one is completed rather than cut in half.
-         */
-        max_tokens: 4000,
-        response_format: { type: 'json_object' },
-      },
-      { signal: AbortSignal.timeout(MODEL_TIMEOUT_MS) },
+
+    // THE CLAIM, NOT JUST ITS ID. The token is this request's authority to settle
+    // the row, and it is rotated by the database on every successful claim -- so
+    // holding both is what lets a superseded request be refused rather than
+    // overwriting whoever replaced it.
+    let claim: HeldClaim | null = null
+    if (availability === 'ready') {
+      const claimed = await claimAnalysis(caller.db, {
+        draftId: id,
+        fingerprint,
+        revision: draft.revision,
+        promptAttached,
+        provenance,
+        words,
+        statedMaxWords: draft.statedMaxWords,
+        overLimit: overLimit({ words, statedMaxWords: draft.statedMaxWords }),
+      })
+      if (!claimed.ok) {
+        // NO SILENT FALL-BACK TO A PAID CALL. With the cache on, a failure here
+        // means this request cannot tell whether the work has already been paid
+        // for -- and running the model anyway is exactly the charge this feature
+        // exists to prevent.
+        console.error('statement analyze: claim failed —', claimed.reason)
+        return NextResponse.json(
+          { error: MESSAGES.cacheUnavailable, code: 'unavailable' },
+          { status: 503 },
+        )
+      }
+
+      // A CACHE HIT. Zero model calls, no ledger entry, no allowance consumed.
+      if (claimed.value.state === 'complete') {
+        const stored = claimed.value.analysis
+        return NextResponse.json({
+          review: stored.review,
+          revision: stored.revision,
+          words: stored.words,
+          overLimit: stored.overLimit,
+          statedMaxWords: stored.statedMaxWords,
+          provenance: stored.provenance,
+          cached: true,
+          analyzedAt: stored.createdAt,
+        })
+      }
+
+      // Another request is already running for exactly these inputs. Two rapid
+      // clicks, or two tabs, land here and neither starts a second paid call.
+      if (claimed.value.state === 'running') {
+        return NextResponse.json(
+          { error: MESSAGES.running, code: 'already-running' },
+          { status: 409 },
+        )
+      }
+
+      claim = { id: claimed.value.id, claimToken: claimed.value.claimToken }
+    }
+
+    // ---- SIMULATED LIVE: the local store, in place of the cache ------------
+    //
+    // THE SAME QUESTION PRODUCTION ASKS, ASKED OF A LOCAL FILE. Keyed on the
+    // fingerprint that was just computed, so an identical essay and requirement
+    // return the stored result and no paid call is made -- and a changed essay
+    // has a different fingerprint, so it reaches the model as it should.
+    //
+    // PLACED AFTER THE CLAIM BLOCK AND BEFORE THE ALLOWANCE, which is exactly
+    // where production's cache hit returns. Everything above it has already run
+    // for real: the gate, the tier check, the provenance verdict and every
+    // eligibility refusal.
+    //
+    // NO PRODUCTION RPC IS INVOLVED. claimAnalysis() is unreachable here anyway,
+    // because it is taken only when the cache flag is on; this is the substitute
+    // for the protection that flag would have provided.
+    if (simulated) {
+      const { localAnalysisFor } = await import('@/lib/statement/devMode/localAnalyses')
+      const stored = localAnalysisFor(id, fingerprint)
+      if (stored !== null) {
+        return NextResponse.json({
+          review: stored.review,
+          revision: stored.revision,
+          words: stored.words,
+          overLimit: stored.overLimit,
+          statedMaxWords: stored.statedMaxWords,
+          provenance: stored.provenance,
+          cached: true,
+          analyzedAt: stored.createdAt,
+        })
+      }
+    }
+
+    // ---- the allowance ------------------------------------------------------
+    // V2's OWN WINDOWS: burst protection with no daily ceiling, because Ultimate
+    // is sold as unlimited analysis of changed essays. The legacy analyser keeps
+    // its own limits, daily cap included -- nothing here changes them.
+    const rate = await statementRateDecision(
+      caller.db, caller.userId, { limits: V2_ANALYSIS_RATE_LIMITS },
     )
-    completion = response.choices[0]?.message?.content ?? ''
-  } catch (error) {
-    // The NAME only. An OpenAI error echoes the request, and the request is
-    // somebody's personal statement.
-    console.error('statement analyze: model call failed', (error as { name?: string })?.name)
-    await settleUsage('failed')
-    await releaseClaim(caller.db, claim)
-    return NextResponse.json({ error: MESSAGES.unavailable, code: 'unavailable' }, { status: 502 })
-  }
+    if (!rate.allowed) {
+      return NextResponse.json(
+        { error: MESSAGES.rateLimited, code: RATE_LIMIT_CODE },
+        { status: 429 },
+      )
+    }
 
-  let raw: unknown
-  try {
-    raw = JSON.parse(completion)
-  } catch {
-    await settleUsage('rejected')
-    await releaseClaim(caller.db, claim)
-    return NextResponse.json({ error: MESSAGES.malformed, code: 'malformed' }, { status: 502 })
-  }
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('statement analyze: OPENAI_API_KEY is not configured')
+      return NextResponse.json({ error: MESSAGES.unavailable, code: 'unavailable' }, { status: 503 })
+    }
 
-  // THE ESSAY GOES TO THE VALIDATOR TOO, so a quotation the model attributes to
-  // the applicant can be checked against what they actually wrote.
-  const parsed = parseReview({ raw, promptAttached, essay: draft.essay })
-  if (!parsed.ok) {
-    // THE REASON IS LOGGED, THE OUTPUT IS NOT. A malformed analysis still
-    // quotes the applicant's essay back.
-    console.error('statement analyze: malformed model response —', parsed.reason)
-    await settleUsage('rejected')
-    await releaseClaim(caller.db, claim)
-    return NextResponse.json({ error: MESSAGES.malformed, code: 'malformed' }, { status: 502 })
-  }
+    // THE SAME OPERATION THE LEGACY ANALYSER RECORDS. One analysis is one
+    // analysis: this introduces no new charge, no new allowance and no new
+    // pricing, and it counts against the budget the applicant already has.
+    // THE LEDGER IS NOT WRITTEN LOCALLY.
+    //
+    // record_ai_usage and settle_ai_usage are RPCs on the production ledger and
+    // the guarded client refuses both -- so this is not the safety mechanism, it
+    // is what lets the screen work instead of erroring. No attempt is recorded,
+    // so there is no attempt to settle, which settleUsage() below enforces.
+    //
+    // THE RATE DECISION ABOVE IS STILL REAL. It is a SELECT on the ledger, which
+    // the guard passes through untouched, so a local run is refused for the same
+    // reason production would refuse it -- without consuming anything.
+    const usageId = simulated
+      ? null
+      : await recordStatementAttempt(caller.db, STATEMENT_OPERATIONS.analyze)
 
-  await settleUsage('proposed')
+    /**
+     * Settle the attempt, if there is an attempt to settle.
+     *
+     * ONE PLACE WHERE THE LEDGER IS TOUCHED, instead of four. settleStatementUsage
+     * already returns on a null id, so this changes nothing about what happens --
+     * but it changes what has to be TRUE for nothing to happen. With four direct
+     * calls, "no usage RPC runs on a local request" was a property of a shared
+     * production function's first line; here it is a property of this route,
+     * provable by reading it. A test that replaces the ledger module with a
+     * tripwire catches the difference, which is how this was found.
+     *
+     * A NULL ID IS NOT A SIMULATED-LIVE SPECIAL CASE. It also happens in
+     * production when recordStatementAttempt fails, and skipping the settle is
+     * the right answer there too: there is no row to settle.
+     */
+    const settleUsage = async (outcome: 'proposed' | 'rejected' | 'failed'): Promise<void> => {
+      if (usageId === null) return
+      await settleStatementUsage(caller.db, usageId, outcome)
+    }
 
-  // THE RESULT IS STORED ONLY AFTER IT VALIDATED. A malformed or failed
-  // analysis released its claim above and wrote nothing, so no failure can ever
-  // be read back as a cached success.
-  // SIMULATED LIVE: the result is kept locally, and only now.
-  //
-  // AFTER parseReview(), FOR THE SAME REASON PRODUCTION STORES ONLY THEN. A
-  // malformed or failed analysis must not be readable back as a success, or the
-  // next identical click would be served a result the validator rejected.
-  if (simulated) {
-    const { saveLocalAnalysis } = await import('@/lib/statement/devMode/localAnalyses')
-    saveLocalAnalysis({
-      draftId: id,
-      fingerprint,
+    let completion: string
+    try {
+      const response = await openai.chat.completions.create(
+        {
+          model: MODEL,
+          messages: [
+            {
+              role: 'system',
+              // THE AUTHENTICATED REQUIREMENT, so a fabricated component list
+              // cannot reach the instruction that says "there are N, return one
+              // entry for each" -- which is how a tampered draft would have been
+              // scored against requirements it wrote for itself.
+              content: reviewSystemPrompt(promptAttached, authoritative === null ? null : {
+                componentCount: authoritative.components.length,
+                hasOptionalComponent: authoritative.components.some((part) => part.optional),
+                hasUnmeasurable: analyzerUnmeasuredKinds(authoritative.constraints).length > 0,
+              }),
+            },
+            {
+              role: 'user',
+              content: buildReviewUserMessage({
+                essay: draft.essay,
+                // THE DRAFT'S OWN SNAPSHOT. Never re-read from the catalog: an
+                // essay is judged against the question its author saw.
+                promptText: draft.promptText,
+                statedMaxWords: draft.statedMaxWords,
+                // Measured here, so the model is told the count rather than
+                // asking the applicant to check something already known.
+                words,
+                // THE AUTHENTICATED REQUIREMENT. Everything this block would put
+                // in front of the model as the school's own -- the numbered
+                // questions, the label, the limits, the free-text formatting
+                // instructions, the "catalog records unresolved uncertainty"
+                // sentence -- is omitted entirely unless the catalog confirmed it.
+                // The essay is still assessed against draft.promptText, exactly
+                // as a legacy single-prompt draft is.
+                requirement: authoritative,
+              }),
+            },
+          ],
+          temperature: 0.3,
+          /*
+           * 4,000, NOT 3,000, AND THE ARITHMETIC IS WHY.
+           *
+           * A seven-category response carries 21 prose fields plus a summary with
+           * three lists. At the brevity the system prompt asks for that is around
+           * 1,200 tokens; at the verbosity this model actually tends toward it is
+           * closer to 2,200; and a plausibly wordy answer reaches about 3,300.
+           *
+           * TRUNCATION IS NOT A DEGRADED ANSWER, IT IS AN INVALID ONE. The reply
+           * is JSON, so cutting it mid-object makes it unparseable, parseReview
+           * refuses it, and the applicant is told the analysis could not be read.
+           * They also lose a slot: statementRateDecision counts every row in the
+           * window regardless of how it settled, so a truncated call costs them
+           * part of their allowance and returns nothing.
+           *
+           * THIS IS NOT A PRICING CHANGE. max_tokens is a ceiling, not a purchase
+           * -- billing is on tokens actually generated, and a response that would
+           * have fitted in 3,000 still costs exactly what it did. What changes is
+           * only that a longer one is completed rather than cut in half.
+           */
+          max_tokens: 4000,
+          response_format: { type: 'json_object' },
+        },
+        { signal: AbortSignal.timeout(MODEL_TIMEOUT_MS) },
+      )
+      completion = response.choices[0]?.message?.content ?? ''
+    } catch (error) {
+      // The NAME only. An OpenAI error echoes the request, and the request is
+      // somebody's personal statement.
+      console.error('statement analyze: model call failed', (error as { name?: string })?.name)
+      await settleUsage('failed')
+      await releaseClaim(caller.db, claim)
+      return NextResponse.json({ error: MESSAGES.unavailable, code: 'unavailable' }, { status: 502 })
+    }
+
+    let raw: unknown
+    try {
+      raw = JSON.parse(completion)
+    } catch {
+      await settleUsage('rejected')
+      await releaseClaim(caller.db, claim)
+      return NextResponse.json({ error: MESSAGES.malformed, code: 'malformed' }, { status: 502 })
+    }
+
+    // THE ESSAY GOES TO THE VALIDATOR TOO, so a quotation the model attributes to
+    // the applicant can be checked against what they actually wrote.
+    const parsed = parseReview({ raw, promptAttached, essay: draft.essay })
+    if (!parsed.ok) {
+      // THE REASON IS LOGGED, THE OUTPUT IS NOT. A malformed analysis still
+      // quotes the applicant's essay back.
+      console.error('statement analyze: malformed model response —', parsed.reason)
+      await settleUsage('rejected')
+      await releaseClaim(caller.db, claim)
+      return NextResponse.json({ error: MESSAGES.malformed, code: 'malformed' }, { status: 502 })
+    }
+
+    await settleUsage('proposed')
+
+    // THE RESULT IS STORED ONLY AFTER IT VALIDATED. A malformed or failed
+    // analysis released its claim above and wrote nothing, so no failure can ever
+    // be read back as a cached success.
+    // SIMULATED LIVE: the result is kept locally, and only now.
+    //
+    // AFTER parseReview(), FOR THE SAME REASON PRODUCTION STORES ONLY THEN. A
+    // malformed or failed analysis must not be readable back as a success, or the
+    // next identical click would be served a result the validator rejected.
+    if (simulated) {
+      const { saveLocalAnalysis } = await import('@/lib/statement/devMode/localAnalyses')
+      saveLocalAnalysis({
+        draftId: id,
+        fingerprint,
+        review: parsed.review,
+        revision: draft.revision,
+        words,
+        overLimit: overLimit({ words, statedMaxWords: draft.statedMaxWords }),
+        statedMaxWords: draft.statedMaxWords,
+        provenance,
+      })
+    }
+
+    if (claim !== null) {
+      const stored = await settleAnalysis(caller.db, {
+        id: claim.id,
+        claimToken: claim.claimToken,
+        review: parsed.review,
+        overall: parsed.review.overall,
+      })
+      // A STORE THAT FAILED IS NOT A FAILED ANALYSIS. The applicant paid for this
+      // feedback and it is valid; they get it. The only cost is that reopening
+      // the draft will analyse again, which is the behaviour without the cache.
+      if (!stored.ok) console.error('statement analyze: result not stored —', stored.reason)
+    }
+
+    return NextResponse.json({
       review: parsed.review,
+      // BOUND TO WHAT WAS ACTUALLY JUDGED. The browser compares these with what
+      // is on screen and labels the result as older when they have moved on.
       revision: draft.revision,
       words,
       overLimit: overLimit({ words, statedMaxWords: draft.statedMaxWords }),
       statedMaxWords: draft.statedMaxWords,
+      // 'catalog' only when the catalog agrees; never because an id looked real.
       provenance,
+      // SAID PLAINLY. False means this result was not stored, so asking again
+      // will pay again -- the interface must not imply otherwise.
+      //
+      // TRUE LOCALLY BECAUSE IT IS TRUE LOCALLY: the local store will answer the
+      // next identical request without a model call, which is the behaviour the
+      // field describes. It is not a claim about production, which stored
+      // nothing.
+      stored: availability === 'ready' || simulated,
     })
+  } finally {
+    release()
   }
-
-  if (claim !== null) {
-    const stored = await settleAnalysis(caller.db, {
-      id: claim.id,
-      claimToken: claim.claimToken,
-      review: parsed.review,
-      overall: parsed.review.overall,
-    })
-    // A STORE THAT FAILED IS NOT A FAILED ANALYSIS. The applicant paid for this
-    // feedback and it is valid; they get it. The only cost is that reopening
-    // the draft will analyse again, which is the behaviour without the cache.
-    if (!stored.ok) console.error('statement analyze: result not stored —', stored.reason)
-  }
-
-  return NextResponse.json({
-    review: parsed.review,
-    // BOUND TO WHAT WAS ACTUALLY JUDGED. The browser compares these with what
-    // is on screen and labels the result as older when they have moved on.
-    revision: draft.revision,
-    words,
-    overLimit: overLimit({ words, statedMaxWords: draft.statedMaxWords }),
-    statedMaxWords: draft.statedMaxWords,
-    // 'catalog' only when the catalog agrees; never because an id looked real.
-    provenance,
-    // SAID PLAINLY. False means this result was not stored, so asking again
-    // will pay again -- the interface must not imply otherwise.
-    //
-    // TRUE LOCALLY BECAUSE IT IS TRUE LOCALLY: the local store will answer the
-    // next identical request without a model call, which is the behaviour the
-    // field describes. It is not a claim about production, which stored
-    // nothing.
-    stored: availability === 'ready' || simulated,
-  })
 }

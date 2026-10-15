@@ -101,10 +101,12 @@ const ESSAY = [
   'want it in a programme that expects me to explain my reasoning out loud.',
 ].join(' ')
 /**
- * A genuine fragment of it, for the one category that claims a quotation.
+ * A genuine fragment of it, for the one category that claims evidence.
  *
- * IN QUOTATION MARKS, because that is what the verifier checks: only quoted
- * spans of at least MIN_VERIFIABLE_QUOTE_CHARS are compared against the essay.
+ * IT IS THE `excerpt` FIELD THAT IS VERIFIED, not punctuation in prose. A
+ * category claiming evidenceFound: true must carry a contiguous verbatim span
+ * of the essay, at least MIN_VERIFIABLE_QUOTE_CHARS long -- which is what
+ * stopped "your essay contains strong material" from validating. AI-QA-002.
  */
 const QUOTE = 'the anesthetist beside me narrated every adjustment'
 const QUOTED = `“${QUOTE}”`
@@ -123,6 +125,8 @@ function aiReview(options: { readonly promptAttached?: boolean } = {}): Row {
       ? `The draft says ${QUOTED}, which is the moment it argues from.`
       : 'No passage in the draft addresses this directly.',
     evidenceFound: index === 0,
+    // THE PROVABLE HALF: a real span when evidence is claimed, null when not.
+    excerpt: index === 0 ? QUOTE : null,
     explanation: `An assessment of ${id} written by the model.`,
     recommendation: `A specific revision the applicant could make for ${id}.`,
     components: [],
@@ -133,6 +137,7 @@ function aiReview(options: { readonly promptAttached?: boolean } = {}): Row {
       score: 6,
       evidence: 'The draft answers the first requirement but not the second.',
       evidenceFound: false,
+      excerpt: null,
       explanation: 'An assessment of how the draft answers the school’s question.',
       recommendation: 'Answer the second requirement explicitly.',
       components: [

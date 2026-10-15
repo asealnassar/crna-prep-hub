@@ -170,6 +170,19 @@ export type PromptWrite = StatementPromptSnapshot | null
 export type DraftRepoRefusal =
   | 'not-found'
   | 'conflict'
+  /**
+   * The body moved `essay` on a draft that stores a formatted document, and
+   * carried no document to move with it.
+   *
+   * REFUSED RATHER THAN APPLIED, because applying it is exactly what let the
+   * two representations diverge -- and a diverged pair is resolved on the next
+   * reopen by one of them being discarded. See AI-QA-001.
+   *
+   * IT IS NOT A CONFLICT. Nothing changed underneath the caller; the body was
+   * incomplete. Reporting a conflict would tell an applicant their work is
+   * stale, which is false and leads them to the wrong recovery.
+   */
+  | 'document-required'
   | 'data-integrity'
   | 'create-failed'
   | 'read-failed'
@@ -598,7 +611,35 @@ export async function updateDraft(
   // got round to it.
   const savedAt = new Date().toISOString()
 
-  const { data, error } = await db
+  /*
+    THE CONTENT INVARIANT, ENFORCED IN THE WRITE ITSELF.
+
+    `essay` is the canonical text; `editor_document` is the same characters plus
+    which of them are bold. The API refuses a body whose document disagrees
+    with its essay -- but that check can only fire on a body that SUPPLIED a
+    document, so an essay-only update to a formatted draft advanced one
+    representation and left the other behind. The pair then disagreed in the
+    database, and the next reopen resolved the disagreement by discarding one of
+    them: AI-QA-001.
+
+    So an essay-only update additionally requires that the row store no
+    document. A formatted draft matches nothing, no row is written, and the
+    follow-up read reports `document-required` rather than a conflict.
+
+    IN THE SAME STATEMENT, never read-then-write: there is no window in which a
+    document could appear between the check and the write.
+  */
+  const sendsDocument = 'editor_document' in editorDocumentColumns(input)
+  /*
+    AND ONLY WHERE THE COLUMN EXISTS. editorDocumentsEnabled() is off until
+    20261011_013 is applied, and naming an absent column in a filter is a 42703
+    for the whole statement -- which would turn every save into a 500 on an
+    unmigrated deployment. Off, there are no documents to diverge from, so
+    there is nothing to guard.
+  */
+  const guardsDocument = !sendsDocument && editorDocumentsEnabled()
+
+  const write = db
     .from(DRAFTS)
     .update({
       title: input.title,
@@ -623,6 +664,8 @@ export async function updateDraft(
     })
     .eq('id', draftId)
     .eq('revision', input.expectedRevision)
+
+  const { data, error } = await (guardsDocument ? write.is('editor_document', null) : write)
     .select(draftColumns())
     .maybeSingle()
   if (error) return failure('update-failed', error)
@@ -649,6 +692,20 @@ export async function updateDraft(
   // stored value would become a conflict against a revision nobody ever wrote,
   // and the client would resync onto a fiction.
   if (!stored) return integrity('update-conflict-read')
+  /*
+    THE REVISION MATCHED, SO NOTHING MOVED UNDERNEATH THIS CALLER. The only
+    other condition on the write was the document guard above, so this is an
+    essay-only save of a draft that stores formatting.
+  */
+  if (guardsDocument
+      && stored.revision === input.expectedRevision
+      && stored.editorDocument !== null) {
+    return {
+      ok: false,
+      reason: 'document-required',
+      detail: 'this draft stores formatting, so a save must carry its document',
+    }
+  }
   return {
     ok: false,
     reason: 'conflict',

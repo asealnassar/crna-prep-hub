@@ -148,6 +148,9 @@ function checkViolation(row: Row): Result | null {
   }
 }
 
+/** A private sentinel, so `is(column, null)` cannot collide with a stored value. */
+const NULL_MATCH = Symbol('is-null')
+
 class LocalDraftQuery implements PromiseLike<Result> {
   private operation: 'select' | 'insert' | 'update' | 'delete' = 'select'
   private payload: Row = {}
@@ -184,6 +187,25 @@ class LocalDraftQuery implements PromiseLike<Result> {
     return this
   }
 
+  /**
+   * `.is(column, null)` -- the only form PostgREST's `is` is used in here.
+   *
+   * ADDED FOR THE CONTENT INVARIANT. draftRepo's update requires
+   * `editor_document is null` when a body carries no document, so that an
+   * essay-only save cannot rewind a formatted draft's text (AI-QA-001). Without
+   * this method the local store threw `write.is is not a function`, which would
+   * have left the guard unexercised in exactly the environment the mocked QA
+   * runs in -- and a guard nobody can reach locally is a guard nobody tests.
+   *
+   * SQL NULL SEMANTICS, DELIBERATELY: a column that was never written is
+   * `undefined` on a local row and NULL in the database, and both must match
+   * `is null`. That is why this is not simply `eq(column, null)`.
+   */
+  is(column: string, value: null): this {
+    this.filters.push([column, value === null ? NULL_MATCH : value])
+    return this
+  }
+
   order(column: string, options?: { ascending?: boolean }): this {
     this.ordering = { column, ascending: options?.ascending !== false }
     return this
@@ -209,7 +231,11 @@ class LocalDraftQuery implements PromiseLike<Result> {
   private matches(row: Row): boolean {
     // eq on a stored string compares as the database would after its own
     // coercion; revision arrives as a number from draftRepo and is stored as one.
-    return this.filters.every(([column, value]) => row[column] === value)
+    return this.filters.every(([column, value]) => (
+      value === NULL_MATCH
+        // `is null` matches a stored NULL and a column never written.
+        ? row[column] === null || row[column] === undefined
+        : row[column] === value))
   }
 
   private run(): Result {

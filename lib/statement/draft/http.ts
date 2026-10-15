@@ -97,6 +97,13 @@ export function statusForRepo(reason: DraftRepoRefusal): number {
   switch (reason) {
     case 'not-found': return 404
     case 'conflict': return 409
+    /*
+      THE BODY WAS INCOMPLETE, SO THIS IS THE CALLER'S 422 AND NOT A 500.
+      A formatted draft's save must carry its document; one that does not is
+      refused rather than applied, because applying it diverges the two
+      representations. Not 409: nothing changed underneath the caller.
+    */
+    case 'document-required': return 422
     default: return 500
   }
 }

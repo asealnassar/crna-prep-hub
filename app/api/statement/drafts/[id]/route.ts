@@ -130,6 +130,22 @@ function failed(
   if (result.reason === 'not-found') {
     return NextResponse.json(NOT_FOUND_BODY, { status })
   }
+  /*
+    THE BODY WAS INCOMPLETE, SO IT GETS ITS OWN CODE AND SENTENCE.
+
+    A formatted draft's save must carry its document; one that does not is
+    refused rather than applied, because applying it lets the two
+    representations diverge (AI-QA-001). Falling through to SERVER_ERROR_BODY
+    paired a 422 with a 'server-error' code, which is neither true nor
+    actionable -- the caller sent the wrong thing and can fix it.
+  */
+  if (result.reason === 'document-required') {
+    return NextResponse.json({
+      error: 'This draft keeps formatting, so a save has to include it. Reload the draft '
+        + 'and try again.',
+      code: 'document-required',
+    }, { status })
+  }
   // Everything else. The reason is logged; `detail` -- a Postgres code and
   // message about a row that is somebody's essay -- is neither logged nor sent.
   if (isServerFault(result.reason)) console.error('statement drafts: failed —', result.reason)

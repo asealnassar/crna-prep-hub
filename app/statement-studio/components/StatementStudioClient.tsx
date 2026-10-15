@@ -84,12 +84,18 @@ import {
   settleVerdict,
   statementDriverAction,
   statementSaveRequest,
-  documentWasEdited, draftStateMatches, saveFailedOnExpiredSession, type DraftState,
+  documentWasEdited,
+  draftStateMatches,
+  saveFailedOnExpiredSession,
+  type DraftState,
   statementStatus,
   titleAfterSave,
   wordCount,
   wordLimitProgress,
   type SaveSnapshot,
+  documentForEssay,
+  hydrationFor,
+  FORMATTING_REBUILT,
 } from '@/lib/statement/draft/editor'
 
 const LIBRARY = '/statement-studio'
@@ -332,9 +338,10 @@ export default function StatementStudioClient({
    * STARTS FROM THE STORED DOCUMENT, or null for a draft written before
    * formatting existed, which the editor reconstructs from the essay.
    */
-  const [editorDocument, setEditorDocument] = useState<unknown>(
-    draft.editorDocument ?? null)
-  const documentRef = useRef<unknown>(draft.editorDocument ?? null)
+  // The stored pair, reconciled first: hydrationFor() owns the policy.
+  const hydration = hydrationFor({ essay: draft.essay, document: draft.editorDocument })
+  const [editorDocument, setEditorDocument] = useState<unknown>(hydration.document)
+  const documentRef = useRef<unknown>(hydration.document)
   /**
    * The face this document is laid out in.
    *
@@ -972,6 +979,26 @@ export default function StatementStudioClient({
    * actually holds, and the next save must carry it; what the comparison
    * decides is only whether there is anything to save YET.
    */
+  // Content from OUTSIDE the editor, both halves at once. Why it is one
+  // function: see documentForEssay(). A plain draft gains no document.
+  const applyExternalEssay = useCallback((text: string) => {
+    setEssay(text)
+    essayRef.current = text
+    if (documentRef.current !== null) {
+      const next = documentForEssay(text)
+      documentRef.current = next
+      setEditorDocument(next)
+    }
+  }, [])
+
+  // Said out loud: text intact, bold reset, applicant told.
+  useEffect(() => {
+    if (hydration.kind === 'rebuilt') setNotice(FORMATTING_REBUILT)
+    // Once, on mount, for the row as it was read. A later save cannot
+    // reintroduce the state, so there is nothing to re-check.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const onDocumentChange = useCallback((next: unknown) => {
     // A CHEAP BAIL-OUT ONLY: the editor emits on every transaction, including
     // a caret move that changed nothing at all, and re-rendering for those is
@@ -1180,9 +1207,8 @@ export default function StatementStudioClient({
           return
         }
 
-        // THE WHOLE extracted string. Nothing is cut, whatever its length.
-        setEssay(outcome.document.text)
-        essayRef.current = outcome.document.text
+        // The whole extracted string, both halves, one writer.
+        applyExternalEssay(outcome.document.text)
         setImportNotice(importNoticeFor(outcome.document))
         // The SAME event typing dispatches. The driver decides the rest: a
         // document over the save ceiling simply blocks, with no request and no
@@ -1270,8 +1296,8 @@ export default function StatementStudioClient({
       // reloaded draft for an older response.
       setPromptConfirmFailed(null)
       setTitle(outcome.draft.title)
-      setEssay(outcome.draft.essay)
-      essayRef.current = outcome.draft.essay
+      // Both halves: this component's document lost the race.
+      applyExternalEssay(outcome.draft.essay)
       // REPLACED WHOLESALE, in the same step as the essay and the revision.
       // Not merged, not kept when the server's is null: whatever the losing
       // revision held locally is gone, because the draft on screen is now the
@@ -2295,9 +2321,18 @@ export default function StatementStudioClient({
                                   <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
                                     {scored.evidenceFound ? 'From your draft' : 'Not found in your draft'}
                                   </p>
-                                  {/* The model's words, rendered as escaped text. */}
-                                  <p className={`mt-1 whitespace-pre-wrap text-sm leading-relaxed ${
-                                    scored.evidenceFound ? 'text-slate-800 italic' : 'text-slate-600'
+                                  {/* The verbatim passage, verified against the
+                                      stored essay before it was ever returned.
+                                      Rendered as escaped text. */}
+                                  {scored.excerpt !== null && (
+                                    <blockquote className="mt-1 border-l-2 border-slate-300 pl-3 whitespace-pre-wrap break-words text-sm italic leading-relaxed text-slate-800">
+                                      {scored.excerpt}
+                                    </blockquote>
+                                  )}
+                                  {/* And what it shows, which is prose about
+                                      the passage rather than the passage. */}
+                                  <p className={`mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed ${
+                                    scored.evidenceFound ? 'text-slate-700' : 'text-slate-600'
                                   }`}>
                                     {scored.evidence}
                                   </p>

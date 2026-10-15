@@ -88,3 +88,49 @@ export function fabricatedQuotes(input: {
   }
   return missing
 }
+
+// ---------------------------------------------------------------------------
+// AI-QA-002: evidence claimed as present must be PROVABLY present
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a span is a verbatim excerpt of the essay.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY `fabricatedQuotes` WAS NOT ENOUGH
+ * ---------------------------------------------------------------------------
+ * That function answers "is anything the model put inside quotation marks
+ * absent from the essay?", and it only looks at spans of at least
+ * MIN_VERIFIABLE_QUOTE_CHARS. Both bounds were load-bearing and both were
+ * escapable: a model that claimed `evidenceFound: true` and then wrote
+ * "Your essay contains strong material for this category" used no quotation
+ * marks at all, so nothing was checked, at any score. A 90/100 with six Strong
+ * bands and no evidence whatsoever validated cleanly.
+ *
+ * The answer is not a better quotation heuristic. It is to stop inferring the
+ * excerpt from punctuation and require it as its OWN FIELD, which this function
+ * verifies. Prose remains prose; the claim lives in a field that can be proved.
+ *
+ * ---------------------------------------------------------------------------
+ * THE NORMALISATION RULE, EXACTLY
+ * ---------------------------------------------------------------------------
+ * The excerpt must occur in the essay as a CONTIGUOUS run, after
+ * normalizeForMatch() and nothing else: whitespace runs collapsed to one
+ * space, ends trimmed, case folded, and typographic quotes and dashes folded
+ * to ASCII. Those are the differences between two renderings of the same
+ * sentence -- a model re-wrapping a line or tidying an apostrophe is not
+ * fabricating anything.
+ *
+ * NOTHING ELSE IS FORGIVEN. No ellipsis, so an excerpt cannot be assembled
+ * out of fragments; no stemming; no word-order tolerance; no partial credit.
+ * An excerpt that has had a word changed is a different sentence and is
+ * refused, which is the whole point of the field.
+ */
+export function isEssayExcerpt(input: {
+  readonly excerpt: string
+  readonly essay: string
+}): boolean {
+  const needle = normalizeForMatch(input.excerpt)
+  if (needle.length < MIN_VERIFIABLE_QUOTE_CHARS) return false
+  return normalizeForMatch(input.essay).includes(needle)
+}

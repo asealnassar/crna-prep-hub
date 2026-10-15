@@ -23,13 +23,27 @@ import type { CategoryId } from './rubric.ts'
 /** Visible on every sample, so a preview can never be mistaken for real feedback. */
 export const SAMPLE_NOTICE = 'Sample AI feedback — visual preview only.'
 
-const EVIDENCE: Readonly<Record<CategoryId, { evidence: string; found: boolean }>> = {
+/*
+  THE EXCERPT AND THE PROSE ARE SEPARATE FIELDS HERE TOO.
+
+  The sample is a VISUAL preview of a real result, so it has to carry the same
+  shape a real one does -- including `excerpt`, which parseReview() verifies
+  against the submitted essay. This sample has no essay (that is the point: it
+  is a specimen, not an analysis), so it is parsed without one and the excerpt
+  travels as written. A `found: false` category carries no excerpt at all,
+  because the validator refuses one beside an absence. AI-QA-002.
+*/
+const EVIDENCE: Readonly<Record<CategoryId, {
+  evidence: string; found: boolean; excerpt?: string
+}>> = {
   motivation: {
-    evidence: '"I decided on anesthesia the night a trauma patient coded and the CRNA kept the room calm."',
+    excerpt: 'I decided on anesthesia the night a trauma patient coded and the CRNA kept the room calm.',
+    evidence: 'A specific night, and your own part in it.',
     found: true,
   },
   'clinical-experience': {
-    evidence: '"Three years in a cardiothoracic ICU, mostly post-op CABG and valve patients."',
+    excerpt: 'Three years in a cardiothoracic ICU, mostly post-op CABG and valve patients.',
+    evidence: 'The unit and the patient population are both named.',
     found: true,
   },
   'reflection-growth': {
@@ -37,15 +51,18 @@ const EVIDENCE: Readonly<Record<CategoryId, { evidence: string; found: boolean }
     found: false,
   },
   'understanding-goals': {
-    evidence: '"I want to practise in a rural critical-access hospital where CRNAs work independently."',
+    excerpt: 'I want to practise in a rural critical-access hospital where CRNAs work independently.',
+    evidence: 'A particular kind of practice, not a general ambition.',
     found: true,
   },
   'organization-flow': {
+    excerpt: 'Additionally, the unit relied on protocols I had helped to write.',
     evidence: '"Additionally" opens four of your seven paragraphs.',
     found: true,
   },
   'writing-quality': {
-    evidence: '"The patient\'s condition were deteriorating rapidly" — subject and verb disagree.',
+    excerpt: 'The patient\'s condition were deteriorating rapidly and the room was full.',
+    evidence: 'Subject and verb disagree in this sentence.',
     found: true,
   },
   'prompt-alignment': {
@@ -104,6 +121,7 @@ function rawCategory(id: CategoryId, score: number) {
     score,
     evidence: EVIDENCE[id].evidence,
     evidenceFound: EVIDENCE[id].found,
+    excerpt: EVIDENCE[id].excerpt ?? null,
     explanation: EXPLANATION[id],
     recommendation: RECOMMENDATION[id],
     ...(id === 'prompt-alignment' ? { components: SAMPLE_COMPONENTS } : {}),

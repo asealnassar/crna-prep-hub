@@ -255,6 +255,108 @@ export type SaveRequest =
  * only ever set from a server response. It is never incremented here, and a
  * prompt change does not add one: it travels inside the same compare-and-swap.
  */
+/**
+ * The document that represents a piece of plain text, and nothing else.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS: ONE WRITER FOR CONTENT
+ * ---------------------------------------------------------------------------
+ * A formatted draft stores its text TWICE -- `essay` as plain characters and
+ * `editorDocument` as the same characters plus which of them are bold -- and
+ * for a while nothing owned keeping them in step. Three paths moved the essay
+ * on its own: a file import, a conflict re-read, and any hand-made PATCH. The
+ * editor's own sync effect then replaced the visible text with
+ * `setContent(..., { emitUpdate: false })`, which deliberately does NOT emit,
+ * so the document the parent holds never caught up.
+ *
+ * Two different failures came out of that, and the second is the worse one:
+ *
+ *   THE SAVE IS REFUSED AND NOTHING SAYS SO. statementSaveRequest compares the
+ *   two and returns `invalid-essay`, so the autosave driver was handed a
+ *   request it would not send. Imported text stayed on screen, unsaved, until
+ *   the applicant reloaded and lost it.
+ *
+ *   OR THE PAIR REACHES THE DATABASE AND THE OLDER HALF WINS. On reopen the
+ *   editor seeded from the stored document, and its first save wrote that
+ *   older text back over the newer essay. Sentences disappeared with no
+ *   notice, no conflict and no version entry.
+ *
+ * So any path that sets the essay from outside the editor derives the document
+ * from it HERE, in one place, rather than each remembering to. See AI-QA-001.
+ *
+ * IT IS NOT A CONVERSION WITH OPINIONS. essayToDoc is the same function the
+ * editor seeds a plain draft with, and constrainDocument is the same one the
+ * API validates against, so the result is exactly what the editor would have
+ * produced for this text -- which is what makes documentMatchesEssay() true of
+ * the pair by construction.
+ *
+ * FORMATTING IS LOST, AND THAT IS THE POINT. Text that arrives from outside
+ * the editor has no marks to preserve; inventing some would be worse. A
+ * bold-only edit never comes through here -- it comes from the editor, which
+ * emits both halves itself.
+ */
+export function documentForEssay(essay: string): unknown {
+  return constrainDocument(essayToDoc(essay))
+}
+
+/**
+ * Which stored representation to open a draft with, when they disagree.
+ *
+ * ---------------------------------------------------------------------------
+ * THE POLICY: THE PLAIN ESSAY WINS, AND THE FORMATTING IS REBUILT FROM IT
+ * ---------------------------------------------------------------------------
+ * A draft should never hold an `essay` and an `editorDocument` that spell
+ * different text -- the write path now refuses to create that state. But a row
+ * written before it did can still be out there, so opening one has to have an
+ * answer, and the answer must not be "seed from the document", which is how
+ * the newer text was being destroyed: the editor seeded from the stale
+ * document and its first save wrote that text back over the essay.
+ *
+ * SO THE ESSAY IS AUTHORITATIVE HERE, for reasons that are about this product
+ * and not about taste:
+ *
+ *   IT IS WHAT EVERYTHING ELSE ALREADY READS. The analyser reads `essay`, the
+ *   counters count it, the save ceiling applies to it and the analysis
+ *   fingerprint is taken over it. The document is a rendering detail beside
+ *   it, and the repository says so in as many words.
+ *
+ *   LOSING BOLD IS RECOVERABLE; LOSING SENTENCES IS NOT. The worst case of
+ *   preferring the essay is that an applicant re-bolds a few words. The worst
+ *   case of preferring the document is that a paragraph they wrote is gone,
+ *   silently, with the save that destroyed it looking like an ordinary one.
+ *
+ *   AND THE ESSAY IS THE HALF THAT GETS WRITTEN ALONE. Every path that could
+ *   diverge the pair advanced the essay and left the document behind, so on a
+ *   diverged row the essay is also the NEWER half in practice.
+ *
+ * NOTHING IS DISCARDED SILENTLY. 'rebuilt' is reported so the editor can say
+ * that formatting was reset; the alternative -- fixing it quietly -- is the
+ * behaviour that made this hard to find in the first place.
+ */
+export type HydrationChoice =
+  /** The pair agrees, or there is no document. Open it as stored. */
+  | { readonly kind: 'stored'; readonly document: unknown }
+  /** They disagreed. Open the essay, with formatting derived from it. */
+  | { readonly kind: 'rebuilt'; readonly document: unknown }
+
+export function hydrationFor(input: {
+  readonly essay: string
+  readonly document: unknown
+}): HydrationChoice {
+  if (input.document === null || input.document === undefined) {
+    return { kind: 'stored', document: null }
+  }
+  if (documentMatchesEssay(input.document, input.essay)) {
+    return { kind: 'stored', document: input.document }
+  }
+  return { kind: 'rebuilt', document: documentForEssay(input.essay) }
+}
+
+/** What an applicant is told when the formatting had to be rebuilt. */
+export const FORMATTING_REBUILT =
+  'This draft\u2019s formatting was out of step with its text, so the text was kept and the '
+  + 'bold formatting was reset. Nothing you wrote was lost.'
+
 export function statementSaveRequest(input: {
   title: string
   essay: string

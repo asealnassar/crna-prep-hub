@@ -1,5 +1,9 @@
 import { AUTHENTICITY_CONTRACT } from '../prompts.ts'
 import { RUBRIC, categoriesFor } from './rubric.ts'
+// THE SHAPE IS GENERATED FROM THE VALIDATOR, not typed out here. See
+// reviewResponseShape(): a prompt example and a parser are two descriptions
+// of one contract, and the example used to omit a field the parser required.
+import { reviewResponseShape } from './reviewSchema.ts'
 import {
   analyzerUnmeasuredKinds, characterCount, hasAdvisoryLength, isStrict,
 } from '../requirements/constraints.ts'
@@ -121,10 +125,13 @@ ${promptAttached
     : '- There is no school prompt for this draft. Do NOT return a prompt-alignment category.'}
 
 FOR EVERY CATEGORY, RETURN:
-- evidence: a short quotation from the applicant's essay that supports your score, OR a plain statement that the material for this category is absent.
-- evidenceFound: true when you quoted the essay, false when the material is absent.
+- evidenceFound: true when the material for this category is in the essay, false when it is absent.
+- excerpt: WHEN evidenceFound IS TRUE, the exact passage from the essay, copied word for word -- at least 25 characters, one continuous run, no ellipsis, nothing tidied or paraphrased. This field is CHECKED against the essay: a passage that is not in it word for word makes the whole analysis invalid and the applicant is shown nothing. WHEN evidenceFound IS FALSE, set it to null.
+- evidence: what that passage shows about this category, or a plain statement that the material is absent. Prose, not a quotation.
 - explanation: why that specific score, referring to what is actually written.
 - recommendation: one concrete thing to do next. Name what is missing; never supply it.
+
+EVIDENCE YOU CANNOT QUOTE DOES NOT EXIST. If you cannot copy a passage out of the essay for a category, then evidenceFound is false, excerpt is null, and the score belongs in a lower band. Do not write that the essay "contains strong material" and claim evidenceFound: true -- that is the one thing this analysis must never do, because it tells an applicant their writing is strong on the strength of nothing.
 
 KEEP EACH FIELD SHORT. Two or three sentences for an explanation, one for a recommendation, and a quotation rather than a paragraph for evidence. A reply that runs long is cut off and becomes unreadable, so brevity is not a style preference here.
 
@@ -144,15 +151,7 @@ BE SPECIFIC TO THIS DRAFT. Every recommendation must point at something in the e
 THESE SCORES ARE WRITING-DEVELOPMENT INDICATORS. They are not an admission probability, a prediction, or a committee's opinion. Do not describe them as any of those.
 
 Reply with JSON only, in exactly this shape:
-{
-  "categories": [
-    { "id": "<category id>", "score": <integer>, "evidence": "...", "evidenceFound": <boolean>, "explanation": "...", "recommendation": "..." }
-  ],
-  "overallAssessment": "...",
-  "strengths": ["..."],
-  "priorities": ["..."],
-  "nextSteps": ["..."]
-}`
+${reviewResponseShape(promptAttached)}`
 }
 
 /**

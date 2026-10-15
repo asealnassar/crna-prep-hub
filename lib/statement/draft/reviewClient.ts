@@ -37,6 +37,17 @@ export const REVIEW_MESSAGES = {
   unavailableDraft: 'That draft could not be analyzed. Reload the page and try again.',
   /** The request never arrived. */
   network: 'Could not reach the server. Please try again.',
+  /** Another request for this exact draft and text is already in flight. */
+  alreadyRunning:
+    'An analysis of this draft is already running. Wait for it to finish — you do not need to '
+    + 'start another.',
+  /** The applicant's plan does not include analysis. */
+  needsUltimate: 'AI analysis of your personal statement is included with Ultimate.',
+  /** The capability is switched off. Not the applicant's doing, and not retryable by them. */
+  storageUnavailable:
+    'AI analysis is not available yet. Nothing has been charged, and your draft is saved.',
+  /** The session is gone. Signing in again is the fix, not retrying. */
+  signedOut: 'Your session has expired. Sign in again to analyze this draft.',
   /** The result describes a version the applicant has since edited past. */
   stale:
     'You have edited this draft since this analysis ran, so it describes an earlier version.',
@@ -78,15 +89,58 @@ export type ReviewOutcome =
   | { readonly type: 'ready'; readonly result: Omit<ReviewResult, 'essay'> }
   | { readonly type: 'refused'; readonly message: string; readonly retryable: boolean }
 
-/** Our own refusal codes, and nothing else, may choose a message. */
-const CODE_MESSAGES: Readonly<Record<string, string>> = {
-  'too-short': REVIEW_MESSAGES.tooShort,
-  'prompt-too-short': REVIEW_MESSAGES.promptTooShort,
-  'too-many-requests': REVIEW_MESSAGES.rateLimited,
-  malformed: REVIEW_MESSAGES.malformed,
-  unavailable: REVIEW_MESSAGES.unavailable,
-  'not-found': REVIEW_MESSAGES.unavailableDraft,
+/**
+ * Every code the analyse route can intentionally answer with, and what the
+ * applicant is told for each.
+ *
+ * ---------------------------------------------------------------------------
+ * EXHAUSTIVE, AND A TEST ENFORCES THAT
+ * ---------------------------------------------------------------------------
+ * The route answers with nine codes; this mapped six, and the three it missed
+ * fell through to the generic "could not be completed. Please try again."
+ * marked retryable. Two of those were actively wrong:
+ *
+ *   `already-running` is reachable in ordinary use -- a second tab -- and the
+ *   advice given was the one thing certain to fail again.
+ *   `analysis-requires-ultimate` turned a clear upsell into an apparent bug.
+ *
+ * AI-QA-003. reviewClient.test.ts now derives the route's codes from its
+ * source and fails if any is unmapped, so adding a tenth breaks a test rather
+ * than reaching an applicant as a shrug.
+ *
+ * `retryable` ANSWERS ONE QUESTION: would trying again, unchanged, behave
+ * differently? Not "may the applicant ever try again" -- a plan upgrade or a
+ * finished analysis changes the answer, and the interface offers those
+ * separately.
+ */
+interface Refusal {
+  readonly message: string
+  readonly retryable: boolean
 }
+
+const CODE_REFUSALS: Readonly<Record<string, Refusal>> = {
+  // The draft itself is not ready. Writing more changes it; retrying does not.
+  'too-short': { message: REVIEW_MESSAGES.tooShort, retryable: false },
+  'prompt-too-short': { message: REVIEW_MESSAGES.promptTooShort, retryable: false },
+  // Waiting changes it, and the message says to wait.
+  'too-many-requests': { message: REVIEW_MESSAGES.rateLimited, retryable: true },
+  // ONE IS ALREADY RUNNING. Retrying now returns here again; the applicant is
+  // told to wait rather than invited to collide with their own request.
+  'already-running': { message: REVIEW_MESSAGES.alreadyRunning, retryable: false },
+  // The plan is the blocker. Retrying is pointless; upgrading is not retrying.
+  'analysis-requires-ultimate': { message: REVIEW_MESSAGES.needsUltimate, retryable: false },
+  // Switched off. Nothing the applicant does now changes it.
+  'analysis-storage-unavailable': { message: REVIEW_MESSAGES.storageUnavailable, retryable: false },
+  // The model answered unusably. A second attempt may well succeed.
+  malformed: { message: REVIEW_MESSAGES.malformed, retryable: true },
+  // Upstream or configuration failure.
+  unavailable: { message: REVIEW_MESSAGES.unavailable, retryable: true },
+  // The draft is not visible to this caller, which includes "not theirs".
+  'not-found': { message: REVIEW_MESSAGES.unavailableDraft, retryable: true },
+}
+
+/** Exported so a test can prove the mapping covers the route. */
+export const ANALYSIS_REFUSAL_CODES: readonly string[] = Object.keys(CODE_REFUSALS)
 
 function field(value: unknown, key: string): unknown {
   if (typeof value !== 'object' || value === null) return undefined
@@ -138,13 +192,21 @@ export function reviewOutcomeFrom(input: {
   }
 
   const code = field(body, 'code')
-  if (typeof code === 'string' && code in CODE_MESSAGES) {
-    // Neither of these changes by asking again.
-    const retryable = code !== 'too-short' && code !== 'prompt-too-short'
-    return { type: 'refused', message: CODE_MESSAGES[code], retryable }
+  if (typeof code === 'string' && code in CODE_REFUSALS) {
+    const refusal = CODE_REFUSALS[code]!
+    return { type: 'refused', message: refusal.message, retryable: refusal.retryable }
   }
 
-  if (status === 401 || status === 404) {
+  /*
+    NO CODE WE RECOGNISE. The studio gate answers 401 and 404 with its own
+    bodies, which carry no analysis code, so those are read from the status.
+    401 is a lost session and says so -- "reload and try again" is what it used
+    to say, and reloading a signed-out page does not help.
+  */
+  if (status === 401) {
+    return { type: 'refused', message: REVIEW_MESSAGES.signedOut, retryable: false }
+  }
+  if (status === 404) {
     return { type: 'refused', message: REVIEW_MESSAGES.unavailableDraft, retryable: true }
   }
   return { type: 'refused', message: REVIEW_MESSAGES.unavailable, retryable: true }

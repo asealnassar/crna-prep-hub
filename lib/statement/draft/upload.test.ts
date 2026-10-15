@@ -398,7 +398,7 @@ test('the essay is replaced only after every check has passed', () => {
   const request = handler.indexOf('await fetch(')
   const validate = handler.indexOf('importOutcomeFrom(')
   const stale = handler.indexOf('mayApplyImport(')
-  const apply = handler.indexOf('setEssay(outcome.document.text)')
+  const apply = handler.indexOf('applyExternalEssay(outcome.document.text)')
   for (const [name, i] of [['precheck', precheck], ['request', request], ['validation', validate], ['staleness', stale], ['apply', apply]] as const) {
     assert.notEqual(i, -1, `${name} is missing`)
   }
@@ -407,14 +407,14 @@ test('the essay is replaced only after every check has passed', () => {
   assert.ok(validate < stale)
   assert.ok(stale < apply, 'the essay is replaced last of all')
   // Exactly one place writes the imported essay.
-  assert.equal(CLIENT.split('setEssay(outcome.document.text)').length - 1, 1)
+  assert.equal(CLIENT.split('applyExternalEssay(outcome.document.text)').length - 1, 1)
 })
 
 test('no failure path touches the essay', () => {
   const handler = handlerBody
   // Every early return sets a message and returns; only the success tail sets
   // the essay, which the ordering test above pins to the very end.
-  const beforeApply = handler.slice(0, handler.indexOf('setEssay(outcome.document.text)'))
+  const beforeApply = handler.slice(0, handler.indexOf('applyExternalEssay(outcome.document.text)'))
   assert.doesNotMatch(beforeApply, /setEssay\(/, 'nothing may clear or pre-set the essay')
   assert.doesNotMatch(handler, /setEssay\(''\)/)
   // A refused outcome returns without applying.

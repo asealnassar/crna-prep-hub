@@ -760,7 +760,7 @@ test('the carried prompt is ONE piece of state, replaced wholesale', () => {
     CLIENT.indexOf('const retrySave'),
   )
   assert.ok(reload.length > 0, 'the reload handler was located')
-  assert.match(reload, /setEssay\(outcome\.draft\.essay\)/)
+  assert.match(reload, /applyExternalEssay\(outcome\.draft\.essay\)/)
   assert.match(reload, /setPrompt\(\{/)
   assert.match(reload, /type: 'reloaded'/)
 })
@@ -1723,7 +1723,7 @@ test('Reload fetches the document, not just the stored revision', () => {
   assert.doesNotMatch(refusal, /setEssay|setSave|reduce\(/)
   // Success replaces all three from the server, then returns to clean.
   assert.match(reload, /setTitle\(outcome\.draft\.title\)/)
-  assert.match(reload, /setEssay\(outcome\.draft\.essay\)/)
+  assert.match(reload, /applyExternalEssay\(outcome\.draft\.essay\)/)
   assert.match(reload, /type: 'reloaded', at: Date\.now\(\), revision: outcome\.draft\.revision/)
   // One reload at a time.
   assert.match(reload, /if \(reloadInFlight\.current\) return/)
