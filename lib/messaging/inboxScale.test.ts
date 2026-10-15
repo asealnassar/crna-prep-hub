@@ -336,3 +336,33 @@ test('grouped broadcast read progress is untouched', () => {
 test('the unread badge still counts individual threads only', () => {
   assert.match(modal, /setGlobalMessagesUnreadCount\(individual\.filter\(t => t\.unreadCount > 0\)\.length\)/)
 })
+
+// ------------------------- QA-012. a missing key costs nothing
+
+test('QA-012 the service-role check runs BEFORE any database read', () => {
+  /*
+   * The finding: in local development, where SUPABASE_SERVICE_ROLE_KEY is
+   * routinely absent, every inbox refresh took four to eight seconds and
+   * returned 500. The check sat after the two paging steps, so the route read
+   * every thread, every participant row and every message body -- around 37
+   * Supabase requests against PRODUCTION for the admin inbox -- and then
+   * discovered it could not finish and discarded all of it.
+   *
+   * ASSERTED AS AN ORDERING, which is the actual rule: the route cannot
+   * answer without the key, so nothing may be read before the key is known to
+   * exist. Asserting the message or the status would pass with the check back
+   * where it was.
+   */
+  const guard = route.indexOf('SUPABASE_SERVICE_ROLE_KEY')
+  const firstRead = route.indexOf('.from(')
+  assert.ok(guard > 0, 'the key is still read here')
+  assert.ok(firstRead > 0, 'the route still reads tables')
+  assert.ok(guard < firstRead,
+    `the key is checked at ${guard}, after the first read at ${firstRead}`)
+  // AND IT IS ASKED ONCE. Two copies could drift apart.
+  assert.equal(route.split('SUPABASE_SERVICE_ROLE_KEY').length - 1, 1)
+  // THE ORDER OF THE TWO PRIVILEGE LEVELS IS UNCHANGED: the admin client is
+  // still built after the caller-scoped reads have bounded what it may see.
+  assert.ok(route.indexOf('adminClient') > firstRead,
+    'the service role must still be used only after membership is established')
+})

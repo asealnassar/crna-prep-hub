@@ -50,6 +50,33 @@ export async function POST(request: NextRequest) {
     const token = await readAccessToken()
     if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+    /*
+      THE CONFIGURATION CHECK COMES BEFORE THE DATABASE WORK.
+
+      This route cannot answer without the service role: step 3 below is the
+      only way to resolve a display address, and nothing above it is useful on
+      its own. The check used to sit down there, after steps 1 and 2 had
+      already paged every thread the caller belongs to, every participant row
+      in those threads and every message body in them -- around 37 Supabase
+      requests and several megabytes for the admin inbox -- all of which was
+      then thrown away.
+
+      WHICH MADE A MISSING KEY EXPENSIVE INSTEAD OF FREE. In local development
+      the variable is routinely absent, so every inbox refresh spent four to
+      eight seconds and a few megabytes of PRODUCTION egress to arrive at a
+      500 it could have returned immediately. Asked first, the same 500 costs
+      one environment read and no requests at all.
+
+      PRODUCTION BEHAVIOUR IS UNCHANGED. Where the key is set this is a
+      satisfied condition either way; where it is not, the status and the body
+      are the ones the old check returned.
+    */
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceKey) {
+      console.error('Participant lookup: service role key missing')
+      return NextResponse.json({ error: 'Server configuration error' }, { status: 500 })
+    }
+
     // Caller-scoped: RLS still applies while membership is established.
     const userClient: SupabaseClient = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -105,12 +132,9 @@ export async function POST(request: NextRequest) {
     for (const m of messages) if (m.sender_id) authorized.add(m.sender_id)
 
     // 3. Only now the service role, and only for an id set the database has
-    //    already confirmed shares a conversation with the caller.
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (!serviceKey) {
-      console.error('Participant lookup: service role key missing')
-      return NextResponse.json({ error: 'Server configuration error' }, { status: 500 })
-    }
+    //    already confirmed shares a conversation with the caller. Its presence
+    //    was established at the top of the handler, before any read; the
+    //    ORDER of the two privilege levels here is unchanged.
     const adminClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     })

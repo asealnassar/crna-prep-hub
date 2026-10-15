@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import { pageAll, fetchByIdChunks, uniqueIds } from '@/lib/messaging/pagination'
+import { inboxMetaGate, inboxMetaInFlight, setInboxMetaInFlight } from '@/lib/messaging/metaGate'
 import { createRefreshScheduler } from '@/lib/messaging/refreshScheduler'
 import { mayApplyInboxResult } from '@/lib/messaging/sessionGuard'
 
@@ -252,23 +253,46 @@ const [compose, setCompose] = useState({
     // be mistaken for "this inbox has no metadata", so it is reported as
     // `ok: false` and the thread list is kept.
     const empty = { emails: {}, threads: [], groups: [], ok: false }
-    try {
-      const res = await fetch('/api/messages/participants', { method: 'POST' })
-      if (!res.ok) {
-        console.error('Inbox metadata request failed:', res.status)
+
+    // DEDUPED AND BACKED OFF. See lib/messaging/metaGate.ts: a burst of
+    // triggers becomes one request, and an endpoint that is failing is left
+    // alone for a growing interval instead of being asked again immediately.
+    // Both degrade to `ok: false`, which is the state this function already
+    // returns and which the caller already handles by keeping the thread list.
+    const pending = inboxMetaInFlight<typeof empty>()
+    if (pending !== null) return pending
+    if (!inboxMetaGate.mayRequest()) return empty
+
+    const attempt = (async () => {
+      try {
+        const res = await fetch('/api/messages/participants', { method: 'POST' })
+        if (!res.ok) {
+          if (inboxMetaGate.failed()) {
+            console.error('Inbox metadata request failed:', res.status,
+              '- backing off; labels and read state are degraded until it recovers')
+          }
+          return empty
+        }
+        const data = await res.json()
+        inboxMetaGate.succeeded()
+        return {
+          emails: data.emails ?? {},
+          threads: data.threads ?? [],
+          groups: data.groups ?? [],
+          ok: true,
+        }
+      } catch (error) {
+        if (inboxMetaGate.failed()) {
+          console.error('Inbox metadata request error:',
+            (error as any)?.name, (error as any)?.message, '- backing off')
+        }
         return empty
+      } finally {
+        setInboxMetaInFlight(null)
       }
-      const data = await res.json()
-      return {
-        emails: data.emails ?? {},
-        threads: data.threads ?? [],
-        groups: data.groups ?? [],
-        ok: true,
-      }
-    } catch (error) {
-      console.error('Inbox metadata request error:', (error as any)?.name, (error as any)?.message)
-      return empty
-    }
+    })()
+    setInboxMetaInFlight(attempt)
+    return attempt
   }
 
   const loadThreads = async () => {
