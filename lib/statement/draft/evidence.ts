@@ -130,7 +130,57 @@ export function isEssayExcerpt(input: {
   readonly excerpt: string
   readonly essay: string
 }): boolean {
-  const needle = normalizeForMatch(input.excerpt)
-  if (needle.length < MIN_VERIFIABLE_QUOTE_CHARS) return false
-  return normalizeForMatch(input.essay).includes(needle)
+  const haystack = normalizeForMatch(input.essay)
+
+  /*
+    FIRST, THE EXCERPT EXACTLY AS GIVEN.
+
+    Tried before any marker is stripped, which is what lets an ellipsis the
+    APPLICANT actually wrote survive: if the essay contains "I waited ... and
+    then she spoke", an excerpt of that span is contiguous and genuine, and
+    stripping anything would be the wrong move. Only a span that fails this
+    is reconsidered below.
+  */
+  const whole = normalizeForMatch(input.excerpt)
+  if (whole.length >= MIN_VERIFIABLE_QUOTE_CHARS && haystack.includes(whole)) return true
+
+  /*
+    THEN, BOUNDARY ABBREVIATION ONLY. AI-QA-018.
+
+    gpt-4o abbreviates a long excerpt with a trailing "...", and refusing that
+    threw away complete, honest analyses: measured on a real call, six of seven
+    categories verified and the seventh failed on a trailing marker over a span
+    that IS in the essay. The applicant saw "the analysis came back in a form
+    we could not read" and lost a slice of their burst allowance for it.
+
+    SO ONLY THE ENDS ARE FORGIVEN, AND ONLY THE MARKER. An ellipsis in the
+    MIDDLE is the thing the rule exists for -- "real beginning ... real ending"
+    presents two distant passages as one, which is a fabricated passage
+    assembled out of true parts. That case is refused by construction here:
+    removing the ends leaves the internal marker in place, so the remainder is
+    not contiguous in the essay and does not match.
+
+    THE LENGTH FLOOR APPLIES TO WHAT WAS VERIFIED, not to what was submitted.
+    Otherwise "...patient..." would clear a 25-character floor on the strength
+    of markers and a single word that appears somewhere.
+
+    NO OTHER PUNCTUATION IS TOUCHED. A sentence's own full stop is one dot, not
+    three, so it is never mistaken for a marker, and nothing else is stripped.
+  */
+  const stripped = normalizeForMatch(
+    input.excerpt.replace(BOUNDARY_ELLIPSIS_START, '').replace(BOUNDARY_ELLIPSIS_END, ''))
+  if (stripped === whole) return false
+  if (stripped.length < MIN_VERIFIABLE_QUOTE_CHARS) return false
+  return haystack.includes(stripped)
 }
+
+/**
+ * A presentation marker at the start or end of a quotation, and nothing else.
+ *
+ * THE ORDINARY THREE-DOT FORM AND THE UNICODE ELLIPSIS, each optionally with
+ * surrounding whitespace, anchored to one end. `\.{3,}` rather than `\.{3}` so
+ * a model writing four dots is not treated as having written a sentence stop
+ * followed by a marker.
+ */
+const BOUNDARY_ELLIPSIS_START = /^\s*(?:\.{3,}|\u2026)\s*/
+const BOUNDARY_ELLIPSIS_END = /\s*(?:\.{3,}|\u2026)\s*$/
