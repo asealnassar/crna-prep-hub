@@ -207,32 +207,127 @@ test('NOTHING IN THE REPOSITORY TELLS AN OPERATOR TO APPLY 009', () => {
   }
 })
 
-test('the rollout order puts the deploy before the school-name SQL', () => {
+test('THE ROLLOUT ORDER IS STAGED, AND THE STAGES ARE IN THIS ORDER', () => {
   /*
-   * The one ordering in the whole rollout that cannot be recovered from. The
-   * correction is applied in the SQL editor and the redirect ships in a
-   * deploy, so they cannot be swapped together: run the SQL first and
-   * /schools/ceder-crest -- an indexed address -- 404s until the next deploy.
+   * ---------------------------------------------------------------------------
+   * THE ORDERING THIS ENFORCES, AND WHY EACH ONE IS LOAD-BEARING
+   * ---------------------------------------------------------------------------
+   * DEPLOY BEFORE THE RENAME. The name correction runs in the SQL editor and
+   * the redirect ships in a build, so the two cannot be swapped together. Run
+   * the SQL first and /schools/ceder-crest -- an indexed URL -- 404s for every
+   * search result and saved link until the next deploy.
+   *
+   * 017 AFTER 008 AND 011. CREATE OR REPLACE FUNCTION checks a PL/pgSQL body
+   * for syntax only, so a promotion function created before 011's evidence
+   * columns applies cleanly and fails at the first promotion. 017 refuses in
+   * SQL; this keeps the document agreeing with it.
+   *
+   * THE POSTCHECK BEFORE ANY FLAG. A capability flag must never be the thing
+   * that discovers a bad migration -- switching one on is what makes a wrong
+   * column reach an applicant. The document used to put the flags first.
+   *
+   * THE FLAGS BEFORE ACTIVATION. Activation is the only step an applicant can
+   * observe, and it must not be bundled with enabling a read path.
    */
-  const status = readFileSync('supabase/manual/MIGRATION_STATUS.md', 'utf8')
-  const step = (text: string) =>
-    status.split('\n').findIndex((line) => line.includes(text))
-  const deploy = step('deploy the application')
-  const names = step('statement_school_name_corrections.sql` (2 schools)')
-  assert.ok(deploy > 0, 'the rollout order no longer names the deploy step')
-  assert.ok(names > 0, 'the rollout order no longer names the school-name step')
-  assert.ok(deploy < names,
+  const whole = readFileSync('supabase/manual/MIGRATION_STATUS.md', 'utf8')
+  /*
+   * SCOPED TO THE ROLLOUT SECTION. The correction files are also listed in the
+   * catalog inventory further up, and an unscoped search finds that first --
+   * which made this assertion compare an inventory row against a rollout
+   * stage and fail for the wrong reason.
+   */
+  const sectionStart = whole.indexOf('## 7. The exact rollout order')
+  const sectionEnd = whole.indexOf('## 8. The school-name correction')
+  assert.ok(sectionStart > 0 && sectionEnd > sectionStart, 'the rollout section moved')
+  const status = whole.slice(sectionStart, sectionEnd)
+  const at = (needle: string) => {
+    const index = status.indexOf(needle)
+    assert.ok(index > 0, `the rollout order no longer contains: ${needle}`)
+    return index
+  }
+
+  const deploy = at('Stage B — deploy the compatible code')
+  const schema = at('Stage C — schema, in this order')
+  const corrections = at('Stage D — data corrections')
+  const postcheck = at('Stage E — DATABASE POSTCHECK, before any capability is enabled')
+  const flags = at('Stage F — capability enablement')
+  const activation = at('Stage G — catalog activation')
+
+  assert.ok(at('Stage A — read-only preflight') < deploy, 'preflight after the deploy')
+  assert.ok(deploy < schema, 'schema before the deploy')
+  assert.ok(schema < corrections, 'corrections before the schema')
+  assert.ok(corrections < postcheck, 'the postcheck before the corrections')
+  assert.ok(postcheck < flags, 'A CAPABILITY FLAG IS ENABLED BEFORE THE POSTCHECK')
+  assert.ok(flags < activation, 'activation before the capabilities')
+
+  // The deploy precedes the rename, and the document says so in words too.
+  assert.ok(deploy < at('statement_school_name_corrections.sql'),
     'the school-name SQL is listed before the deploy that makes it safe')
-  assert.match(status, /must not precede/)
-  // AND ACTIVATION IS LAST, on its own.
-  const activation = step('a separate, final, independent action')
-  assert.ok(activation > 0, 'the rollout order no longer names activation')
-  assert.ok(activation > names, 'activation is not the last step')
-  // Nothing may come after it.
-  const steps = [...status.matchAll(/^\| (\d+) \| /gm)].map((m) => Number(m[1]))
-  assert.equal(Math.max(...steps), steps[steps.length - 1],
-    'the rollout table is not in ascending step order')
-  assert.ok(status.includes('| 19 |'), 'the rollout order lost its last step')
+  assert.match(whole, /STAGE B MUST BE DEPLOYED BEFORE D3/)
+
+  // 017 names its two predecessors.
+  const seventeen = status.slice(at('| C9 | `20261015_017`'), at('| C9 | `20261015_017`') + 200)
+  assert.match(seventeen, /C1 \(008\)/)
+  assert.match(seventeen, /C3 \(011\)/)
+
+  // Every migration is spelled out as its own step -- no "any order".
+  for (const migration of ['20261006_008', '20261008_010', '20261008_011',
+    '20261008_012', '20261011_013', '20261011_014', '20261013_015',
+    '20261013_016', '20261015_017']) {
+    assert.ok(status.includes(`| \`${migration}\``),
+      `${migration} is not spelled out as its own step`)
+  }
+  assert.doesNotMatch(whole, /may be applied in any order/,
+    'the order must document ONE path')
+
+  // And the postcheck requirement is stated as a stop, not a preference.
+  assert.match(whole, /STOP WITH ALL TEN CAPABILITIES STILL OFF/)
+})
+
+test('ALL TEN CAPABILITIES ARE DOCUMENTED, AND THE SET IS READ FROM THE CODE', () => {
+  /*
+   * SOURCE-DERIVED, because the gap this closes was a document naming two of
+   * ten. Followed literally it would have left five migrations applied but
+   * inert and Analyze permanently 503.
+   */
+  const rollout = readFileSync('lib/statement/draft/rollout.ts', 'utf8')
+  const flags = [...rollout.matchAll(/^export const [A-Z_]+_ENV = '([A-Z_]+)'$/gm)]
+    .map((match) => match[1]!)
+  assert.equal(flags.length, 10, `rollout.ts defines ${flags.length} flags, expected 10`)
+
+  const status = readFileSync('supabase/manual/MIGRATION_STATUS.md', 'utf8')
+  const missing = flags.filter((flag) => !status.includes(flag))
+  assert.deepEqual(missing, [],
+    `the rollout document does not account for: ${missing.join(', ')}`)
+
+  // Each one is a row in the capability table, with all five columns filled.
+  for (const flag of flags) {
+    const row = status.split('\n').find((line) =>
+      line.startsWith(`| \`${flag}\``))
+    assert.ok(row !== undefined, `${flag} has no row in the capability table`)
+    assert.ok(row.split('|').length >= 7, `${flag}'s row is incomplete: ${row}`)
+  }
+
+  // THE AI FLAG IS TIED TO ITS FINDING, so it cannot be enabled casually.
+  assert.match(status, /`STATEMENT_ANALYSIS_CACHE`[^|]*\|[^|]*\|[^|]*Analyze answers 503/)
+  const aiSection = status.slice(status.indexOf('**F5**'), status.indexOf('**F5**') + 600)
+  assert.match(aiSection, /AI-QA-005/)
+  assert.match(aiSection, /separate, and last/)
+})
+
+test('009 NEVER APPEARS AS AN EXECUTABLE STEP', () => {
+  const status = readFileSync('supabase/manual/MIGRATION_STATUS.md', 'utf8')
+  // Not a row in the schema stage...
+  for (const line of status.split('\n')) {
+    if (!/^\| C\d /.test(line)) continue
+    assert.ok(!line.includes('009'), `009 appears as a schema step: ${line}`)
+  }
+  // ...and the stage says so outright.
+  assert.match(status, /IS WITHDRAWN AND IS NEVER APPLIED, at this stage or any/)
+  // And it is still absent from disk.
+  assert.equal(
+    existsSync('supabase/migrations/20261006_009_statement_submission_promotion.sql'),
+    false)
 })
 
 test('the runbook does not pass itself off as a record of state', () => {

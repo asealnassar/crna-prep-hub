@@ -27,7 +27,8 @@ difference matters.
 | the **two school-name corrections** | **NOT APPLIED** |
 | **catalog activation** (`is_active`) | **NOT DONE** — all 63 sets inactive |
 | the **Cedar Crest redirect implementation** | **LOCAL CODE — NOT DEPLOYED** |
-| capability flags `STATEMENT_TYPOGRAPHY_OPTIONS`, `STATEMENT_FORMAT_PROFILE` | **NOT SET** anywhere |
+| **all ten capability flags** (§6) | **NOT SET** anywhere |
+| **AI analysis** | **intentionally 503** — `STATEMENT_ANALYSIS_CACHE` is off; see AI-QA-005 |
 
 004 through 007 are applied. **007 is applied.** It is in the same uncommitted
 state on this branch as 008 and 010–017, which is a fact about the branch and
@@ -237,48 +238,212 @@ Crosse's exclusive "less than two pages", Gonzaga's optional references page,
 and Keiser's three pages excluding cover and references. No school is named in
 the rule.
 
-## 6. The exact rollout order
+## 6. The capabilities, and what each one does
 
-Every step individually, with its direct dependency, its rollback and its
-point of no return. **Nothing below has been done.**
+Ten flags. **Every one defaults to OFF in production**, and every one fails
+closed: `env[NAME] === 'on'` and nothing else, so a typo, a blank value or an
+absent variable is off. Nine are forced on when `NODE_ENV === 'development'`
+and simulated-live is not opted out of, because the local JSON stores always
+carry every column; `STATEMENT_ANALYSIS_CACHE` is the exception and is never
+forced on anywhere.
 
-| # | step | direct dependency | rollback | point of no return |
+**A FLAG IS NOT HOW A BAD MIGRATION IS DISCOVERED.** Every one of these is
+enabled only after the database postcheck has passed — see §7. The flag's job
+is to keep a column unread until the column exists and the code that reads it
+is deployed; it is not a test of whether the migration was correct.
+
+**TURNING ONE BACK OFF IS ALWAYS SAFE AND NEVER LOSES DATA.** The column keeps
+whatever was written to it; the read stops asking for it. That is the whole
+reason this is a read-side flag and not a write-side one.
+
+| flag | prerequisite | while OFF | when ON | if turned off again |
 | --- | --- | --- | --- | --- |
-| 1 | run `statement_v2_rollout_preflight.sql` | 004–007 applied | n/a — read-only | none |
-| 2 | **deploy the application** (redirect code, capability flags unset) | step 1 all PASS | redeploy the previous build | none — the flags are off and every new column is behind one |
-| 3 | apply `20261006_008` | none | drop the nine columns it adds | once an applicant submission uses them |
-| 4 | apply `20261008_010` | none | drop two columns + two validator functions | once a row stores an option array |
-| 5 | apply `20261008_011` | none | restore 005's `active_needs_evidence`, drop two columns | once a set stores non-default evidence |
-| 6 | apply `20261008_012` | none | drop four columns + three constraints | once a change report is filed |
-| 7 | apply `20261011_013` | none | drop `editor_document` | once a draft stores one |
-| 8 | apply `20261011_014` | none | drop `document_format_profile` | once a requirement stores one |
-| 9 | apply `20261013_015` | none | drop `document_font` | once a draft stores one |
-| 10 | apply `20261013_016` | none | **re-tighten the CHECK to 20,000** | **once any draft exceeds 20,000 characters** — then it cannot be reverted |
-| 11 | apply `20261015_017` | **008 (step 3) and 011 (step 5)** | `drop function` — it creates no data | once a submission is promoted |
-| 12 | run `statement_catalog_corrections_preflight.sql` | step 8 (014) | n/a — read-only | none |
-| 13 | apply `statement_catalog_corrections.sql` (28 documents) | step 12 reads **PROCEED** | re-run with before/after swapped, from the manifest | none — every UPDATE is reversible from the recorded old values |
-| 14 | apply `statement_southern_mississippi_typography_options.sql` (29th) | step 4 (010) | set both arrays null and restore the one `other_instructions` entry | none |
-| 15 | apply `statement_school_name_corrections.sql` (2 schools) | **step 2 must already be deployed** | re-run with the names swapped | **the indexed URL `/schools/ceder-crest` moves the moment this commits** |
-| 16 | set `STATEMENT_TYPOGRAPHY_OPTIONS=on` | steps 4 and 14 | unset it | none — fails closed |
-| 17 | set `STATEMENT_FORMAT_PROFILE=on` | steps 8 and 13 | unset it | none — fails closed |
-| 18 | run `statement_v2_rollout_postcheck.sql` | all of the above | n/a — read-only | none |
-| 19 | **catalog activation** — a separate, final, independent action | step 18, 0 FAIL | set `is_active = false` again | **the moment a set is active an applicant is served it** |
+| `STATEMENT_REQUIREMENTS` | 005 (**applied**) | every requirement read returns `disabled`; the requirements endpoint answers `disabled`; a draft cannot be created against a requirement | structured requirement sets are read and served; the New Draft dialog can offer them | reads return `disabled` again; stored snapshots are untouched |
+| `STATEMENT_TYPOGRAPHY_OPTIONS` | **010** | `font_family_options` / `font_size_pt_options` are not selected, so a permitted choice reads as no choice and the single required face still applies | a school that permits a choice of typeface or size has it offered | the arrays stay stored and stop being read |
+| `STATEMENT_FORMAT_PROFILE` | **014** | `document_format_profile` is not selected, so a document reads as naming no standard — which is what every document was before 014 | a whole-document standard (`apa-7`) is applied | the column stays stored and stops being read |
+| `STATEMENT_SUBMISSION_EVIDENCE` | **011** | `evidence_kind` / `evidence_submission_id` are not selected on a requirement **set** | a set published from an approved submission is distinguishable from an official source | the columns stay stored and stop being read |
+| `STATEMENT_EDITOR_DOCUMENTS` | **013** | `editor_document` is neither read nor written; the editor is plain text; the AI-QA-001 `document-required` guard cannot fire, because no draft stores formatting | Bold is stored and restored, and an essay-only save of a formatted draft is refused rather than allowed to diverge | documents stay stored and stop being read; the guard goes quiet |
+| `STATEMENT_DOCUMENT_FONT` | **015** | `document_font` is neither read nor written; every draft renders in the Studio default | the applicant's chosen face is stored and used for pagination | the choice stays stored and stops being read |
+| `STATEMENT_PROMPT_SUBMISSIONS` | 20261002_000 (**applied**) | the submission endpoints answer `disabled`; the admin queue answers `disabled`; the Studio offers no submission | an applicant may submit a school prompt and an administrator may review it | the endpoints answer `disabled`; submitted rows are untouched |
+| `STATEMENT_SUBMISSION_FIELDS` | **008** | 008's nine structured columns are not selected on a submission | a submission carries its label, document type and stated limits | the columns stay stored and stop being read |
+| `STATEMENT_PROMPT_CHANGE_REPORTS` | **012** | 012's columns are not selected; a changed-prompt report cannot be filed, and replacement is refused with `needs-012` | an applicant may report that a school's prompt has changed, and a replacement can be linked | the columns stay stored and stop being read |
+| `STATEMENT_ANALYSIS_CACHE` | 004 (**applied**) | **Analyze answers 503 for every caller** — `analysisAvailability()` returns `unavailable` outside development. This is **AI-QA-005**, and it is deliberate: without storage there is no deduplication, so every reopen would be another paid call, silently | the claim/settle machinery runs, an identical essay is answered from store with no model call, and two tabs cannot both pay | Analyze returns to 503; stored analyses are untouched and are read again when it is switched back on |
 
-Steps 3–10 are independent of one another and may be applied in any order or
-on separate days. Only **step 11 (017)** has a hard predecessor, and it
-enforces it itself.
+### Why the enable order is not the order these were written in
 
-**Step 15 must not precede step 2.** The name correction is applied in the SQL
-editor, not in a deploy, so there is no moment when the two can be swapped
-together: the redirect must already be live when the name moves, or
-`/schools/ceder-crest` 404s for every search result and saved link. The
-redirect is safe before, during and after, because it consults the live slug
-map first.
+Three of these flags have **no reachable consumer** until
+`STATEMENT_REQUIREMENTS` is on, and that is a fact about the code rather than a
+preference:
 
-**Step 19 is the last thing, on its own.** It is the only step an applicant can
-observe, and it is reversible by one UPDATE.
+* `requirementColumns()` is called only at `repo.ts:500` and `repo.ts:564`, and
+  `setColumns()` only at `repo.ts:487` and `repo.ts:583`;
+* every one of those sites is inside a function that returns
+  `{ reason: 'disabled' }` at `repo.ts:481` or `repo.ts:558` when
+  `requirementsEnabled()` is false.
 
-## 7. Notes that outlive this rollout
+So with `STATEMENT_REQUIREMENTS` off, switching on
+`STATEMENT_TYPOGRAPHY_OPTIONS`, `STATEMENT_FORMAT_PROFILE` or
+`STATEMENT_SUBMISSION_EVIDENCE` changes nothing observable and **cannot be smoke
+tested** — there is no requirement read to widen. `STATEMENT_REQUIREMENTS`
+therefore goes first, not last.
+
+`STATEMENT_SUBMISSION_EVIDENCE` belongs with the requirement group for the same
+kind of reason: despite its name it widens a requirement **set** projection
+(`setColumns()`), not a submission one. Its only consumer is
+`lib/statement/requirements/repo.ts:88`.
+
+And `STATEMENT_PROMPT_SUBMISSIONS` leads its own group, because it gates the
+endpoints (`app/api/statement/prompt-submissions/route.ts:53`,
+`app/api/admin/statement-prompts/route.ts:55`) that the other two only add
+columns to.
+
+## 7. The exact rollout order
+
+Seven stages. **Every write step needs the owner's explicit approval.** The
+read-only stages may be run at any time and change nothing.
+
+### Stage A — read-only preflight
+
+Run `statement_v2_rollout_preflight.sql`.
+
+Require **0 FAIL**: the 004–007 baseline present and unchanged, every pending
+object absent, the catalog exactly 63/80 by fingerprint, nothing active, South
+Dakota still `needs-review`, all 28 correction targets holding their expected
+values, and steps 24–25 confirming 009 was never applied.
+
+Any FAIL stops here. Nothing has been changed.
+
+### Stage B — deploy the compatible code, every capability still OFF
+
+Deploy the application with **all ten flags unset**.
+
+**THIS DEPLOY MUST CARRY THE CEDAR CREST RETIRED-SLUG HANDLING.** See §8.
+
+Safe because each new column is behind a flag that fails closed, so the build
+asks for nothing the database does not yet have. Rollback is redeploying the
+previous build.
+
+### Stage C — schema, in this order
+
+One documented path, spelled out. These are independently applicable — each was
+rehearsed alone against a 004–007 cluster — but a single deterministic sequence
+means one thing to follow and one thing to audit.
+
+| order | migration | depends on | rollback | point of no return |
+| --- | --- | --- | --- | --- |
+| C1 | `20261006_008` | none | drop the nine columns | once a submission uses them |
+| C2 | `20261008_010` | none | drop two columns + two validators | once a row stores an option array |
+| C3 | `20261008_011` | none | restore 005's `active_needs_evidence`, drop two columns | once a set stores non-default evidence |
+| C4 | `20261008_012` | none | drop four columns + three constraints | once a change report is filed |
+| C5 | `20261011_013` | none | drop `editor_document` | once a draft stores one |
+| C6 | `20261011_014` | none | drop `document_format_profile` | once a requirement stores one |
+| C7 | `20261013_015` | none | drop `document_font` | once a draft stores one |
+| C8 | `20261013_016` | none | **re-tighten the CHECK to 20,000** | **once any draft exceeds 20,000 characters — then it cannot be reverted** |
+| C9 | `20261015_017` | **C1 (008) and C3 (011)** | `drop function` — it creates no data | once a submission is promoted |
+
+**`20261006_009` IS WITHDRAWN AND IS NEVER APPLIED, at this stage or any
+other.** It is absent from disk and from the whole of git history; see §3. C9
+replaces it and refuses to install unless 008 and 011 are already present.
+
+### Stage D — data corrections
+
+First run `statement_catalog_corrections_preflight.sql` (needs C6). Require
+every row **READY** and the summary **PROCEED**; a single **DRIFTED** stops the
+stage.
+
+Then, as three separate actions:
+
+| order | correction | needs | rollback |
+| --- | --- | --- | --- |
+| D1 | `statement_catalog_corrections.sql` — **28 documents**, 0 sets | C6 (014), and D's preflight reading PROCEED | re-run with before/after swapped, from the manifest |
+| D2 | `statement_southern_mississippi_typography_options.sql` — **1 document**, the 29th | C2 (010) | set both arrays null and restore the one `other_instructions` entry |
+| D3 | `statement_school_name_corrections.sql` — **2 rows** on `public.schools` | **Stage B must already be deployed** — see §8 | re-run with the names swapped |
+
+**28 and 29 are not interchangeable.** D1 is the normalization package; D2 is an
+additional, separate document operation on its own prerequisite.
+
+### Stage E — DATABASE POSTCHECK, before any capability is enabled
+
+Run `statement_v2_rollout_postcheck.sql`. Require **0 FAIL**, and specifically:
+
+* every promised column exists with the promised type;
+* only the two intended columns are NOT NULL, and each has a default;
+* every promised constraint exists **and says what it should**, by definition;
+* the promotion RPC exists exactly once, with its unchanged signature, SECURITY
+  DEFINER, an empty `search_path`, and EXECUTE granted to `service_role` only;
+* that RPC is **evidence-aware** — its body writes `evidence_kind`, which is
+  what distinguishes it from the withdrawn 009;
+* `anon` holds SELECT on the catalog only and no write anywhere, and RLS is
+  still enabled on all four tables;
+* the catalog is still **63 sets / 80 documents**;
+* **every set is still inactive**;
+* the corrections are present — both school names, Southern Mississippi's two
+  canonically sorted arrays, exactly two `apa-7` documents, no row carrying
+  `unenforced_length` beside a bound, and the three deferred prose documents
+  still carrying theirs;
+* South Dakota is still `needs-review`;
+* 016's bound is 30,000, 30,001 is refused, and no essay was rewritten.
+
+**IF THIS FAILS, STOP WITH ALL TEN CAPABILITIES STILL OFF.** That is the whole
+point of the ordering: a flag must never be the thing that discovers a bad
+migration, because switching one on is what makes a wrong column reach an
+applicant.
+
+### Stage F — capability enablement, in groups, with a smoke check after each
+
+Derived from the code, not from the order these were written; §6 explains why
+`STATEMENT_REQUIREMENTS` leads and why the evidence flag sits with the
+requirement group.
+
+**ANY FAILING SMOKE CHECK: TURN THAT GROUP BACK OFF AND STOP.** Turning one off
+never loses data.
+
+| group | flags | smoke check |
+| --- | --- | --- |
+| **F1** | `STATEMENT_REQUIREMENTS` | the requirements endpoint answers instead of `disabled`; **and because every set is still inactive it exposes no catalog content publicly — verify that before going on** |
+| **F2** | `STATEMENT_TYPOGRAPHY_OPTIONS`, `STATEMENT_FORMAT_PROFILE`, `STATEMENT_SUBMISSION_EVIDENCE` | Cedar Crest and New Mexico State read `apa-7`; Southern Mississippi offers both faces and both sizes with no single required value; Keiser still claims **no** profile; a set published from an approved submission reads as admin-approved rather than as an official source |
+| **F3** | `STATEMENT_EDITOR_DOCUMENTS`, `STATEMENT_DOCUMENT_FONT` | plain text saves; Bold saves and survives reopen; a font choice saves and survives reopen; and none of the three moves the analysis fingerprint |
+| **F4** | `STATEMENT_PROMPT_SUBMISSIONS` first, then `STATEMENT_SUBMISSION_FIELDS` and `STATEMENT_PROMPT_CHANGE_REPORTS` | a new prompt can be submitted, reviewed and promoted; a changed-prompt report can be filed and linked; replacement no longer refuses with `needs-012` |
+| **F5** | `STATEMENT_ANALYSIS_CACHE` | **separate, and last.** This is the flag that turns Analyze from an intentional 503 into a working, billable feature — AI-QA-005. Enable only after Stage E passed and the deployed code is confirmed current. Then one controlled analysis on one draft: it validates, it is stored, an identical second request is a cache hit with no model call, and **no catalog set is activated to do it** |
+
+### Stage G — catalog activation
+
+**A completely separate, owner-approved action, and the last one.**
+`is_active` must still be `false` for all 63 sets right up to this point.
+Activation is **not** bundled with Stage F and must not be performed in the same
+sitting without a fresh decision.
+
+It is the only step an applicant can observe, and it is reversible by one
+UPDATE.
+
+## 8. The school-name correction, and the URL it moves
+
+`/schools/{slug}` is derived from `schools.name` and is published in
+`app/sitemap.ts`, so correcting a name **moves an indexed URL**.
+
+* **Today** `/schools/ceder-crest` serves normally and must not redirect —
+  verified in the browser against production data.
+* **After D3** the old URL must answer a **permanent redirect (308)** to
+  `/schools/cedar-crest-college`, which must itself serve and must not redirect
+  again.
+* **The sitemap must then publish only the new canonical URL.** It is built from
+  `buildSlugMap` over the live directory and never consults the alias table, so
+  it emits one address per school in both states.
+
+> **STAGE B MUST BE DEPLOYED BEFORE D3.** The rename is applied in the SQL
+> editor and the redirect ships in a build, so the two cannot be swapped
+> together. Run the SQL first and `/schools/ceder-crest` 404s for every search
+> result and saved link until the next deploy.
+
+The alias is safe before, during and after, because it consults the live slug
+map first and redirects only once the old slug is genuinely gone.
+
+**Saint Mary's is a data correction with no slug move.** `slugifySchoolName`
+strips apostrophes, so "Saint Marys University of Minnesota" and "Saint Mary's
+University of Minnesota" both yield `saint-marys-university-of-minnesota`. It
+needs no alias and deliberately has none.
+
+## 9. Notes that outlive this rollout
 
 **Numbering has not been reused.** 013, 014 and 015 are new numbers for new
 work; nothing earlier was renumbered or rewritten to make room for them. 009 is
