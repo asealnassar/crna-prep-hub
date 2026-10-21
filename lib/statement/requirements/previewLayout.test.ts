@@ -134,7 +134,10 @@ test('BOTH ARMS USE THE SAME CONTAINER, so centring and padding cannot diverge',
 test('WITHOUT THE PARAMETER THE APPROVED LAYOUT IS THE ORIGINAL MARKUP', () => {
   // Not a reconstruction of it: the hero, the steps and the library are still
   // the same elements, inside the false arm.
-  for (const landmark of ['DeskScene', 'visible.map(', 'STEPS.map(', 'draftTally(']) {
+  // stepsFor(analysisOffer) replaced the STEPS constant when the feature card
+  // stopped hardcoding that analysis was unbuilt (WK-QA-001). Still the same
+  // element in the same arm; only the source of its data changed.
+  for (const landmark of ['DeskScene', 'visible.map(', 'stepsFor(analysisOffer).map(', 'draftTally(']) {
     assert.ok(LIBRARY.includes(landmark), landmark)
   }
   assert.equal((LIBRARY.match(/<h1/g) ?? []).length, 1, 'one page title')

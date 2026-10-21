@@ -14,6 +14,10 @@ import {
   orderDrafts,
   type DraftOrder,
 } from '@/lib/statement/draft/library'
+import {
+  ANALYSIS_LIBRARY_NOTICE, ANALYSIS_STEP_BODY, analysisStepIsLive,
+  type AnalysisOffer,
+} from '@/lib/statement/draft/reviewAccess'
 import { useSidebarCollapsed } from '@/lib/SidebarContext'
 import NewDraftDialog from './NewDraftDialog'
 import CatalogReview, { type CatalogReviewProps } from './CatalogReview'
@@ -55,6 +59,7 @@ import RequirementPreview from './RequirementPreview'
  * claimed upload was unwired, which stopped being true when upload shipped.
  */
 export default function LibraryClient({
+  analysisOffer,
   drafts,
   schools,
   schoolsUnavailable,
@@ -64,6 +69,11 @@ export default function LibraryClient({
   fixturesPreview = false,
   reviewCatalog = null,
 }: {
+  /**
+   * Whether analysis is offered, withheld by plan, or switched off -- decided on
+   * the server from the plan and the capability, never re-derived here.
+   */
+  analysisOffer: AnalysisOffer
   drafts: readonly StatementDraftSummary[]
   /** The directory, three columns, read on the server after the gate. */
   schools: readonly SchoolOption[]
@@ -237,10 +247,7 @@ python3 scripts/build_statement_requirements_import_sql.py
             <span aria-hidden="true" className="text-slate-300">
               &middot;
             </span>
-            <span>
-              Visible to administrators only. Drafting and document upload are live; the AI
-              analyzer is not available yet.
-            </span>
+            <span>{ANALYSIS_LIBRARY_NOTICE[analysisOffer]}</span>
           </p>
 
           {/* ==================================================== how it works */}
@@ -252,7 +259,7 @@ python3 scripts/build_statement_requirements_import_sql.py
               How Statement Studio works
             </h2>
             <ol className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-              {STEPS.map((step, index) => (
+              {stepsFor(analysisOffer).map((step, index) => (
                 <li
                   key={step.title}
                   className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-blue-200 hover:shadow-md"
@@ -452,36 +459,39 @@ python3 scripts/build_statement_requirements_import_sql.py
  * programmes is not doing it wrong, and a card that said "choose your school"
  * would tell them they were.
  *
- * `available` IS WHAT SEPARATES TODAY FROM LATER. Drafting and upload are
- * built; the analyser is not. Rather than say "coming soon" twice, the third
- * card's own sentence says it and its icon tile is muted, so the difference is
- * legible before the sentence is read.
+ * `available` IS WHAT SEPARATES REACHABLE FROM SWITCHED OFF, and it is derived
+ * rather than written down. The third card hardcoded "Coming soon." with
+ * available: false, which outlived the analyser being built (WK-QA-001). Both
+ * now come from the server's verdict, so the tile is muted only when nobody can
+ * run an analysis -- not merely when this viewer's plan excludes it.
  */
-const STEPS: readonly {
+function stepsFor(offer: AnalysisOffer): readonly {
   readonly title: string
   readonly body: string
   readonly available: boolean
   readonly Icon: () => ReactElement
-}[] = [
-  {
-    title: 'Choose your path',
-    body: 'Select a CRNA school and its prompt, or start a general statement.',
-    available: true,
-    Icon: PathIcon,
-  },
-  {
-    title: 'Write your story',
-    body: 'Create your draft, write your personal statement, or upload an existing document.',
-    available: true,
-    Icon: PenIcon,
-  },
-  {
-    title: 'Analyze & improve',
-    body: 'Get personalized AI feedback to strengthen your statement. Coming soon.',
-    available: false,
-    Icon: FeedbackIcon,
-  },
-]
+}[] {
+  return [
+    {
+      title: 'Choose your path',
+      body: 'Select a CRNA school and its prompt, or start a general statement.',
+      available: true,
+      Icon: PathIcon,
+    },
+    {
+      title: 'Write your story',
+      body: 'Create your draft, write your personal statement, or upload an existing document.',
+      available: true,
+      Icon: PenIcon,
+    },
+    {
+      title: 'Analyze & improve',
+      body: ANALYSIS_STEP_BODY[offer],
+      available: analysisStepIsLive(offer),
+      Icon: FeedbackIcon,
+    },
+  ]
+}
 
 /**
  * The hero artwork: a writing desk, drawn as vectors.

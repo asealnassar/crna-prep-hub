@@ -38,7 +38,8 @@ import {
   reviewOutcomeFrom, type ReviewResult,
 } from '@/lib/statement/draft/reviewClient'
 import {
-  ANALYSIS_ACTION_LABELS, ANALYSIS_NO_CACHE_NOTICE, ANALYSIS_TIER_MESSAGE,
+  ANALYSIS_ACTION_LABELS, ANALYSIS_NO_CACHE_NOTICE, ANALYSIS_PREVIEW_NOTICE,
+  ANALYSIS_TIER_MESSAGE, analysisOffer,
   LOCAL_REAL_AI_NOTICE, LOCAL_REAL_AI_WARNING,
   ANALYSIS_UNAVAILABLE_MESSAGE, type AnalysisAction, type AnalysisAvailability,
 } from '@/lib/statement/draft/reviewAccess'
@@ -1498,6 +1499,11 @@ export default function StatementStudioClient({
   const limit = requirement?.constraints.words != null
     ? null
     : wordLimitProgress({ words, statedMaxWords: prompt.statedMaxWords })
+  /** The banner's claim about analysis, from the plan and the capability. */
+  const previewOffer = analysisOffer({
+    allowed: analysisAllowed,
+    availability: analysisAvailable,
+  })
   /** The saved snapshot's school, named from the directory the server sent. */
   const promptSchool = schoolNameFor(schools, prompt.schoolId)
   const hasPrompt = prompt.promptText !== null
@@ -1840,15 +1846,13 @@ export default function StatementStudioClient({
         </header>
 
         <div className="mx-auto w-full max-w-[1600px] px-4 pb-16 pt-5 sm:px-6 lg:px-8">
-          {/* ACCURATE ABOUT WHAT IS BUILT. Drafting and document import both
-              work; the analyser does not exist yet. The previous wording said
-              upload was unwired, which stopped being true when upload shipped. */}
+          {/* DERIVED, NOT WRITTEN DOWN. This sentence hardcoded "the AI analyzer
+              is not built yet" and kept saying it above a working analysis
+              (WK-QA-001). reviewAccess owns the wording for all three surfaces. */}
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-2.5 text-xs text-slate-700">
             <span className="font-semibold text-slate-900">Internal preview</span>
             <span aria-hidden="true" className="text-slate-300">·</span>
-            <span>
-              Drafting and document import are available. The AI analyzer is not built yet.
-            </span>
+            <span>{ANALYSIS_PREVIEW_NOTICE[previewOffer]}</span>
           </p>
 
           {/* ------------------------------------- messages, above both columns */}

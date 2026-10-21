@@ -4,7 +4,10 @@ import { authenticateRequest, isAdminEmail, readAccessToken } from '@/lib/apiAut
 import { statementStudioAccess, statementStudioMode } from '@/lib/statement/studioGate'
 import { listDrafts } from '@/lib/statement/draft/draftRepo'
 import { listSchoolPickerOptions } from '@/lib/statement/draft/schoolPicker'
-import { promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
+import { analysisCacheEnabled, promptSubmissionsEnabled } from '@/lib/statement/draft/rollout'
+import {
+  analysisAvailability, analysisOffer, canAnalyzeStatement,
+} from '@/lib/statement/draft/reviewAccess'
 import {
   PASTE_PREVIEW_PARAM, fixturesPreviewRequested, pastePreviewAllowed,
   pastePreviewRequested, requirementsPreviewRequested,
@@ -165,8 +168,20 @@ export default async function StatementStudioLibraryPage({
 
   // Newest edit first, exactly as the repository ordered it. The client does not
   // re-sort: one ordering, decided by the index that serves the query.
+  //
+  // WHAT THE LIBRARY MAY SAY ABOUT ANALYSIS IS DECIDED HERE, on the server, from
+  // the plan and the capability -- the same two facts the analyse route gates on.
+  // The client is handed the verdict rather than the inputs, so it has no second
+  // reading of the environment to disagree with. WK-QA-001.
   return (
     <LibraryClient
+      analysisOffer={analysisOffer({
+        allowed: canAnalyzeStatement(auth.tier),
+        availability: analysisAvailability({
+          cacheEnabled: analysisCacheEnabled(),
+          nodeEnv: process.env.NODE_ENV,
+        }),
+      })}
       drafts={listed.value}
       schools={schools.ok ? schools.value : []}
       schoolsUnavailable={!schools.ok}

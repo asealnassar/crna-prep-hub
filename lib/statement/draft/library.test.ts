@@ -656,11 +656,12 @@ test('the notice no longer claims that upload is unwired', () => {
   assert.doesNotMatch(LIST, /not wired up/i, 'upload is implemented; do not say otherwise')
   assert.doesNotMatch(LIST, /Analyze this Draft/, 'no control by that name exists in the studio')
   assert.match(LIST, /Internal preview/)
-  assert.match(LIST, /analyzer is not available yet/)
+  // WK-QA-001: the sentence is looked up, not written here.
+  assert.match(LIST, /ANALYSIS_LIBRARY_NOTICE\[analysisOffer\]/)
 })
 
 test('the three steps are data, and every icon is decorative', () => {
-  assert.match(LIST, /STEPS\.map\(/)
+  assert.match(LIST, /stepsFor\(analysisOffer\)\.map\(/)
   for (const step of [
     /title: 'Choose your path'/, /title: 'Write your story'/, /title: 'Analyze & improve'/,
   ]) {
@@ -711,6 +712,13 @@ test('the library pulls in nothing it does not need', () => {
     './RequirementPreview',
     '@/lib/SidebarContext',
     '@/lib/statement/draft/library',
+    // AND A THIRD, WHICH IS THE POINT OF WK-QA-001. reviewAccess owns the
+    // wording for what the Studio may claim about analysis, so the library
+    // reads it instead of hardcoding "the AI analyzer is not available yet".
+    // It is pure TypeScript and already in the editor's bundle -- the module
+    // says so at the top and keeps node:crypto next door for that reason -- so
+    // it adds no runtime dependency here either.
+    '@/lib/statement/draft/reviewAccess',
     '@/lib/statement/draft/rows',
     '@/lib/statement/draft/schoolPicker',
     'next/link',
@@ -1127,15 +1135,17 @@ test('the first card offers a general statement as an equal choice', () => {
   assert.doesNotMatch(LIST, /You must (choose|select) a school|Choose your school first/)
 })
 
-test('the third card is marked as not built yet, in words and in styling', () => {
-  // Two signals, because the sentence is the last thing read on the card.
-  assert.match(LIST, /Coming soon\./, 'the sentence says so')
-  assert.match(LIST, /available: false/, 'and the card is flagged as unbuilt')
+test('the third card takes both its sentence and its styling from the verdict', () => {
+  // WK-QA-001. This test used to REQUIRE "Coming soon." and available: false,
+  // which is how the card kept saying the analyser did not exist after it
+  // shipped. Both now come from the server's verdict.
+  assert.match(LIST, /body: ANALYSIS_STEP_BODY\[offer\]/, 'the sentence is looked up')
+  assert.match(LIST, /available: analysisStepIsLive\(offer\)/, 'and so is the styling')
   assert.match(LIST, /step\.available \? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-400'/)
 
-  // Exactly one of the three is unbuilt: drafting and upload both ship today.
+  // The first two steps ship unconditionally; only the third is conditional.
   assert.equal(countOf(LIST, /available: true/g), 2)
-  assert.equal(countOf(LIST, /available: false/g), 1)
+  assert.equal(countOf(LIST, /available: false/g), 0, 'no card is hardcoded as unbuilt')
 })
 
 test('the cards describe the creation flow, not the one that preceded it', () => {

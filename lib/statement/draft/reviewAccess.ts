@@ -181,3 +181,84 @@ export const LOCAL_REAL_AI_WARNING =
 
 export const ANALYSIS_NO_CACHE_NOTICE =
   'Development mode: results are not stored, so every analysis is a new request.'
+
+// ---------------------------------------------------------------------------
+// What the applicant-facing surfaces may claim about analysis
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether analysis is offered, withheld by plan, or switched off.
+ *
+ * ONE DERIVATION FOR THREE SURFACES. WK-QA-001: the editor banner, the library
+ * notice and the library feature card each hardcoded that the analyser did not
+ * exist -- "not built yet", "not available yet", "Coming soon." -- and that
+ * claim outlived the analyser being built. The authenticated WebKit pass found
+ * the editor telling an applicant the feature was not built directly above a
+ * rendered seven-category analysis. Because each sentence was a literal, no
+ * capability flag could correct it, and all three were guaranteed to be wrong
+ * the moment analysis was enabled.
+ *
+ * NOT A SECOND READING OF THE ENVIRONMENT. The two inputs are exactly the facts
+ * the route gates on -- canAnalyzeStatement() for the plan and
+ * analysisAvailability() for the capability -- resolved on the server and handed
+ * down as props. Nothing here touches process.env, so the interface cannot come
+ * to a different conclusion than the route about whether analysis can happen.
+ *
+ * CAPABILITY OUTRANKS PLAN FOR THIS ONE QUESTION. When analysis is switched off
+ * for everybody, naming the plan that includes it would advertise something
+ * nobody can currently run. This does not change the analysis panel's own
+ * ordering: that answers "may THIS viewer analyse", which is a different
+ * question with a different right answer.
+ */
+export type AnalysisOffer = 'offered' | 'needs-plan' | 'unavailable'
+
+export function analysisOffer(input: {
+  readonly allowed: boolean
+  readonly availability: AnalysisAvailability
+}): AnalysisOffer {
+  if (input.availability === 'unavailable') return 'unavailable'
+  return input.allowed ? 'offered' : 'needs-plan'
+}
+
+/**
+ * The editor's internal-preview banner.
+ *
+ * NEVER CLAIMS THE FEATURE DOES NOT EXIST. 'unavailable' says analysis is off
+ * right now, which is both true and reversible; "not built yet" made a claim
+ * about the product that stopped being true and could not be unsaid by a flag.
+ */
+export const ANALYSIS_PREVIEW_NOTICE: Readonly<Record<AnalysisOffer, string>> = {
+  offered: 'Drafting, document import and AI analysis are available.',
+  'needs-plan':
+    'Drafting and document import are available. AI analysis is included with Ultimate.',
+  unavailable:
+    'Drafting and document import are available. AI analysis is currently unavailable.',
+}
+
+/** The library's equivalent notice, which also names who can see the page. */
+export const ANALYSIS_LIBRARY_NOTICE: Readonly<Record<AnalysisOffer, string>> = {
+  offered:
+    'Visible to administrators only. Drafting, document upload and AI analysis are live.',
+  'needs-plan':
+    'Visible to administrators only. Drafting and document upload are live; AI analysis is included with Ultimate.',
+  unavailable:
+    'Visible to administrators only. Drafting and document upload are live; AI analysis is currently unavailable.',
+}
+
+/**
+ * The third step on the library's explainer, and whether its tile reads as live.
+ *
+ * `live` is false ONLY when the capability is off, because that is the one state
+ * in which nobody can reach the step. A viewer on the wrong plan is looking at a
+ * feature that exists and works, so muting it would repeat the original lie in
+ * styling instead of words.
+ */
+export const ANALYSIS_STEP_BODY: Readonly<Record<AnalysisOffer, string>> = {
+  offered: 'Get personalized AI feedback to strengthen your statement.',
+  'needs-plan':
+    'Get personalized AI feedback to strengthen your statement, included with Ultimate.',
+  unavailable:
+    'Get personalized AI feedback to strengthen your statement. Currently unavailable.',
+}
+
+export const analysisStepIsLive = (offer: AnalysisOffer): boolean => offer !== 'unavailable'

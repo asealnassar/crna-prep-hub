@@ -27,3 +27,7 @@ local-review/
 # generated, hashed per build, and have never been tracked.
 public/sw.js
 public/workbox-*.js
+
+# Playwright writes run artefacts here; the parity spec needs none of them kept.
+test-results/
+playwright-report/

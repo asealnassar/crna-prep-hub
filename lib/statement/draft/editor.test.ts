@@ -2188,12 +2188,17 @@ test('the import control is still reachable by keyboard', () => {
   assert.match(CLIENT, /accept=\{ACCEPT_ATTRIBUTE\}/)
 })
 
-test('the banner says what is actually built', () => {
-  // Import shipped; the analyser did not. The old wording claimed the opposite
-  // about upload.
+test('the banner reads its claim about analysis rather than stating one', () => {
+  // WK-QA-001. This test used to REQUIRE the sentence "AI analyzer is not built
+  // yet", which is how a false claim survived the analyser shipping. The banner
+  // now renders whatever reviewAccess says for the server's verdict, so there is
+  // no literal here to go stale.
   assert.doesNotMatch(CLIENT, /not wired up/i)
-  assert.match(CLIENT, /Drafting and document import are available/)
-  assert.match(CLIENT, /AI analyzer is not built yet/)
+  assert.match(CLIENT, /ANALYSIS_PREVIEW_NOTICE\[previewOffer\]/)
+  assert.match(CLIENT, /const previewOffer = analysisOffer\(\{/)
+  // Derived from the two props the server computed; no env read in the client.
+  assert.match(CLIENT, /allowed: analysisAllowed/)
+  assert.match(CLIENT, /availability: analysisAvailable/)
 })
 
 test('the analyzer is a real action now, and the placeholder is gone', () => {

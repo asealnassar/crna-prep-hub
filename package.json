@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test --experimental-test-module-mocks --import ./test/register.mjs \"lib/**/*.test.ts\" \"app/api/**/*.test.ts\""
+    "test": "node --test --experimental-test-module-mocks --import ./test/register.mjs \"lib/**/*.test.ts\" \"app/api/**/*.test.ts\"",
+    "test:parity": "playwright test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.14.1",
@@ -45,6 +46,7 @@
     "tailwindcss": "^3.4.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^20.11.5",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
