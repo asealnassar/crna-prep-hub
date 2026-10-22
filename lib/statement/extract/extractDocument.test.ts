@@ -338,20 +338,40 @@ test('document: NO refusal carries document text or internal diagnostics', async
 // Cancellation
 // ===================================================================
 
-test('document: an aborted PDF extraction is reported as cancelled', async () => {
+test('document: a PDF extraction cancelled after it started is reported as cancelled', async () => {
+  /*
+    NO WALL-CLOCK BET. This test used to arm `setTimeout(abort, 20)` and rely on
+    a 4MB extraction not finishing within 20ms. That is not a contract the
+    product makes: the same fixture extracts COMPLETELY in about 500ms and is
+    then refused for length, so whenever the timer lost the race the result was
+    a perfectly correct `text-too-long` and the assertion on `code` failed --
+    intermittently, and only ever under full-suite load.
+
+    The abort is now ordered against the WORK rather than against a clock. The
+    call is started, one macrotask is yielded so admission and worker spawn have
+    happened, and the abort is then raised directly. requestStop() latches the
+    outcome on the first stop it is given and extractInWorker's late-success
+    gate rejects anything that arrives afterwards, so once the abort is raised
+    the verdict is settled no matter how fast the worker is.
+
+    Deterministic in-flight cancellation of a RUNNING, unyielding worker is
+    covered in extractStatementPdf.test.ts using the stall hook, which this
+    layer deliberately cannot reach.
+  */
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 20)
-  try {
-    const r = await extractDocument(loadPdf(MB4_PDF), {
-      capacity: gate(),
-      signal: controller.signal,
-    })
-    assert.equal(r.ok, false)
-    if (r.ok) return
-    assert.equal(r.code, 'cancelled')
-  } finally {
-    clearTimeout(timer)
-  }
+  const pending = extractDocument(loadPdf(MB4_PDF), {
+    capacity: gate(),
+    signal: controller.signal,
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  controller.abort()
+
+  const r = await pending
+  assert.equal(r.ok, false, 'a cancelled extraction must never be a success')
+  if (r.ok) return
+  assert.equal(r.code, 'cancelled')
+  // No text may ride along on a cancellation, whatever the worker had read.
+  assert.equal('text' in r, false)
 })
 
 test('document: an already-aborted signal is honoured', async () => {

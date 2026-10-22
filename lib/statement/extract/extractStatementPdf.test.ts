@@ -155,25 +155,64 @@ test('extract: no failure result carries document text or parser text', async ()
 })
 
 test('extract: an aborted extraction is reported as cancelled', async () => {
+  /*
+    ORDERED AGAINST THE WORK, NOT A CLOCK. This used to abort on a 20ms timer
+    and depend on a 4MB document not being finished by then. At this layer the
+    same fixture SUCCEEDS in about 500ms -- there is no length ceiling here --
+    so a lost race produced `ok: true` and failed the assertion intermittently.
+    Yielding one macrotask and then aborting makes the stop the first one
+    recorded, which requestStop() latches and the late-success gate enforces.
+  */
   const controller = new AbortController()
-  // Abort while the large document is still being read.
-  const timer = setTimeout(() => controller.abort(), 20)
-  try {
-    const r = await extractStatementPdf(loadStatement(MB4), {
-      deadlineMs: ROOMY_MS,
-      signal: controller.signal,
-    })
+  const pending = extractStatementPdf(loadStatement(MB4), {
+    deadlineMs: ROOMY_MS,
+    signal: controller.signal,
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  controller.abort()
 
-    assert.equal(r.ok, false)
-    if (r.ok) return
-    assert.equal(r.kind, 'cancelled')
-    assert.equal(r.detail, 'caller-aborted')
-    // Cancellation must still end in a confirmed exit.
-    assert.equal(r.workerExitConfirmed, true)
-    assert.equal(r.withinBudget, true)
-  } finally {
-    clearTimeout(timer)
-  }
+  const r = await pending
+  assert.equal(r.ok, false)
+  if (r.ok) return
+  assert.equal(r.kind, 'cancelled')
+  assert.equal(r.detail, 'caller-aborted')
+  // Cancellation must still end in a confirmed exit.
+  assert.equal(r.workerExitConfirmed, true)
+  assert.equal(r.withinBudget, true)
+})
+
+test('extract: a RUNNING worker that cannot cooperate is still cancelled', async () => {
+  /*
+    THE ONE CASE A MACROTASK CANNOT ESTABLISH: a worker that has genuinely
+    started and is refusing to yield. `stallMs` with `allowTestStall` makes the
+    worker busy-wait at entry -- unyieldingly, so it cannot even receive the
+    cancel message -- which means the extraction provably has not completed
+    when the abort is raised. The stop must therefore come from forced
+    termination, and it must still be confirmed.
+
+    Gated twice inside the worker and never forwarded by any route, so this
+    control cannot be reached in production.
+  */
+  const controller = new AbortController()
+  const pending = extractInWorker(loadStatement(MB4), {
+    deadlineMs: ROOMY_MS,
+    stallMs: 3_000,
+    allowTestStall: true,
+    signal: controller.signal,
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  controller.abort()
+
+  const r = await pending
+  assert.equal(r.ok, false, 'an aborted extraction must never be a success')
+  if (r.ok) return
+  assert.equal(r.reason, 'aborted')
+  // The thread was force-killed, and that still has to be provable.
+  assert.equal(r.termination.cleanupConfirmed, true)
+  assert.equal(r.withinBudget, true)
+  // The stall is far longer than the real extraction, so a result that came
+  // back this fast cannot have been a completed parse.
+  assert.ok(r.elapsedMs < 3_000, `took ${r.elapsedMs}ms, which is a completed stall`)
 })
 
 test('extract: an already-aborted signal is honoured before any work', async () => {
@@ -242,23 +281,26 @@ test('extract: concurrent extractions are independent', async () => {
 })
 
 test('extract: cancelling one extraction does not disturb a concurrent one', async () => {
+  // Same correction as above: the victim's abort is ordered after one macrotask
+  // rather than on a 15ms timer, so which extraction wins the race cannot
+  // decide whether this test passes.
   const victim = new AbortController()
-  const timer = setTimeout(() => victim.abort(), 15)
-  try {
-    const [cancelled, survivor] = await Promise.all([
-      extractStatementPdf(loadStatement(MB4), { deadlineMs: ROOMY_MS, signal: victim.signal }),
-      extractStatementPdf(loadStatement(SMALL), { deadlineMs: ROOMY_MS }),
-    ])
+  const victimRun = extractStatementPdf(loadStatement(MB4), {
+    deadlineMs: ROOMY_MS,
+    signal: victim.signal,
+  })
+  const survivorRun = extractStatementPdf(loadStatement(SMALL), { deadlineMs: ROOMY_MS })
+  await new Promise((resolve) => setImmediate(resolve))
+  victim.abort()
 
-    assert.equal(cancelled.ok, false)
-    if (!cancelled.ok) assert.equal(cancelled.kind, 'cancelled')
-    // THE NEIGHBOUR IS UNTOUCHED. One call's termination closes over its own
-    // handle; there is no registry to look the wrong one up in.
-    assert.equal(survivor.ok, true, 'the concurrent extraction was disturbed')
-    if (survivor.ok) assert.equal(survivor.numPages, 4)
-  } finally {
-    clearTimeout(timer)
-  }
+  const [cancelled, survivor] = await Promise.all([victimRun, survivorRun])
+
+  assert.equal(cancelled.ok, false)
+  if (!cancelled.ok) assert.equal(cancelled.kind, 'cancelled')
+  // THE NEIGHBOUR IS UNTOUCHED. One call's termination closes over its own
+  // handle; there is no registry to look the wrong one up in.
+  assert.equal(survivor.ok, true, 'the concurrent extraction was disturbed')
+  if (survivor.ok) assert.equal(survivor.numPages, 4)
 })
 
 test('extract: an over-ceiling deadline is clamped, never honoured as given', async () => {
