@@ -394,9 +394,20 @@ python3 scripts/build_statement_requirements_import_sql.py
                 </button>
               </div>
             ) : (
-              <ul className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+              /* grid-cols-1 IS LOAD-BEARING, NOT TIDYING. WK-QA-003: below `sm`
+                 there was no explicit column, so the single implicit track was
+                 `auto`, whose minimum is the grid ITEM's min-content -- and the
+                 title's `truncate` sets white-space: nowrap, which makes
+                 min-content the whole untruncated title. A 200-character title
+                 therefore stretched the card to 2,160px inside a 375px
+                 viewport and the page scrolled sideways. grid-cols-1 resolves
+                 the track to repeat(1, minmax(0, 1fr)), which is why sm: and
+                 xl: never showed the bug: their minmax(0, 1fr) already did
+                 this above 640px. min-w-0 on the item relaxes the same
+                 automatic minimum one level in. */
+              <ul className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
                 {visible.map((draft) => (
-                  <li key={draft.id}>
+                  <li key={draft.id} className="min-w-0">
                     <Link
                       href={draftPath(draft.id)}
                       className="group flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
