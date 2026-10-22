@@ -91,6 +91,48 @@ const round3 = (ms: number): number => Math.round(ms * 1000) / 1000
 /** Why an operation stopped, as recorded internally. */
 export type StopReason = 'deadline' | 'aborted' | 'cancelled' | 'error' | 'worker-error' | 'exited'
 
+/**
+ * A RECORDED STOP OUTRANKS ANY LATER CLASSIFICATION. EX-QA-001.
+ *
+ * ---------------------------------------------------------------------------
+ * THE BUG THIS EXISTS TO MAKE IMPOSSIBLE
+ * ---------------------------------------------------------------------------
+ * requestStop() latches `outcome` once and the comment on judgeSuccess says it
+ * "cannot be overturned by a later success". That held for successes. It did
+ * not hold for errors: two of the three failure paths resolved their reason
+ * without consulting the ledger at all.
+ *
+ *   worker message error:  msg.cancelled ? (outcome ?? 'cancelled') : 'error'
+ *   worker thread error:   'worker-error'
+ *   worker exit:           outcome ?? 'exited'          <- the only correct one
+ *
+ * So an abort raised mid-parse, where pdf.js then threw something that is not a
+ * Cancelled instance, reported `cancelled: false`; the first line above
+ * discarded the latched 'aborted' and returned 'error'; classifyFailure matched
+ * no known parser-error name and returned malformed/parser-error. Measured in
+ * the full suite: an applicant who cancelled an upload was told their document
+ * was unreadable. One failure in five full-suite runs.
+ *
+ * ---------------------------------------------------------------------------
+ * THE RULE, IN ONE PLACE
+ * ---------------------------------------------------------------------------
+ * If a stop was recorded, that is the reason. Only when nothing was recorded
+ * does the event get to classify itself -- which is what keeps a genuine parser
+ * error on a genuinely malformed document reporting as malformed.
+ *
+ * It is a function rather than three inline ternaries because a rule stated
+ * three times is a rule that can disagree with itself, and because this way it
+ * can be tested directly instead of through a race.
+ */
+export function stopReasonFor(input: {
+  /** The ledger: what requestStop() latched, or null if nothing stopped. */
+  readonly recorded: string | null
+  /** What this event would call itself, with no stop recorded. */
+  readonly fallback: StopReason
+}): string {
+  return input.recorded ?? input.fallback
+}
+
 export interface SuccessVerdict {
   readonly accepted: boolean
   readonly reason: string | null
@@ -699,7 +741,12 @@ export function extractInWorker(
       if (msg?.type === 'error') {
         void finish({
           ok: false,
-          reason: msg.cancelled ? (outcome ?? 'cancelled') : 'error',
+          // The ledger first. `msg.cancelled` only decides what this event
+          // would have called itself had nothing been recorded.
+          reason: stopReasonFor({
+            recorded: outcome,
+            fallback: msg.cancelled ? 'cancelled' : 'error',
+          }),
           errorName: msg.name as string,
           errorMessage: msg.message as string,
           // It stopped when asked, so the fallback was not needed.
@@ -712,7 +759,7 @@ export function extractInWorker(
       mark('parent:worker-error', now())
       void finish({
         ok: false,
-        reason: 'worker-error',
+        reason: stopReasonFor({ recorded: outcome, fallback: 'worker-error' }),
         errorName: error?.name ?? 'Error',
         errorMessage: safeMessage(error),
         terminatedForcibly: false,
@@ -725,7 +772,12 @@ export function extractInWorker(
       workerExited = true
       workerExitCode = code
       mark('parent:worker-exit', now(), { code })
-      void finish({ ok: false, reason: outcome ?? 'exited', exitCode: code, terminatedForcibly: false })
+      void finish({
+        ok: false,
+        reason: stopReasonFor({ recorded: outcome, fallback: 'exited' }),
+        exitCode: code,
+        terminatedForcibly: false,
+      })
     })
   })
 }
