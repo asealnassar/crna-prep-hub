@@ -246,19 +246,51 @@ test('THE ROLLOUT ORDER IS STAGED, AND THE STAGES ARE IN THIS ORDER', () => {
     return index
   }
 
+  /*
+   * THE CHRONOLOGY, NOT THE NUMBERING. An earlier draft called the two
+   * preflights A1 and A2 while placing A2 after C0, so the document described
+   * a stage that was both first and fifth. Stage A is the FOUNDATION preflight
+   * and nothing else; the V2 preflight is the gate that closes C0 and lives in
+   * C0-V. These positions are asserted so that contradiction cannot return.
+   *
+   * STAGE C0 EXISTS BECAUSE 008 CANNOT BE FIRST. The production Stage A
+   * reconciliation on 2026-10-22 found 20261002_000..003 had never been
+   * applied, and 008 and 012 add columns to the table 000 creates while 017
+   * reads it. The foundation therefore precedes the V2 schema.
+   */
+  const preflight = at('Stage A — foundation preflight')
   const deploy = at('Stage B — deploy the compatible code')
-  const schema = at('Stage C — schema, in this order')
+  const foundation = at('Stage C0 — the prompt-submission foundation')
+  const verify = at('Stage C0-V — foundation verification, and the V2 gate')
+  const schema = at('Stage C1 — Statement Studio V2 schema, in this order')
   const corrections = at('Stage D — data corrections')
   const postcheck = at('Stage E — DATABASE POSTCHECK, before any capability is enabled')
   const flags = at('Stage F — capability enablement')
   const activation = at('Stage G — catalog activation')
 
-  assert.ok(at('Stage A — read-only preflight') < deploy, 'preflight after the deploy')
-  assert.ok(deploy < schema, 'schema before the deploy')
+  // A -> B -> C0 -> C0-V -> C1 -> D -> E -> F -> G, each edge named.
+  assert.ok(preflight < deploy, 'the deploy precedes the foundation preflight')
+  assert.ok(deploy < foundation, 'the foundation migrations precede the deploy')
+  assert.ok(foundation < verify, 'the foundation is verified before it is applied')
+  assert.ok(verify < schema, 'THE V2 SCHEMA BEGINS BEFORE THE FOUNDATION IS VERIFIED')
   assert.ok(schema < corrections, 'corrections before the schema')
   assert.ok(corrections < postcheck, 'the postcheck before the corrections')
   assert.ok(postcheck < flags, 'A CAPABILITY FLAG IS ENABLED BEFORE THE POSTCHECK')
   assert.ok(flags < activation, 'activation before the capabilities')
+
+  /*
+   * EACH PREFLIGHT IS NAMED IN EXACTLY ONE STAGE. The foundation preflight
+   * belongs to A and the V2 preflight to C0-V; naming either in the other
+   * stage is how the A1/A2 contradiction got written in the first place.
+   */
+  const stageA = status.slice(preflight, deploy)
+  const stageC0V = status.slice(verify, schema)
+  assert.match(stageA, /statement_foundation_preflight\.sql/)
+  assert.doesNotMatch(stageA, /statement_v2_rollout_preflight\.sql/,
+    'the V2 preflight is listed in Stage A, which cannot run it')
+  assert.match(stageC0V, /statement_v2_rollout_preflight\.sql/)
+  // C0-V is the gate, so it must demand a clean result in both registers.
+  assert.match(stageC0V, /0 FAIL and 0 WARN/)
 
   // The deploy precedes the rename, and the document says so in words too.
   assert.ok(deploy < at('statement_school_name_corrections.sql'),
@@ -269,6 +301,14 @@ test('THE ROLLOUT ORDER IS STAGED, AND THE STAGES ARE IN THIS ORDER', () => {
   const seventeen = status.slice(at('| C9 | `20261015_017`'), at('| C9 | `20261015_017`') + 200)
   assert.match(seventeen, /C1 \(008\)/)
   assert.match(seventeen, /C3 \(011\)/)
+
+  // The foundation's four are spelled out too, and 003 is last -- it installs
+  // with only 000 present and then fails at run time without 001 and 002.
+  for (const migration of ['20261002_000', '20261002_001', '20261002_002', '20261002_003']) {
+    assert.ok(status.includes(migration), `Stage C0 does not name ${migration}`)
+  }
+  assert.ok(status.indexOf('20261002_003') > status.indexOf('20261002_000'),
+    '003 is listed before 000, which would install a broken RPC')
 
   // Every migration is spelled out as its own step -- no "any order".
   for (const migration of ['20261006_008', '20261008_010', '20261008_011',

@@ -6,7 +6,9 @@ it is applied and they do not get corrected afterwards, so a runbook's own
 wording about state is historical and must not be read as current. Read this
 file instead.
 
-Last reviewed: 2026-10-15. Release-candidate freeze.
+Last reviewed: 2026-10-22. Corrected after the production Stage A
+reconciliation, which found the 20261002_000..003 prompt-submission series
+had never been applied. See §3a.
 
 ---
 
@@ -19,6 +21,7 @@ difference matters.
 | --- | --- |
 | migrations **004 – 007** | **APPLIED** |
 | the original **63-set / 80-document catalog import** | **APPLIED** |
+| migrations **20261002_000 – 003** (prompt submissions) | **NOT APPLIED** — found by the production Stage A reconciliation on 2026-10-22; see §3a |
 | migration **008** | **NOT APPLIED** |
 | migration **009** | **WITHDRAWN — NEVER APPLY** (deleted; see §3) |
 | migrations **010 – 017** | **NOT APPLIED** |
@@ -30,14 +33,21 @@ difference matters.
 | **all ten capability flags** (§6) | **NOT SET** anywhere |
 | **AI analysis** | **intentionally 503** — `STATEMENT_ANALYSIS_CACHE` is off; see AI-QA-005 |
 
-004 through 007 are applied. **007 is applied.** It is in the same uncommitted
-state on this branch as 008 and 010–017, which is a fact about the branch and
-not about the database: do not infer pending-ness from an untracked file.
+004 through 007 are applied. **007 is applied.** Every pending migration file
+— 008, 010–017 and the 20261002_000..003 series — is COMMITTED on this branch
+(`6c18657`), which is a fact about the branch and not about the database: do
+not infer applied-ness from a committed file, and do not infer pending-ness
+from an untracked one. Only this file and a read-only preflight say what
+production holds.
 
 ## 2. Migrations
 
 | migration | production | hard dependency |
 | --- | --- | --- |
+| `20261002_000_statement_prompt_submissions.sql` | **NOT APPLIED** — Stage C0 | — |
+| `20261002_001_statement_draft_prompt_submission.sql` | **NOT APPLIED** — Stage C0 | `statement_drafts.prompt_id`, `.prompt_text` (20260930_001) |
+| `20261002_002_statement_prompts_review_write.sql` | **NOT APPLIED** — Stage C0 | `statement_prompts` (20260930_000) |
+| `20261002_003_statement_prompt_submission_rpcs.sql` | **NOT APPLIED** — Stage C0 | **000 at compile time; 001 and 002 at RUN time** |
 | `20261002_004_statement_analyses.sql` | **APPLIED** | — |
 | `20261002_005_statement_requirements.sql` | **APPLIED** | — |
 | `20261002_006_statement_requirement_length_register.sql` | **APPLIED** | 005 |
@@ -111,6 +121,63 @@ trust either alone:
   unrelated `20260917_009`.
 
 Nothing anywhere in this repository instructs an operator to apply 009.
+
+## 3a. 20261002_000..003 — NOT APPLIED, and how that was missed
+
+**Found by the production Stage A reconciliation on 2026-10-22.** The series
+that creates the prompt-submission foundation had never been applied. The
+production audit returned: no `statement_prompt_submissions` table, 0 of its 16
+columns, 0 of 9 CHECK constraints, 0 of 3 indexes, no RLS, no policies, no
+grants, none of 001's or 002's artifacts on the existing tables, none of 003's
+three RPCs, and no migration-history table. A database-wide relation search for
+`%prompt%submission%` returned nothing, so it was not a naming mismatch. This
+is a clean NEVER-APPLIED state, not a partial or dropped one.
+
+**HOW THE CLAIM GOT IN.** §1 and §2 of this file never listed the series at all.
+The only assertion that it was applied lived in one cell of §6's prerequisite
+column, and `STATEMENT_V2_ACTIVATION_RUNBOOK.md` step 10 contradicted it
+outright — calling the series "a separate decision … not part of this
+activation". An unsubstantiated claim in a prerequisite column outlived the
+document that was supposed to be authoritative about state. Both have been
+corrected; the runbook now points at Stage C0.
+
+A comment inside `20261008_012_statement_prompt_change_reports.sql` (line 99)
+still repeats the old claim in passing. That file is a frozen pending migration
+and the sentence is a comment with no effect on what it does, so it has been
+left byte-identical rather than reopened; it is recorded here instead.
+
+### What the series contains, measured rather than read off the headers
+
+| migration | objects | depends on |
+| --- | --- | --- |
+| 000 | the table (16 columns), 9 CHECKs, 3 indexes, RLS, 2 policies, a column-level SELECT grant on 14 columns to `authenticated`. No foreign keys. Touches no other table | — |
+| 001 | `statement_drafts.prompt_submission_id`, plus `statement_drafts_prompt_source_exclusive` and `statement_drafts_submission_has_text` | `prompt_id` and `prompt_text` from 20260930_001 |
+| 002 | `statement_prompts.origin_submission_id`, `.supersedes_prompt_id`, plus `statement_prompts_supersedes_not_self`. No RLS, policy or grant change | `statement_prompts` from 20260930_000 |
+| 003 | three SECURITY DEFINER RPCs with a pinned `search_path`: `create_statement_draft_with_prompt_submission`, `decide_statement_prompt_submission`, `withdraw_statement_prompt_submission` | **000 to install; 001 and 002 to RUN** |
+
+All four are wrapped in `begin`/`commit`, so a failure rolls back completely and
+leaves nothing half-applied.
+
+**003 IS THE ONE WITH A TRAP, AND IT IS THE 009 TRAP AGAIN.** It installs
+successfully with only 000 present — measured — because PL/pgSQL defers column
+resolution. Its bodies name `prompt_submission_id` (001) and
+`origin_submission_id` / `supersedes_prompt_id` (002), so installing it before
+those columns exist yields three functions that are present, grantable and
+broken on first call. 003 therefore goes last, and the series is applied as one
+unit.
+
+Measured ordering: `000 → 003` is a compile-time edge; `001 → 003` and
+`002 → 003` are run-time edges; 000, 001 and 002 are mutually independent and
+each applies alone. The numeric order satisfies every edge, so it is the order
+used — one sequence to follow and one to audit.
+
+### Rehearsed
+
+The four were applied in order to a throwaway PostgreSQL 16 database holding the
+prerequisites **plus 004–007**, which is what production actually has. All four
+succeeded, and the reconciliation audit then reported FULLY APPLIED with 0 FAIL.
+The foundation preflight reported READY on that state beforehand and refused it
+afterwards — 24 objects already present.
 
 ## 4. Migration 016 — frozen at 30,000
 
@@ -264,7 +331,7 @@ reason this is a read-side flag and not a write-side one.
 | `STATEMENT_SUBMISSION_EVIDENCE` | **011** | `evidence_kind` / `evidence_submission_id` are not selected on a requirement **set** | a set published from an approved submission is distinguishable from an official source | the columns stay stored and stop being read |
 | `STATEMENT_EDITOR_DOCUMENTS` | **013** | `editor_document` is neither read nor written; the editor is plain text; the AI-QA-001 `document-required` guard cannot fire, because no draft stores formatting | Bold is stored and restored, and an essay-only save of a formatted draft is refused rather than allowed to diverge | documents stay stored and stop being read; the guard goes quiet |
 | `STATEMENT_DOCUMENT_FONT` | **015** | `document_font` is neither read nor written; every draft renders in the Studio default | the applicant's chosen face is stored and used for pagination | the choice stays stored and stops being read |
-| `STATEMENT_PROMPT_SUBMISSIONS` | 20261002_000 (**applied**) | the submission endpoints answer `disabled`; the admin queue answers `disabled`; the Studio offers no submission | an applicant may submit a school prompt and an administrator may review it | the endpoints answer `disabled`; submitted rows are untouched |
+| `STATEMENT_PROMPT_SUBMISSIONS` | **20261002_000..003 — NOT APPLIED; Stage C0** | the submission endpoints answer `disabled`; the admin queue answers `disabled`; the Studio offers no submission | an applicant may submit a school prompt and an administrator may review it | the endpoints answer `disabled`; submitted rows are untouched |
 | `STATEMENT_SUBMISSION_FIELDS` | **008** | 008's nine structured columns are not selected on a submission | a submission carries its label, document type and stated limits | the columns stay stored and stop being read |
 | `STATEMENT_PROMPT_CHANGE_REPORTS` | **012** | 012's columns are not selected; a changed-prompt report cannot be filed, and replacement is refused with `needs-012` | an applicant may report that a school's prompt has changed, and a replacement can be linked | the columns stay stored and stop being read |
 | `STATEMENT_ANALYSIS_CACHE` | 004 (**applied**) | **Analyze answers 503 for every caller** — `analysisAvailability()` returns `unavailable` outside development. This is **AI-QA-005**, and it is deliberate: without storage there is no deduplication, so every reopen would be another paid call, silently | the claim/settle machinery runs, an identical essay is answered from store with no model call, and two tabs cannot both pay | Analyze returns to 503; stored analyses are untouched and are read again when it is switched back on |
@@ -299,17 +366,49 @@ columns to.
 
 ## 7. The exact rollout order
 
-Seven stages. **Every write step needs the owner's explicit approval.** The
+Nine stages. **Every write step needs the owner's explicit approval.** The
 read-only stages may be run at any time and change nothing.
 
-### Stage A — read-only preflight
+**THE CHRONOLOGY IS EXACTLY THIS, AND IT IS A CHRONOLOGY RATHER THAN A
+NUMBERING:**
 
-Run `statement_v2_rollout_preflight.sql`.
+```
+A → B → C0 → C0-V → C1 → D → E → F → G
+```
 
-Require **0 FAIL**: the 004–007 baseline present and unchanged, every pending
-object absent, the catalog exactly 63/80 by fingerprint, nothing active, South
-Dakota still `needs-review`, all 28 correction targets holding their expected
-values, and steps 24–25 confirming 009 was never applied.
+| stage | what | read-only? |
+| --- | --- | --- |
+| **A** | foundation preflight — `statement_foundation_preflight.sql` | read-only |
+| **B** | deploy the compatible code, all ten capabilities OFF | deploy |
+| **C0** | the prompt-submission foundation: 000 → 001 → 002 → 003 | writes |
+| **C0-V** | foundation verification **and** the V2 gate — `statement_v2_rollout_preflight.sql` | read-only |
+| **C1** | V2 schema: 008 → 010 → 011 → 012 → 013 → 014 → 015 → 016 → 017 | writes |
+| **D** | data corrections | writes |
+| **E** | database postcheck | read-only |
+| **F** | capability enablement, in groups | config |
+| **G** | catalog activation | writes |
+
+**THERE IS ONLY ONE STAGE A, AND IT IS THE FOUNDATION PREFLIGHT.** An earlier
+draft of this section called the two preflights "A1" and "A2" while also placing
+A2 after C0 — a stage cannot be both first and fifth. The V2 preflight is not a
+second half of Stage A; it is the gate that closes C0, so it lives in **C0-V**.
+
+C0 and C0-V are new: see §3a.
+
+### Stage A — foundation preflight
+
+Run **`statement_foundation_preflight.sql`**. Nothing else runs here.
+
+Require **0 FAIL** and `READY TO APPLY 000-003: YES` at step 99: `statement_drafts`
+and `statement_prompts` present with the five columns 001/002 build on,
+`auth.users` / `auth.uid()` / the three roles / `gen_random_uuid()` available,
+and every one of the 24 objects the series creates still **absent** — so a
+partial or already-applied state is refused rather than overwritten. It reads
+every relation through `to_regclass()`, so it runs safely whatever is missing.
+
+**THE V2 PREFLIGHT DOES NOT RUN HERE.** It requires
+`statement_prompt_submissions`, which Stage C0 creates, so before C0 it reports
+FAIL by construction. It runs at **C0-V**.
 
 Any FAIL stops here. Nothing has been changed.
 
@@ -323,7 +422,71 @@ Safe because each new column is behind a flag that fails closed, so the build
 asks for nothing the database does not yet have. Rollback is redeploying the
 previous build.
 
-### Stage C — schema, in this order
+### Stage C0 — the prompt-submission foundation
+
+**NEW AS OF 2026-10-22.** Schema work can no longer begin at 008: 008 and 012
+add columns to `statement_prompt_submissions` and 017 reads it, and production
+does not have it. See §3a.
+
+Gate: **Stage A must read `READY TO APPLY 000-003: YES` with 0 FAIL.**
+
+| order | migration | depends on | rollback |
+| --- | --- | --- | --- |
+| C0.1 | `20261002_000` | — | `drop table public.statement_prompt_submissions` |
+| C0.2 | `20261002_001` | 20260930_001's `prompt_id` / `prompt_text` | drop the column and its two constraints |
+| C0.3 | `20261002_002` | 20260930_000's `statement_prompts` | drop the two columns and the constraint |
+| C0.4 | `20261002_003` | **000 to install; 001 and 002 to RUN** | `drop function` ×3 — they create no data |
+
+**C0.4 GOES LAST AND THE SERIES IS APPLIED AS ONE UNIT.** 003 installs happily
+with only 000 present — measured — because PL/pgSQL defers column resolution,
+so applying it early leaves three functions that exist, can be granted, and
+fail on first call. That is the withdrawn 009's failure mode wearing different
+clothes.
+
+Every file in the series is wrapped in `begin`/`commit`, so a failure rolls back
+completely.
+
+Nothing else happens in C0. The verification is **C0-V**, which follows.
+
+### Stage C0-V — foundation verification, and the V2 gate
+
+Read-only. Two things, in this order, and **both must be clean before C1**.
+
+**C0-V.1 — verify every object C0 was supposed to create.** Require
+**FULLY APPLIED** with 0 FAIL: the table, its 16 columns, 9 CHECK constraints,
+3 indexes, RLS enabled, 2 policies, the 14-column SELECT grant to
+`authenticated`, 001's column and its two constraints, 002's two columns and its
+constraint, and 003's three RPCs.
+
+**C0-V.2 — run `statement_v2_rollout_preflight.sql`**, byte-identical at
+sha256 `39dc7499c62c0d72a110fd91feb360a2a3ee6afa50aa7ace07472c4c37afc1b4`.
+Require **0 FAIL and 0 WARN**: the 004–007 baseline present and unchanged, every
+pending object absent, the catalog exactly 63/80 by fingerprint, nothing active,
+South Dakota still `needs-review`, all 28 correction targets holding their
+expected values, and steps 24–25 confirming 009 was never applied.
+
+**0 WARN IS DELIBERATE AND IT MATTERS.** Step 51 is the only step that can
+return a WARN, and it is a weak signal: it compares `updated_at` against
+`created_at`, and **no statement migration creates an `updated_at` trigger** —
+005 lists one among the things it deliberately does not create. A row
+hand-edited in the SQL editor leaves `updated_at` untouched and step 51 still
+reports PASS, so a WARN there means something stronger than usual has been
+noticed and must not be waved through. The authoritative value-level drift check
+remains `statement_catalog_corrections_preflight.sql` at Stage D, which compares
+actual values against the expected before-values.
+
+This preflight could not run before C0: its step 10 counts four tables, one of
+which — `statement_prompt_submissions` — C0 creates. It also names
+`public.statement_requirement_sets` directly, so it needs 005, which production
+has. (Its parenthetical label reads "004-007 applied", which is imprecise for
+that reason; the check itself is right for the stage it now gates.)
+
+Any FAIL or WARN stops here, with C0 applied and C1 not begun. That is a safe
+resting state: every new object sits behind a capability that is still off.
+
+### Stage C1 — Statement Studio V2 schema, in this order
+
+Gate: **C0-V must be clean** — 0 FAIL and 0 WARN.
 
 One documented path, spelled out. These are independently applicable — each was
 rehearsed alone against a 004–007 cluster — but a single deterministic sequence

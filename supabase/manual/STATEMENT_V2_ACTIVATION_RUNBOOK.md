@@ -393,9 +393,14 @@ stored rows are simply not consulted.
 
 Only after step 9 is healthy. Set `STATEMENT_REQUIREMENTS=on` and restart.
 
-**Leave `STATEMENT_PROMPT_SUBMISSIONS` alone.** Its migrations
-(`20261002_000..003`) are a separate decision and are not part of this
-activation.
+**Leave `STATEMENT_PROMPT_SUBMISSIONS` alone at this step** — but note that
+its migrations are no longer out of scope. This runbook used to call
+`20261002_000..003` "a separate decision … not part of this activation", and
+that sentence was the twin of the §6 cell in MIGRATION_STATUS.md that wrongly
+recorded 000 as applied. The production Stage A reconciliation on 2026-10-22
+found the series had **never been applied**, and it is now **Stage C0** of the
+controlled rollout — required before 008, 012 and 017, and before this flag can
+be enabled at all. See MIGRATION_STATUS.md §3a and Stage C0.
 
 **What changes for users:** the draft `SELECT` begins naming `requirement_id`
 and `requirement_snapshot`, and the New Draft flow begins offering
