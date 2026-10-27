@@ -92,6 +92,58 @@ export function buildSlugMap(schools: PublicSchool[]): Map<string, PublicSchool>
   return map
 }
 
+/**
+ * Slugs a school used to be reachable at, and still must be.
+ *
+ * ---------------------------------------------------------------------------
+ * A NAME CORRECTION RETIRES A PUBLIC URL
+ * ---------------------------------------------------------------------------
+ * The slug is derived from `schools.name`, and `/schools/{slug}` is published
+ * in the sitemap. Correcting "Ceder Crest" to its real name therefore moves an
+ * indexed URL: `ceder-crest` becomes `cedar-crest-college`, and without this
+ * map the old address would 404 for every search result and every link anyone
+ * has saved.
+ *
+ * SAFE BEFORE, DURING AND AFTER THE RENAME, which is the property that matters
+ * -- the correction is applied in the Supabase editor, not in a deploy, so
+ * there is no moment when the two can be swapped together:
+ *
+ *   before  `ceder-crest` is the school's real slug, so the live map wins and
+ *           this alias is never consulted;
+ *   after   the live map no longer holds it, the alias resolves to the new
+ *           slug, and the page redirects permanently.
+ *
+ * NOT A RENAME TABLE. It maps an old slug to a CURRENT one and nothing else:
+ * no names, no ids, no display text. The school's name has exactly one source,
+ * which is the database.
+ *
+ * ONE ENTRY. Saint Mary's is deliberately absent -- slugifySchoolName strips
+ * apostrophes, so `saint-marys-university-of-minnesota` is unchanged by that
+ * correction and nothing retires.
+ */
+export const RETIRED_SCHOOL_SLUGS: Readonly<Record<string, string>> = {
+  'ceder-crest': 'cedar-crest-college',
+}
+
+/**
+ * Where a retired slug should send a reader, or null.
+ *
+ * NULL WHILE THE OLD SLUG IS STILL LIVE. `live` is the slug map built from the
+ * database as it is right now; if it still contains the requested slug then
+ * the rename has not happened and the page must be served, not redirected.
+ * Only once the live map has lost it, and gained the destination, is a
+ * redirect the truth.
+ */
+export function retiredSlugDestination(
+  slug: string,
+  live: ReadonlyMap<string, unknown>,
+): string | null {
+  if (live.has(slug)) return null
+  const destination = RETIRED_SCHOOL_SLUGS[slug]
+  if (destination === undefined) return null
+  return live.has(destination) ? destination : null
+}
+
 /** Reverse lookup: the slug a given school should be linked at. */
 export function slugForSchool(school: PublicSchool, map: Map<string, PublicSchool>): string {
   for (const [slug, candidate] of map) {

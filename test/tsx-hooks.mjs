@@ -26,6 +26,21 @@ import ts from 'typescript'
 const ROOT = new URL('../', import.meta.url)
 const EXTENSIONS = ['.ts', '.tsx', '.mts', '.js', '/index.ts', '/index.tsx']
 
+/**
+ * Bare specifiers Node cannot resolve here, mapped to the real file.
+ *
+ * `next/server` is resolved by Next's own bundler in production. The installed
+ * `next` publishes no `exports` map and `node_modules/next/server` has no
+ * extension, so Node's resolver throws ERR_MODULE_NOT_FOUND on it -- which makes
+ * a route handler that imports it unloadable under `node --test`.
+ * `node_modules/next/server.js` does exist. Mapping the one specifier lets the
+ * route be imported without changing a line of production source.
+ *
+ * EXACT MATCH ONLY. `next/link`, `next/navigation`, `next/headers` and every
+ * other bare import fall through to nextResolve() untouched.
+ */
+const BARE_REDIRECTS = new Map([['next/server', 'next/server.js']])
+
 function firstExisting(base) {
   for (const extension of EXTENSIONS) {
     const candidate = new URL(base + extension, ROOT)
@@ -54,6 +69,13 @@ export async function resolve(specifier, context, nextResolve) {
         }
       }
     }
+  }
+
+  // Resolved through nextResolve so the URL is whatever Node itself would
+  // produce for the real file.
+  const redirect = BARE_REDIRECTS.get(specifier)
+  if (redirect) {
+    return nextResolve(redirect, context)
   }
 
   return nextResolve(specifier, context)

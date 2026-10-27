@@ -158,7 +158,15 @@ test('9: expanded behaviour is exactly what M-1 shipped', () => {
 
 // ------------------------------------------------------------- 10: the built CSS
 
-/** Newest built stylesheet, if a build has been run. */
+/**
+ * EVERY built stylesheet, if a build has been run.
+ *
+ * ALL OF THEM, NOT THE FIRST. This read `found[0]` and worked for as long as a
+ * build produced one chunk. Next splits CSS, and once there were two the test
+ * read whichever the directory happened to list first and reported the class
+ * missing while it sat in the other file -- a failure about chunking, not about
+ * the stylesheet.
+ */
 const builtCss = (() => {
   const dir = join(ROOT, '.next/static')
   if (!existsSync(dir)) return null
@@ -171,26 +179,41 @@ const builtCss = (() => {
     }
   }
   walk(dir)
-  return found.length ? readFileSync(found[0], 'utf8') : null
+  return found.length ? found.map((f) => readFileSync(f, 'utf8')) : null
 })()
 
 test(
   '10: the build emits .lg\\:left-20{left:5rem}',
   { skip: builtCss ? false : 'no production build present (run next build)' },
   () => {
-    const css = builtCss!
-    const m = /@media \(min-width:1024px\)\{/.exec(css)
-    assert.ok(m, 'the lg media block must exist')
-    const lg = css.slice(m.index + m[0].length)
+    const sheets = builtCss!
+
+    // The utilities live in whichever chunk Tailwind emitted them into. The
+    // question is whether they were emitted at all, so every sheet is searched
+    // and the one that carries them is the one the assertions run against.
+    const carrying = sheets
+      .map((css) => {
+        const m = /@media \(min-width:1024px\)\{/.exec(css)
+        return m === null ? null : { css, lg: css.slice(m.index + m[0].length), at: m.index }
+      })
+      .filter((sheet): sheet is { css: string; lg: string; at: number } => sheet !== null)
+      .find((sheet) => sheet.lg.includes('.lg\\:left-20{left:5rem}'))
 
     assert.ok(
-      lg.includes('.lg\\:left-20{left:5rem}'),
-      'lg:left-20 is a class this repo has never used before -- it must be emitted',
+      carrying,
+      'lg:left-20 is a class this repo has never used before -- it must be emitted '
+      + `into one of the ${sheets.length} built stylesheets`,
     )
-    assert.ok(lg.includes('.lg\\:left-64{left:16rem}'), 'and the expanded offset must survive')
-    // Both must live inside the media query, never in the base layer.
-    const base = css.slice(0, m.index)
-    assert.ok(!base.includes('.lg\\:left-20{'), 'must not leak into the mobile layer')
+    assert.ok(
+      carrying.lg.includes('.lg\\:left-64{left:16rem}'),
+      'and the expanded offset must survive, in the same chunk',
+    )
+    // Neither may live in the base layer -- in ANY chunk, not just this one.
+    for (const css of sheets) {
+      const m = /@media \(min-width:1024px\)\{/.exec(css)
+      const base = m === null ? css : css.slice(0, m.index)
+      assert.ok(!base.includes('.lg\\:left-20{'), 'must not leak into the mobile layer')
+    }
   },
 )
 

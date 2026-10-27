@@ -19,7 +19,7 @@ const strip = (text: string) =>
 
 const ROUTE = strip(read('../../app/api/analyze-statement/route.ts'))
 const BODY = ROUTE.replace(/^import[\s\S]*?from\s+'[^']+'\s*$/gm, '')
-const PAGE = strip(read('../../app/personal-statement/page.tsx'))
+const PAGE = strip(read('../../app/personal-statement/PersonalStatementAnalyzer.tsx'))
 
 const POST = BODY.slice(BODY.indexOf('export async function POST'), BODY.indexOf('export async function PUT'))
 const PUT = BODY.slice(BODY.indexOf('export async function PUT'))

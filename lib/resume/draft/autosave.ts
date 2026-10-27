@@ -45,6 +45,24 @@ export interface AutosaveState {
   /** `dirtySince` as it was when the in-flight save started, so a failure can
    *  put that work back rather than losing track of it. */
   readonly inFlightSince: number | null
+  /**
+   * When the CURRENT request started. Null unless one is in flight.
+   *
+   * ---------------------------------------------------------------------
+   * WHY THIS IS NOT inFlightSince
+   * ---------------------------------------------------------------------
+   * inFlightSince is the age of the WORK -- the oldest unsaved edit, carried
+   * across so a failure can put it back with its original deadline. This is
+   * the age of the REQUEST, and the two differ by however long the debounce
+   * waited.
+   *
+   * IT EXISTS SO 'saving' CAN BE DISBELIEVED. Every other status is left by
+   * something the applicant or the server does; 'saving' is left only by a
+   * continuation, and a continuation that never runs leaves the indicator
+   * claiming forever that a save is in progress. A driver can compare this
+   * against the clock and decide the claim has expired -- see saveTimedOut().
+   */
+  readonly savingSince: number | null
   /** Set by `flush`: save at the next opportunity, debounce notwithstanding. */
   readonly forced: boolean
   /** Last revision the SERVER confirmed. Never incremented optimistically. */
@@ -68,6 +86,16 @@ export interface AutosaveConfig {
   readonly retryBaseMs: number
   /** Consecutive retryable failures before giving up and asking the user. */
   readonly maxRetries: number
+  /**
+   * How long a single request may claim to be in flight before the driver
+   * stops believing it.
+   *
+   * NOT A REQUEST TIMEOUT, THOUGH A DRIVER SHOULD HAVE ONE TOO. This bounds
+   * the STATUS, not the socket: it is what guarantees the indicator cannot sit
+   * at "Saving…" for ever even when the request itself settled and the
+   * continuation that should have reported it did not run.
+   */
+  readonly saveTimeoutMs: number
 }
 
 /**
@@ -82,6 +110,13 @@ export const DEFAULT_AUTOSAVE: AutosaveConfig = {
   maxWaitMs: 8000,
   retryBaseMs: 2000,
   maxRetries: 3,
+  /**
+   * 15s. Long enough that a slow connection saving a full-length essay is not
+   * called a failure, short enough that nobody watches "Saving…" wondering.
+   * A save that has not been acknowledged in fifteen seconds has not been
+   * acknowledged, and saying so is more useful than waiting.
+   */
+  saveTimeoutMs: 15_000,
 }
 
 export type AutosaveEvent =
@@ -110,6 +145,7 @@ export function initialState(revision: number): AutosaveState {
     retryAt: null,
     error: null,
     storedRevision: null,
+    savingSince: null,
   }
 }
 
@@ -148,6 +184,8 @@ export function reduce(
       return {
         ...state,
         status: 'saving',
+        // THE WATCHDOG'S CLOCK STARTS HERE, and only here.
+        savingSince: event.at,
         // This work is in flight now. Edits arriving during the request start a
         // new dirty window, so success can tell "clean" from "more to do".
         inFlightSince: state.dirtySince,
@@ -164,6 +202,7 @@ export function reduce(
         ...state,
         status: stillDirty ? 'dirty' : 'saved',
         inFlightSince: null,
+        savingSince: null,
         revision: event.revision,
         savedAt: event.at,
         attempt: 0,
@@ -185,6 +224,7 @@ export function reduce(
         ...state,
         status: exhausted ? 'failed' : 'retrying',
         inFlightSince: null,
+        savingSince: null,
         dirtySince: restored,
         forced: false,
         attempt,
@@ -201,6 +241,7 @@ export function reduce(
         ...state,
         status: 'conflict',
         inFlightSince: null,
+        savingSince: null,
         dirtySince: earliest(state.inFlightSince, state.dirtySince),
         forced: false,
         attempt: 0,
@@ -275,6 +316,36 @@ export function nextAction(
  * it counts an in-flight request too, because a request in flight has not been
  * confirmed and the tab closing cancels it.
  */
+/**
+ * Whether the in-flight save has been in flight too long to still be believed.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT THIS IS ACTUALLY FOR
+ * ---------------------------------------------------------------------------
+ * 'saving' is the one status nothing in this module can leave on its own: it
+ * is left by save-succeeded, save-failed or conflict, each dispatched by the
+ * driver's continuation after the request settles. A continuation that does
+ * not run -- cancelled, dropped, or guarded away by a stale liveness check --
+ * leaves the indicator saying "Saving…" for ever, the single-flight rule
+ * refusing every later save, and a navigation waiter that never resolves.
+ *
+ * So the status is given a deadline. This is a pure predicate over the clock;
+ * the driver decides what to do when it is true, which is to dispatch a
+ * retryable save-failed.
+ *
+ * FALSE WHEN NOTHING IS IN FLIGHT, including for a state whose savingSince is
+ * null because it predates this field. An absent timestamp is not an expiry.
+ */
+export function saveTimedOut(
+  state: AutosaveState,
+  now: number,
+  config: AutosaveConfig = DEFAULT_AUTOSAVE
+): boolean {
+  if (state.status !== 'saving') return false
+  if (state.savingSince === null) return false
+  return now - state.savingSince >= config.saveTimeoutMs
+}
+
 export function hasUnsavedWork(state: AutosaveState): boolean {
   return (
     state.dirtySince !== null ||
