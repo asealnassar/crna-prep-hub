@@ -270,7 +270,7 @@ $fn$;
 revoke all on function public.create_statement_draft_with_prompt_submission(
   text, text, uuid, text, integer, text, text) from public;
 revoke all on function public.create_statement_draft_with_prompt_submission(
-  text, text, uuid, text, integer, text, text) from anon;
+  text, text, uuid, text, integer, text, text) from anon, service_role;
 grant execute on function public.create_statement_draft_with_prompt_submission(
   text, text, uuid, text, integer, text, text) to authenticated;
 
@@ -343,7 +343,7 @@ end;
 $fn$;
 
 revoke all on function public.withdraw_statement_prompt_submission(uuid) from public;
-revoke all on function public.withdraw_statement_prompt_submission(uuid) from anon;
+revoke all on function public.withdraw_statement_prompt_submission(uuid) from anon, service_role;
 grant execute on function public.withdraw_statement_prompt_submission(uuid) to authenticated;
 
 -- ============================================================
