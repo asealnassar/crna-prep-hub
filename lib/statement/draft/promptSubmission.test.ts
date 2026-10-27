@@ -624,10 +624,48 @@ test('the SQL normalisation and the JavaScript one agree on what is the same', (
   assert.equal(normalizedPromptText('  Why   nurse\n\nanaesthesia?  '), 'why nurse anaesthesia?')
 })
 
-test('the create function is unreachable by anon, by privilege not by guard', () => {
-  assert.match(RPC_SQL, /revoke all on function public\.create_statement_draft_with_prompt_submission[\s\S]*?from anon;/)
-  assert.match(RPC_SQL, /revoke all on function public\.create_statement_draft_with_prompt_submission[\s\S]*?from public;/)
-  assert.match(RPC_SQL, /grant execute on function public\.create_statement_draft_with_prompt_submission[\s\S]*?to authenticated;/)
+/*
+ * THE PRIVILEGE ASSERTIONS ARE SCOPED TO ONE FUNCTION BLOCK EACH, AND THE REASON
+ * IS A FALSE PASS THIS FILE ACTUALLY HAD.
+ *
+ * These three used to run against the whole migration as
+ * /...create_statement_draft_with_prompt_submission[\s\S]*?from anon;/. When
+ * `service_role` was added to create's revoke, the non-greedy wildcard skipped
+ * create's own line and matched decide's `from anon;` 234 lines further on -- a
+ * 10,098-character span crossing all three functions. The test kept passing
+ * while asserting nothing whatever about create, and would have passed with
+ * create's revoke deleted outright.
+ *
+ * So: a slice bounded by the NEXT function's header, and a pattern that pins the
+ * exact argument list with no wildcard able to span statements. A match can only
+ * be the function's own privilege line.
+ */
+const CREATE_ARGS = '\\(\\s*text, text, uuid, text, integer, text, text\\)'
+
+test('the create function is unreachable by anon and service_role, by privilege not by guard', () => {
+  const create = RPC_SQL.slice(
+    RPC_SQL.indexOf('function public.create_statement_draft_with_prompt_submission'),
+    RPC_SQL.indexOf('function public.withdraw_statement_prompt_submission'),
+  )
+  const fn = 'public\\.create_statement_draft_with_prompt_submission'
+  // service_role is named because Supabase's ALTER DEFAULT PRIVILEGES ... ON
+  // FUNCTIONS grants EXECUTE to it on every new function; production inherited
+  // exactly that on this RPC and had to be corrected by hand.
+  assert.match(create, new RegExp(`revoke all on function ${fn}${CREATE_ARGS} from anon, service_role;`))
+  assert.match(create, new RegExp(`revoke all on function ${fn}${CREATE_ARGS} from public;`))
+  assert.match(create, new RegExp(`grant execute on function ${fn}${CREATE_ARGS} to authenticated;`))
+})
+
+test('the withdraw function is revoked from anon and service_role too', () => {
+  // Same inheritance, same correction, same scoping. These three statements are
+  // single-line and the signature is pinned, so nothing can span past them.
+  const withdraw = RPC_SQL.slice(
+    RPC_SQL.indexOf('function public.withdraw_statement_prompt_submission'),
+    RPC_SQL.indexOf('function public.decide_statement_prompt_submission'),
+  )
+  assert.match(withdraw, /revoke all on function public\.withdraw_statement_prompt_submission\(uuid\) from anon, service_role;/)
+  assert.match(withdraw, /revoke all on function public\.withdraw_statement_prompt_submission\(uuid\) from public;/)
+  assert.match(withdraw, /grant execute on function public\.withdraw_statement_prompt_submission\(uuid\) to authenticated;/)
 })
 
 test('a definer function introduces no injection surface', () => {
