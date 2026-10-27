@@ -72,6 +72,19 @@ comment on function public.statement_text_options_ok(text[]) is
   'already trimmed and non-empty, no case-insensitive duplicates, sorted by '
   'lower(value). Rejects non-canonical input rather than normalising it.';
 
+-- EXECUTE IS NOT INHERITED QUIETLY. PostgreSQL grants EXECUTE to PUBLIC on every
+-- new function, and Supabase's ALTER DEFAULT PRIVILEGES ... ON FUNCTIONS adds
+-- anon, authenticated and service_role on top of that. Neither is wanted here.
+--
+-- NO ROLE NEEDS A GRANT. The only writer of public.statement_requirements is the
+-- SECURITY DEFINER promotion function in 20261015_017, which runs as its owner;
+-- an owner keeps EXECUTE on its own functions implicitly, so the CHECK still
+-- evaluates. A browser role holds no INSERT or UPDATE on the table and therefore
+-- can never cause this CHECK to run. So there is no grant below, only revokes.
+revoke all on function public.statement_text_options_ok(text[]) from public;
+revoke all on function public.statement_text_options_ok(text[])
+  from anon, authenticated, service_role;
+
 create or replace function public.statement_int_options_ok(
   opts integer[], lo integer, hi integer)
 returns boolean
@@ -94,6 +107,11 @@ comment on function public.statement_int_options_ok(integer[], integer, integer)
   'Shape check for a permitted-value integer set: at least two members, no '
   'nulls, each within [lo, hi], no duplicates, ascending. Rejects non-canonical '
   'input rather than normalising it.';
+
+-- Same reasoning as the text validator above.
+revoke all on function public.statement_int_options_ok(integer[], integer, integer) from public;
+revoke all on function public.statement_int_options_ok(integer[], integer, integer)
+  from anon, authenticated, service_role;
 
 alter table public.statement_requirements
   add column if not exists font_family_options  text[],
