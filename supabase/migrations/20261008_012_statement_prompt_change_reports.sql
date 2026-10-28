@@ -66,6 +66,45 @@ alter table public.statement_prompt_submissions
   );
 
 -- ---------------------------------------------------------------------------
+-- THE COLUMN-LEVEL SELECT GRANT, WIDENED
+-- ---------------------------------------------------------------------------
+-- statement_prompt_submissions GRANTS SELECT BY COLUMN, NOT BY TABLE, so a new
+-- column is NOT covered by the privilege authenticated already holds -- unlike
+-- statement_requirements below, whose grant is table-level and covers its two
+-- new columns automatically. 20261002_000 established the column-scoped grant
+-- at 14 and 20261006_008 widened it to 24 by restating the whole list; this
+-- restates it again at 26.
+--
+-- WITHOUT THIS, TURNING THE FLAG ON BREAKS THE READ. ownSubmissionColumns() and
+-- reviewColumns() both name the two new columns behind
+-- STATEMENT_PROMPT_CHANGE_REPORTS, and PostgREST answers a select that names an
+-- ungranted column with `permission denied for table` for the WHOLE request --
+-- so the applicant's own-submissions list would stop working rather than lose
+-- one field.
+--
+-- GRANT IS ADDITIVE, so this adds the two new columns and changes nothing else.
+-- The list is restated in full so the file reads as the whole truth rather than
+-- a diff, which is the model 008 set.
+--
+-- review_note AND reviewed_by ARE STILL ABSENT, AND THAT IS STILL THE POINT.
+-- RLS filters rows, never columns, so the own-row select policy would otherwise
+-- let a submitter read an administrator's private note about them, and the
+-- identity of the administrator who wrote it, straight from PostgREST.
+--
+-- NO INSERT, UPDATE OR DELETE GRANT, for any role, and nothing for anon or
+-- service_role. Every write to this table still goes through the SECURITY
+-- DEFINER functions in 20261002_003.
+grant select (
+  id, submitted_by, school_id, prompt_text, stated_max_words, application_cycle,
+  source_url, status, reviewed_at, approved_prompt_id, duplicate_of_id,
+  text_fingerprint, created_at, updated_at,
+  document_label, document_type_hint, stated_min_words, stated_max_characters,
+  stated_max_pages, stated_pages_text, formatting_instructions,
+  other_instructions, submitter_note, approved_requirement_id,
+  submission_kind, challenged_requirement_id
+) on public.statement_prompt_submissions to authenticated;
+
+-- ---------------------------------------------------------------------------
 -- PROVENANCE SURVIVES A REPLACEMENT
 -- ---------------------------------------------------------------------------
 -- When an administrator decides a report REPLACES a catalog row, the old row
