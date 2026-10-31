@@ -525,20 +525,30 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   /*
-    REPLACEMENT NEEDS 012, AND IS REFUSED BEFORE ANYTHING IS WRITTEN.
+    THE 012 REFUSAL IS GONE, BECAUSE THE PREMISE WAS GONE.
 
-    The supersession link lives on statement_requirements, which 20261008_012
-    adds and which is NOT APPLIED. Promoting first and failing to link
-    afterwards would leave a published replacement with the old prompt still
-    offered beside it and no record connecting them -- the one outcome worse
-    than refusing.
+    This used to refuse every replacement outright with "Replacing a prompt
+    needs migration 012, which is not applied." 20261008_012 IS applied, and
+    hardened -- Stage E step 17 measures its 26-column grant -- so the sentence
+    was false and the refusal was unreachable capability, not safety. A guard
+    whose stated reason is untrue is worse than no guard: the next reader
+    believes it.
+
+    WHAT REPLACED IT IS A CHECK ON BEHAVIOUR RATHER THAN A BELIEF ABOUT
+    SCHEMA. The supersession is recorded by the promotion function itself
+    (20261028_019A / 019B), which returns the id it linked. After the call
+    succeeds, this route compares that id to the one it asked for and reports
+    `supersedeError` when they disagree -- so a database still running
+    20261015_017's function, which records nothing, is caught by its own silence
+    instead of by a guess about which migrations ran.
+
+    AND THE OLD WARNING NO LONGER APPLIES. It said a failed link would leave "a
+    published replacement with the old prompt still offered beside it". Nothing
+    this function writes is published: both rows are is_active = false, by the
+    rule 017's header states and 018 keeps. A replacement whose link failed is
+    inactive catalog data plus a visible error, and the challenged row is
+    untouched -- recoverable, and visible rather than silent.
   */
-  if (isReport && changeAction === 'replace' && !simulatedLiveEnabled()) {
-    return NextResponse.json({
-      error: 'Replacing a prompt needs migration 012, which is not applied.',
-      code: 'needs-012',
-    }, { status: 400 })
-  }
 
   const mode = payload.mode
   if (mode !== 'new-set' && mode !== 'existing-set') {
@@ -578,6 +588,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     point at, and the kind is stored so no reader mistakes it for a prompt
     checked against the school's own page.
   */
+  /*
+    AN OFFICIAL-SOURCE CLAIM NEEDS THE PAGE IT WAS CHECKED AGAINST, AND THIS IS
+    THE ONLY LAYER THAT CAN TELL.
+
+    20261029_023 made the catalog's own default honest: a new set created from a
+    submission records 'admin-approved-submission' unless the payload says
+    otherwise. An EXPLICIT 'official-source' still wins, deliberately, because
+    an administrator who has read the school's page is the one case where the
+    stronger claim is true -- but the function cannot tell a checked claim from
+    an unchecked one, and a payload is a payload.
+
+    SO THE EVIDENCE OF HAVING CHECKED IS WHAT MAKES THE CLAIM ADMISSIBLE: the
+    URL of the page. That is the same thing 011's active_needs_evidence demands
+    before such a set may go live, asked for at the moment the claim is made
+    rather than weeks later at activation.
+
+    THE FORM DOES NOT SEND evidence_kind AT ALL, so this refuses nothing an
+    administrator can do through the screen. It closes the hand-crafted request
+    that would otherwise use the one preserved path to put a false
+    'official-source' on a prompt nobody checked.
+  */
+  const claimedKind = typeof set.evidence_kind === 'string' ? set.evidence_kind.trim() : ''
+  const claimedUrl = typeof set.source_url === 'string' ? set.source_url.trim() : ''
+  if (mode === 'new-set' && claimedKind === 'official-source' && claimedUrl === '') {
+    return NextResponse.json({
+      error: 'An official-source claim needs the school page it was checked against. '
+        + 'Give the source URL, or leave the evidence for the catalog to record.',
+      code: 'official-source-needs-url',
+    }, { status: 400 })
+  }
+
   const publish = payload.publish === true
   const evidence: Record<string, unknown> = publish
     ? {
@@ -620,6 +661,30 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   /*
+    THE PROVENANCE, READ BACK FROM THE FUNCTION RATHER THAN ASSUMED.
+
+    20261029_023 records which submission a requirement came from and returns
+    the id it wrote. A deployment still running 20261028_022 or earlier records
+    nothing and returns no such key -- and a requirement with no origin reads as
+    the school's own published wording, which is the strongest claim in the
+    system and the exact falsehood D3 exists to remove.
+
+    SO A SILENT FUNCTION IS A REPORTED ERROR, like the supersession below. The
+    row is created either way and is inactive either way; what this refuses to
+    do is let an administrator believe the attribution was recorded when it was
+    not. Same mechanism, same reason: a check on behaviour, never a guess about
+    which migrations ran.
+  */
+  const recordedOrigin = typeof result.originSubmissionId === 'string'
+    ? result.originSubmissionId
+    : null
+  const provenanceError = recordedOrigin === id
+    ? null
+    : 'The requirement was created, but the catalog did not record which submission '
+      + 'it came from \u2014 so it would be presented to applicants as the school\u2019s '
+      + 'own wording. Migration 20261029_023 is not applied.'
+
+  /*
     PUBLISHING IS A SECOND ACT, AND IT IS CHECKED.
 
     simulateActivation re-reads the row that was just written and applies the
@@ -627,15 +692,34 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     somehow left short is refused here rather than published, and the
     administrator is told which part is missing.
 
-    LOCAL ONLY. Production activation remains an owner action against a
-    migrated database; 011 is drafted and unapplied, so nothing here can
-    publish anything in production.
+    LOCAL ONLY. Production activation remains an owner action, and that is a
+    rule rather than a gap: 011 IS applied, the evidence really is written, and
+    the one step that makes catalog data applicant-visible still may not be
+    taken by an HTTP request from an administrator's browser.
   */
   let active = false
   let publishError: string | null = null
   if (publish) {
     if (!simulatedLiveEnabled()) {
-      publishError = 'Publishing from a submission needs migration 011, which is not applied.'
+      /*
+        011 IS APPLIED, SO THE EVIDENCE WAS REALLY WRITTEN -- AND ACTIVATION IS
+        STILL NOT THIS ROUTE'S TO DO.
+
+        The old sentence here said publishing "needs migration 011, which is not
+        applied", which stopped being true and made a working path read as a
+        broken one. What `publish` actually does in production is supply the
+        evidence that rides the create: a verified status, today's date, the
+        kind, and this submission's id -- all of it stored by the RPC above, and
+        all of it required by 011's active_needs_evidence check.
+
+        RELEASING IT REMAINS AN OWNER ACTION, DELIBERATELY. Activation is the
+        one step that makes catalog data applicant-visible, and no HTTP request
+        from an administrator's browser may take it: that is the whole shape of
+        this feature. So the row is created complete and inactive, and this says
+        so plainly rather than reporting a migration that ran weeks ago.
+      */
+      publishError = 'Created with publication evidence and left inactive. '
+        + 'Releasing it to applicants is a separate owner action.'
     } else {
       // DYNAMICALLY IMPORTED, like the other two local-only call sites in this
       // file: the module must not be reachable from a production build.
@@ -663,18 +747,47 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   */
   let supersedeError: string | null = null
   let superseded: string | null = null
-  if (isReport && changeAction === 'replace' && challengedId !== null && simulatedLiveEnabled()) {
-    // DYNAMICALLY IMPORTED, like the other local-only call sites in this file:
-    // the module must not be reachable from a production build.
-    const { recordLocalSupersession } = await import('@/lib/statement/devMode/localCanonical')
-    const recorded = recordLocalSupersession({
-      requirementId: challengedId,
-      supersededBy: String(result.requirementId),
-      submissionId: id,
-      reviewerId: guard.reviewerId,
-    })
-    if (recorded.ok) superseded = challengedId
-    else supersedeError = recorded.reason
+  if (isReport && changeAction === 'replace' && challengedId !== null) {
+    if (simulatedLiveEnabled()) {
+      // DYNAMICALLY IMPORTED, like the other local-only call sites in this file:
+      // the module must not be reachable from a production build. The local
+      // store is the stand-in for the database the real path now uses.
+      const { recordLocalSupersession } = await import('@/lib/statement/devMode/localCanonical')
+      const recorded = recordLocalSupersession({
+        requirementId: challengedId,
+        supersededBy: String(result.requirementId),
+        submissionId: id,
+        reviewerId: guard.reviewerId,
+      })
+      if (recorded.ok) superseded = challengedId
+      else supersedeError = recorded.reason
+    } else {
+      /*
+        READ FROM THE FUNCTION, NOT INFERRED, AND NOT WRITTEN HERE.
+
+        The supersession is one of the rows the promotion creates, so it belongs
+        in the same transaction as the requirement it points at -- a second
+        statement from this route could half-succeed. 20261028_022 writes it and
+        returns the id it linked.
+
+        A SILENT FUNCTION IS A REPORTED ERROR. If the deployed function still
+        predates D2 it records nothing and returns no `supersedes`, and this
+        says so instead of reporting a replacement that did not happen. That is
+        the capability check the stale 012 refusal above was pretending to be.
+
+        NOT 019A OR 019B. Those two were generated on top of 20261028_018 and
+        each carries D3 as well, with the challenged-requirement check placed
+        AFTER the inserts, where a refusal leaves an orphan set and requirement
+        behind. The migration that is in force is 20261028_022; applying either
+        019 over it would revert that ordering.
+      */
+      const linked = typeof result.supersedes === 'string' ? result.supersedes : null
+      if (linked === challengedId) superseded = linked
+      else {
+        supersedeError = 'The replacement was created but the catalog did not record '
+          + 'what it replaces. Migration 20261028_022 is not applied.'
+      }
+    }
   }
 
   return NextResponse.json({
@@ -687,6 +800,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     /** The row that stopped being offered, when one did. Never inferred. */
     superseded,
     supersedeError,
+    /** Null when the catalog recorded where this requirement came from. */
+    provenanceError,
   })
 }
 
@@ -694,10 +809,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 const PROMOTION_MESSAGES: Readonly<Record<string, string>> = {
   'not-found': 'That submission no longer exists.',
   'already-promoted': 'That submission is already in the catalog.',
-  'not-promotable': 'A rejected or withdrawn submission cannot be promoted.',
+  // 20261028_021 ADDED 'duplicate' TO THE FUNCTION'S REFUSAL LIST, so this
+  // sentence has to name it. A duplicate points at the submission that is the
+  // real one, and that is the row to promote.
+  'not-promotable':
+    'A rejected, withdrawn or duplicate submission cannot be promoted. '
+    + 'A duplicate names the submission that is the real one \u2014 promote that.',
   'invalid-mode': 'Choose whether to create a new set or add to an existing one.',
   'set-required': 'Choose the set to add this document to.',
   'set-not-found': 'That set does not belong to this school.',
+  // 20261028_022. The report names a requirement that is not this school's, or
+  // no longer exists. 20261028_020A now adds the foreign key 012 left out, so
+  // the "no longer exists" half is refused at insert time and the function's
+  // own check is what catches a cross-school report.
+  'challenged-not-found':
+    'The prompt this report is about is not one of this school\u2019s listed requirements.',
   'invalid-label': 'Give the document a label.',
   'invalid-prompt-text': 'The prompt wording cannot be empty.',
   'invalid-document-type': 'Choose one of the nine document types.',

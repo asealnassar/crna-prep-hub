@@ -73,14 +73,18 @@ const SET_COLUMNS_BASE =
  *
  * NAMED COLUMNS FAIL WHOLE REQUESTS. PostgREST answers a select that mentions
  * an absent column with a 42703 for the entire query, so adding these
- * unconditionally would take the catalog down everywhere 011 is unapplied --
- * which is everywhere. The flag is what lets the local build read the real
- * value while a production read stays byte-identical to today's.
+ * unconditionally would take the catalog down anywhere 011 is unapplied. 011 IS
+ * applied in production and STATEMENT_SUBMISSION_EVIDENCE is on, so the flag no
+ * longer hides anything there; it is what keeps a build pointed at an
+ * unmigrated database working.
  *
  * WITHOUT THEM verificationFromRow degrades to 'official-source', and that
  * degradation is a FALSE REASSURANCE rather than a missing field: see
- * textAttribution(). It is safe only because nothing in production has been
- * published from a submission yet.
+ * textAttribution(). THE SET-LEVEL CLAIM IS NO LONGER THE WHOLE STORY -- a
+ * requirement carries its own origin_submission_id, which is NOT flag-gated for
+ * exactly this reason, and requirementVerification() resolves the two per
+ * document. So a set read without its evidence can still only ever be
+ * over-trusted at the set level, never on a card.
  */
 const SET_EVIDENCE_COLUMNS = 'evidence_kind, evidence_submission_id'
 
@@ -107,7 +111,18 @@ const REQUIREMENT_COLUMNS_BASE =
   + 'font_size_pt, font_family, margins_inches, '
   + 'citation_style, citation_family, min_references, '
   + 'unenforced_length, unenforced_length_verbatim, other_instructions, '
-  + 'choice_group, is_optional, notes, display_order'
+  + 'choice_group, is_optional, notes, display_order, '
+  // ---- 20261008_012, AND DELIBERATELY NOT BEHIND A FLAG --------------------
+  // Every other migration's columns are gated, because naming an absent column
+  // fails the whole request with a 42703. These two are named unconditionally
+  // anyway, for the reason the six register columns above are: failing is the
+  // correct behaviour. A flag that hid them would make the read degrade to
+  // origin_submission_id = null, and null means "this is official research" --
+  // the strongest claim in the system. The 011 evidence flag already taught
+  // this lesson once: a gate on a provenance column is a gate that turns OFF
+  // into a false reassurance. There is no flag state in which it is safe to
+  // forget where a requirement came from, so there is no flag.
+  + 'origin_submission_id, supersedes_requirement_id'
 
 /** 20261008_010's permitted-value sets, selected only behind their flag. */
 const REQUIREMENT_OPTION_COLUMNS = 'font_family_options, font_size_pt_options'
@@ -427,6 +442,11 @@ export function requirementFromRow(value: unknown): WritingRequirement | null {
     optional: row.is_optional === true,
     displayOrder: posInt(row.display_order) ?? 0,
     notes: strings(row.notes),
+    // A NON-STRING BECOMES null, which reads as "official research". That is
+    // the right default for every pre-012 row and the WRONG one for a
+    // submission-derived row whose column failed to arrive -- which is exactly
+    // why the column is not flag-gated above. If it is selected, it is honest.
+    originSubmissionId: str(row.origin_submission_id),
   }
 }
 

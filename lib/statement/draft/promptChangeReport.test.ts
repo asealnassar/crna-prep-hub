@@ -256,8 +256,32 @@ test('REPLACE VS ADD IS NEVER INFERRED — the server refuses a report without i
   // The kind is read from the ROW, never from the request body.
   assert.match(ADMIN_ROUTE, /readSubmissionForReview\(guard\.admin, id\)/)
   assert.match(ADMIN_ROUTE, /submission\.value\.kind === 'prompt-change'/)
-  // Replacing needs 012, and is refused before anything is written.
-  assert.match(ADMIN_ROUTE, /needs-012/)
+  /*
+    REPLACEMENT IS NO LONGER REFUSED FOR A MIGRATION THAT IS APPLIED.
+
+    This asserted `needs-012`, a hard refusal whose message read "Replacing a
+    prompt needs migration 012, which is not applied". 20261008_012 IS applied
+    -- hardened, even -- so the sentence became false and the refusal became
+    unreachable capability rather than safety. The promotion function records
+    the supersession itself, and the route now checks what the function actually
+    did instead of what it believes about migrations.
+
+    SO THE TRIPWIRE MOVED RATHER THAN BEING REMOVED. It now pins the
+    replacement: the route reads the id the RPC says it linked, and reports a
+    named error when the deployed function recorded nothing.
+
+    AND IT MOVED A SECOND TIME, FOR THE SAME REASON. It named 20261028_019A /
+    019B, which is what the earlier draft was going to ship. D2 shipped as
+    20261028_022 instead: 019A and 019B were generated over 018, so each
+    carries D3 as well, and each places the challenged-requirement check after
+    the two INSERTs, where a refusal leaves an orphan set and requirement
+    behind. A route that told an operator to apply one of them would be telling
+    them to revert the ordering 022 exists to fix.
+  */
+  assert.doesNotMatch(ADMIN_ROUTE, /needs-012/, 'the stale refusal is gone')
+  assert.match(ADMIN_ROUTE, /typeof result\.supersedes === 'string'/)
+  assert.match(ADMIN_ROUTE, /Migration 20261028_022 is not applied\./)
+  assert.doesNotMatch(ADMIN_ROUTE, /019A or 019B is not applied/)
   // The supersession is recorded AFTER the replacement exists.
   assert.ok(ADMIN_ROUTE.indexOf('recordLocalSupersession')
     > ADMIN_ROUTE.indexOf('promote_statement_submission_to_requirement'),

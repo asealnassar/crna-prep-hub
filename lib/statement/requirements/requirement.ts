@@ -122,6 +122,24 @@ export interface WritingRequirement {
   /** A supplement the school invites but does not require. */
   readonly optional: boolean
   readonly displayOrder: number
+  /**
+   * The submission this requirement was created from, when it came from one.
+   *
+   * ---------------------------------------------------------------------------
+   * PROVENANCE IS PER REQUIREMENT, NOT ONLY PER SET
+   * ---------------------------------------------------------------------------
+   * A set carries ONE evidence_kind and may hold documents from different
+   * sources: a school's own official set gains a document reported by an
+   * applicant, and the set is still an official set. Describing that set with a
+   * single claim means lying about one half of it or the other -- so the set
+   * says where the SET came from and this says where this DOCUMENT came from.
+   *
+   * NULL MEANS OFFICIAL RESEARCH, which is what every row written before
+   * 20261008_012 is. The renderer takes the stronger caveat of the two: see
+   * requirementVerification() in verification.ts. Nothing infers this from the
+   * set, because inferring it is how the set's claim leaked onto the document.
+   */
+  readonly originSubmissionId: string | null
   /** Uncertainty that survived research. Shown to the applicant, never resolved here. */
   readonly notes: readonly string[]
 }
@@ -160,6 +178,11 @@ export function emptyRequirement(id: string, label: string): WritingRequirement 
     components: [],
     constraints: NO_CONSTRAINTS,
     choiceGroup: null,
+    // NOBODY RESEARCHED THIS AND NOBODY SUBMITTED IT EITHER. null is "not from
+    // a submission", which leaves the set's own verification to speak -- and for
+    // an unresearched school that verification is UNVERIFIED, so this placeholder
+    // makes no claim in either direction.
+    originSubmissionId: null,
     optional: false,
     displayOrder: 0,
     notes: [],

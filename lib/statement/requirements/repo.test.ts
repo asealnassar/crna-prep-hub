@@ -95,9 +95,17 @@ test('the column lists name only columns the migration creates', async () => {
   // 005 creates and this select list names them. Reading only 005 would let a
   // typo in a register column name through, and the first catalog read in
   // production would fail closed with nobody knowing why.
+  // AND 012, because the requirement projection now names its two provenance
+  // columns -- origin_submission_id and supersedes_requirement_id -- and names
+  // them UNFLAGGED. They are not gated for the reason repo.ts states: a flag
+  // that hid them would make the read degrade to origin_submission_id = null,
+  // and null means "this is official research", which is the strongest claim in
+  // the system. So they are in the unconditional list and this test must read
+  // the migration that creates them.
   const files = [
     '20261002_005_statement_requirements.sql',
     '20261002_006_statement_requirement_length_register.sql',
+    '20261008_012_statement_prompt_change_reports.sql',
   ]
   const sql = files
     .map((name) => readFileSync(

@@ -30,7 +30,9 @@ import {
   DOCUMENT_TYPE_LABELS, checklist, requiredDocumentCount, type ChecklistEntry,
   type RequirementSet, type WritingRequirement,
 } from './requirement.ts'
-import { evidenceNotice, textAttribution } from './verification.ts'
+import {
+  evidenceNotice, requirementVerification, textAttribution, type Verification,
+} from './verification.ts'
 
 /** A draft the applicant already has, as far as this screen cares. */
 export interface StartedDraft {
@@ -102,6 +104,18 @@ export interface RequirementCard {
   readonly liveCounts: readonly LiveCount[]
   readonly optional: boolean
   readonly notes: readonly string[]
+  /**
+   * How THIS document's wording may be described, and the caveat it needs.
+   *
+   * ON THE CARD, NOT ONLY ON THE VIEW, BECAUSE A SET CAN BE MIXED. The view's
+   * own textAttribution describes the whole set and used to be the only one
+   * there was, so a document an applicant reported, published into a school's
+   * genuine official set, was described to the applicant as "Quoted from the
+   * school's application materials". These two are resolved per requirement by
+   * requirementVerification(), which can only ever strengthen the caveat.
+   */
+  readonly textAttribution: string
+  readonly verificationNotice: string | null
   /** The draft already started for this document, if there is one. */
   readonly started: StartedDraft | null
   readonly action: 'start' | 'continue'
@@ -151,8 +165,13 @@ export interface ChecklistView {
 
 function cardFor(
   requirement: WritingRequirement,
-  drafts: readonly StartedDraft[]
+  drafts: readonly StartedDraft[],
+  setVerification: Verification
 ): RequirementCard {
+  // THE SET'S VERIFICATION, STRENGTHENED BY THIS DOCUMENT'S OWN ORIGIN.
+  // Returned unchanged for a requirement with no origin submission, so an
+  // official document in an official set reads exactly as it did before.
+  const verification = requirementVerification(setVerification, requirement)
   // FIRST BY REQUIREMENT ID, and the most recently edited one when somebody has
   // more than one draft against the same document. Nothing prevents that -- a
   // draft is the applicant's and they may keep two attempts -- so the card
@@ -195,16 +214,23 @@ function cardFor(
     liveCounts: liveCounts(requirement.constraints),
     optional: requirement.optional,
     notes: requirement.notes,
+    textAttribution: textAttribution(verification),
+    verificationNotice: evidenceNotice(verification),
     started,
     action: started === null ? 'start' : 'continue',
   }
 }
 
-function rowFor(entry: ChecklistEntry, drafts: readonly StartedDraft[]): ChecklistRow {
+function rowFor(
+  entry: ChecklistEntry,
+  drafts: readonly StartedDraft[],
+  setVerification: Verification
+): ChecklistRow {
   if (entry.kind === 'document') {
-    return { kind: 'document', card: cardFor(entry.requirement, drafts) }
+    return { kind: 'document', card: cardFor(entry.requirement, drafts, setVerification) }
   }
-  const options = entry.group.options.map((option) => cardFor(option, drafts))
+  const options = entry.group.options.map(
+    (option) => cardFor(option, drafts, setVerification))
   return {
     kind: 'choice',
     key: entry.group.key,
@@ -228,7 +254,24 @@ export function checklistView(input: {
   readonly set: RequirementSet
   readonly drafts: readonly StartedDraft[]
 }): ChecklistView {
-  const rows = checklist(input.set).map((entry) => rowFor(entry, input.drafts))
+  const rows = checklist(input.set).map(
+    (entry) => rowFor(entry, input.drafts, input.set.verification))
+  /*
+    THE SET-LEVEL SENTENCES NOW CARRY THE STRONGEST CAVEAT IN THE SET.
+
+    Every card carries its own pair now, so these two are what a surface shows
+    above a whole checklist. If ANY document in the set came from a submission
+    the set-level line says so: a reader of the summary must not be reassured
+    about a set that contains a prompt nobody checked against a school page.
+
+    DELIBERATELY LESS PRECISE THAN THE CARDS, AND NEVER LESS TRUTHFUL. It
+    over-warns about a mixed set's official documents, which is exactly why the
+    per-card lines exist and are what the checklist itself renders.
+  */
+  const anyOrigin = input.set.requirements
+    .find((requirement) => requirement.originSubmissionId !== null)?.originSubmissionId ?? null
+  const setLevel = requirementVerification(
+    input.set.verification, { originSubmissionId: anyOrigin })
   return {
     schoolName: input.set.schoolName,
     applicationCycle: input.set.applicationCycle,
@@ -245,8 +288,8 @@ export function checklistView(input: {
       slot for a set published from an applicant's submission, which is the
       opposite of what the reader needed to know.
     */
-    verificationNotice: evidenceNotice(input.set.verification),
-    textAttribution: textAttribution(input.set.verification),
+    verificationNotice: evidenceNotice(setLevel),
+    textAttribution: textAttribution(setLevel),
     notes: input.set.notes,
     originalText: input.set.originalText,
   }

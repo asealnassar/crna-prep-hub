@@ -73,8 +73,16 @@ function enforcedMaxWords(max: number): Constraints {
   return { ...NO_CONSTRAINTS, words: wordLimit({ max, enforcement: 'enforced' }) }
 }
 
-function doc(requirement: WritingRequirement): WritingRequirement {
-  return requirement
+function doc(
+  requirement: Omit<WritingRequirement, 'originSubmissionId'>
+    & { readonly originSubmissionId?: string | null },
+): WritingRequirement {
+  // A FIXTURE IS OFFICIAL RESEARCH UNLESS IT SAYS OTHERWISE. null is what every
+  // row written before 20261008_012 holds, and each fixture below was
+  // transcribed from a school's own published page, so null is the honest
+  // default rather than a convenience. A fixture modelling a submission-derived
+  // document passes its own origin id and gets the submission caveat.
+  return { ...requirement, originSubmissionId: requirement.originSubmissionId ?? null }
 }
 
 // ===========================================================================

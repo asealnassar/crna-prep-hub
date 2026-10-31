@@ -225,6 +225,30 @@ function Card({
           </p>
 
           {/*
+            WHERE THESE PARTICULAR WORDS CAME FROM, BENEATH THE WORDS.
+
+            The screen already carries the SET's attribution above the cards,
+            and that line cannot describe a mixed set: a document an applicant
+            reported, published into a school's genuine official set, inherited
+            "Quoted from the school's application materials" from the set. So
+            each card now states its own provenance, resolved per requirement,
+            and it sits directly under the wording it is about rather than at
+            the top of a list the reader has already scrolled past.
+
+            THE NOTICE IS ABOVE THE ATTRIBUTION, in the same order and the same
+            amber as the set-level pair, because it is the sentence that must
+            not be missed.
+          */}
+          {card.verificationNotice !== null && (
+            <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium leading-relaxed text-amber-900">
+              {card.verificationNotice}
+            </p>
+          )}
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            {card.textAttribution}
+          </p>
+
+          {/*
             THE QUESTIONS, TOGETHER, IN ONE CARD. They are answered in one
             essay, so they are listed inside the one document rather than
             becoming documents of their own.

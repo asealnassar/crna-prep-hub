@@ -209,6 +209,40 @@ export function textAttribution(verification: Verification): string {
     : 'A summary of published requirements, not the school’s exact wording.'
 }
 
+/**
+ * The verification that applies to ONE requirement inside a set.
+ *
+ * ---------------------------------------------------------------------------
+ * THE STRONGER CAVEAT OF THE TWO, NEVER THE WEAKER
+ * ---------------------------------------------------------------------------
+ * textAttribution and evidenceNotice answer from a Verification, and a
+ * Verification was built from the SET's row. That is right for a set whose
+ * documents all came from the same place and wrong for a mixed one: a school's
+ * genuine official set that has gained a document reported by an applicant
+ * would describe that document as "Quoted from the school's application
+ * materials", which is the same false claim migration 011 was written to stop,
+ * arriving one level down.
+ *
+ * SO A REQUIREMENT MAY ONLY EVER STRENGTHEN THE CAVEAT. An origin submission
+ * upgrades the evidence to 'admin-approved-submission' for this document;
+ * nothing here can turn a submission-backed set into an official-source one,
+ * and a requirement with no origin is returned UNCHANGED -- so an official
+ * document in an official set is never relabelled, which is the other half of
+ * being truthful about a mixed set.
+ *
+ * EVERY OTHER FIELD IS THE SET'S. The status, the source URL and the date are
+ * statements about the set's currency and remain so; only the kind of evidence
+ * is a statement about where these particular words came from.
+ */
+export function requirementVerification(
+  set: Verification,
+  requirement: { readonly originSubmissionId: string | null },
+): Verification {
+  if (requirement.originSubmissionId === null) return set
+  if (set.evidenceKind === 'admin-approved-submission') return set
+  return { ...set, evidenceKind: 'admin-approved-submission' }
+}
+
 /** Whether a reader must be warned before they read a requirement as fact. */
 export function needsVerificationWarning(verification: Verification): boolean {
   return !activatableForApplicants(verification)
